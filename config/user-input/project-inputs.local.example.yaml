@@ -1,0 +1,241 @@
+# 本文件只是“Windows 本地、无 Docker”参考示例，不会被应用直接读取。
+# 不要在此文件写密码、Token 或 API Key。
+# AI 服务和业务字段仍需用户选择，不能照抄占位符当成真实值。
+
+input_version: 1
+status: pending_user_input
+last_updated_at: "2026-08-31T00:00:00+08:00"
+notes: "本地开发适配器；MySQL/Milvus/Redis/RabbitMQ 生产集成暂缓。"
+
+project:
+  display_name: "企业级 RAG 知识库"
+  pilot_business_domain: "__FILL_ME__"
+  initial_tenant_code: "demo"
+  initial_knowledge_space: "company_knowledge"
+  timezone: "Asia/Hong_Kong"
+  owners:
+    product_project_manager: "__FILL_ME__"
+    technical_architect: "__FILL_ME__"
+    security_compliance: "__FILL_ME__"
+    sre_operations: "__FILL_ME__"
+    qa_evaluation: "__FILL_ME__"
+    business_uat: "__FILL_ME__"
+
+scope:
+  r1_required_formats:
+    - pdf_text
+    - pdf_scanned
+    - image
+    - docx
+    - pptx
+    - markdown
+    - txt
+    - html_upload
+    - xls
+    - xlsx
+    - csv
+    - wav
+    - mp3
+    - m4a
+  legacy_doc_ppt_limited_support: true
+  r11_required_formats: []
+  excel_exact_calculation_required: false
+  external_connectors_in_r1: []
+
+deployment:
+  mode: local_dev
+  target_platform: native_processes
+  docker_forbidden: true
+  local_storage_only: true
+  startup_commands:
+    backend: "python run_backend.py"
+    worker: "python run_worker.py"
+    mineru: "python run_mineru.py"
+    frontend: "npm run dev"
+    config_check: "python scripts/check_config.py"
+  air_gapped: false # 使用外部 AI API 时为 false；完全离线时改为 true
+  production_region: local_machine
+  allowed_data_regions:
+    - local_machine
+  gpu_available: true
+  gpu_model_and_count: "NVIDIA GeForce RTX 4070 12GB x1"
+
+capacity:
+  initial_document_count: 1000
+  initial_chunk_count: 50000
+  daily_new_or_updated_documents: 50
+  annual_growth_percent: 20
+  peak_search_qps: 2
+  concurrent_ask_requests: 3
+  max_file_size_mb: 100
+  max_pages_per_document: 300
+  average_pages_per_document: 10
+  average_chunk_tokens: 500
+
+infrastructure:
+  mysql:
+    provision_mode: python_dev_stub
+    version: "8.4"
+    host: not_applicable
+    port: 3306
+    database: rag_kb
+    username: rag_app
+    password_env: MYSQL_PASSWORD
+    tls_required: false
+  milvus:
+    provision_mode: python_embedded_or_stub
+    version: "2.6.x"
+    uri: not_applicable
+    token_env: MILVUS_TOKEN
+    tls_required: false
+    collection_prefix: rag
+  local_storage:
+    root_path: "./data/storage"
+    original_path: "./data/storage/original"
+    artifact_path: "./data/storage/artifacts"
+    quarantine_path: "./data/storage/quarantine"
+    temp_path: "./data/storage/temp"
+    audit_path: "./data/storage/audit"
+    backup_path: "./data/storage/backups"
+    max_total_size_gb: 100
+    atomic_rename_required: true
+    checksum_algorithm: sha256
+    encryption_at_rest: false
+  rabbitmq:
+    provision_mode: python_local_adapter
+    url_env: RABBITMQ_URL
+  redis:
+    provision_mode: python_local_adapter
+    url_env: REDIS_URL
+  oidc:
+    provider: other
+    issuer_url: not_applicable
+    audience: rag-local
+    client_id: rag-local-ui
+    client_secret_env: OIDC_CLIENT_SECRET
+    tenant_claim: tenant_id
+    groups_claim: groups
+    roles_claim: roles
+    access_token_ttl_minutes: 60
+
+ai_services:
+  outbound_ai_allowed: true
+  allowed_data_classifications: [public, internal, confidential]
+  restricted_data_outbound_allowed: false
+  outbound_requires_provider_region_approval: true
+  mineru:
+    mode: local
+    endpoint: "http://127.0.0.1:8000"
+    token_env: MINERU_TOKEN
+    version: "__FILL_ME__"
+    office_route: libreoffice_to_pdf
+    timeout_seconds: 300
+    deployment_strategy: self_hosted_primary
+    self_hosted_endpoint: "http://127.0.0.1:8000"
+    hosted_api_endpoint: "https://mineru.net/api/v4"
+    hosted_api_enabled: true
+    hosted_api_requires_region_approval: true
+    hosted_api_allowed_data_classifications: [public, internal, confidential]
+  llm:
+    provider: "__FILL_ME__"
+    endpoint: "__FILL_ME__"
+    model_id: "__FILL_ME__"
+    model_revision: "__FILL_ME__"
+    api_key_env: LLM_API_KEY
+    allowed_data_classifications:
+      - public
+    timeout_seconds: 120
+    max_concurrency: 2
+  embedding:
+    provider: "__FILL_ME__"
+    endpoint: "__FILL_ME__"
+    model_id: "__FILL_ME__"
+    model_revision: "__FILL_ME__"
+    api_key_env: EMBEDDING_API_KEY
+    dimension: "__FILL_ME__"
+    normalize: "__FILL_ME__"
+    metric: COSINE
+    max_concurrency: 2
+  reranker:
+    provider: "__FILL_ME__"
+    endpoint: "__FILL_ME__"
+    model_id: "__FILL_ME__"
+    model_revision: "__FILL_ME__"
+    api_key_env: RERANKER_API_KEY
+    max_concurrency: 2
+  ocr:
+    provider: mineru
+    endpoint: same_as_mineru
+    api_key_env: OCR_API_KEY
+  asr:
+    provider: "__FILL_ME__"
+    endpoint: "__FILL_ME__"
+    model_id: "__FILL_ME__"
+    api_key_env: ASR_API_KEY
+
+security_compliance:
+  data_classification_levels:
+    - public
+    - internal
+    - confidential
+    - restricted
+  highest_classification_in_scope: internal
+  pii_dlp_required: "__FILL_ME__"
+  cross_border_transfer_allowed: false
+  approved_ai_processing_regions: []
+  legal_hold_required: false
+  malware_scanner: windows_defender
+  secrets_manager: local_env_file
+  audit_worm_target: deferred
+  online_content_retention_days: 365
+  backup_retention_days: 30
+  audit_retention_days: 180
+  tenant_offboarding_purge_days: 30
+
+slo_and_finops:
+  search_p95_ms: 2000
+  verified_answer_ready_p95_ms: 20000
+  search_monthly_availability_percent: 95.0
+  ask_monthly_availability_percent: 95.0
+  permission_revocation_seconds: 60
+  online_cleanup_hours: 24
+  control_and_content_rpo_minutes: 1440
+  core_search_rto_hours: 8
+  max_cost_per_ask: "__FILL_ME__"
+  max_cost_per_1000_pages_ingested: "__FILL_ME__"
+  monthly_budget: "__FILL_ME__"
+  budget_currency: "__FILL_ME__"
+
+evaluation_business:
+  pilot_user_count: 1
+  top_user_tasks:
+    - "上传业务文档并确认处理状态"
+    - "根据知识库提问并查看引用来源"
+    - "更新或删除文档后确认旧内容不再被回答"
+  business_kpis:
+    answer_adoption_rate_target: 0.7
+    first_contact_resolution_target: 0.6
+    average_time_saved_minutes_target: 5
+  evaluation_dataset_owner: "__FILL_ME__"
+  high_risk_answer_requires_human_review: true
+  high_risk_domains: []
+  release_dataset_size: 100
+
+adr_approvals:
+  fastapi_modular_monolith: approve
+  mysql_control_plane_source_of_truth: revise
+  local_filesystem_content_source_of_truth: approve
+  immutable_document_versions: approve
+  index_generation_high_watermark: approve
+  transactional_outbox_inbox: approve
+  canonical_document_parser_contract: approve
+  milvus_native_bm25_first: approve
+  application_layer_rrf: approve
+  compiled_acl_security_watermark: approve
+  search_ask_separation: approve
+  deterministic_rag_no_agents: approve
+  python_persistent_queue_default: approve
+  rabbitmq_celery_optional_native_adapter: approve
+  sse_progress_verified_answer_only: approve
+  immutable_release_profiles: approve
+  r1_includes_spreadsheets_audio: approve

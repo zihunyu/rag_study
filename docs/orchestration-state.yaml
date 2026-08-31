@@ -1,0 +1,26 @@
+schema_version: 1
+review_thread_id: "01a056b5-53e9-7253-804c-70bf22f05caa"
+development_thread_id: "01a056f9-7a67-76f3-9bba-785826b072cb"
+heartbeat_automation_id: "rag"
+current_release: R1
+current_stage: G1_ENGINEERING_AND_INGESTION
+current_gate: G1
+last_approved_gate: G0
+stage_status: in_progress
+parallel_workstreams: []
+pending_user_input:
+  - config/user-input/project-inputs.yaml
+  - config/user-input/.env.user.local
+last_review_at: "2026-08-31T18:15:00+08:00"
+last_review_result: "APPROVED:G0"
+notes:
+  - "缺失配置可使用 Stub 继续非阻断开发，但不得绕过对应 Gate。"
+  - "用户强制禁止 Docker/Compose；Python 入口 + npm run dev；内容使用 ./data/storage 本地文件系统。"
+  - "G0 Basic/Stub 启动已就绪；业务治理字段不阻止 G0/G1 开发，真实集成按组件单独阻断。"
+  - "第三方出站允许 public/internal/confidential；restricted 与未批准区域/跨境传输 fail-closed。"
+  - "第一次审核见 docs/stage-reports/G0-review-1.md；首轮 6 项审核意见已修复。"
+  - "Python 3.12 全质量门通过；ADR/范围已重基线；进程环境占位判定已修复；配置 gate_ready=true。"
+  - "第二次审核仅剩 Gate 映射一致性，见 docs/stage-reports/G0-review-2.md。"
+  - "ASR 已统一映射 G2；LLM 全字段统一映射 G3；分 Gate 回归与 Python 3.12 全质量门通过。"
+  - "STAGE_REVIEW_REQUESTED:G0（修订 3）"
+  - "G0 已批准，独立证据见 docs/stage-reports/G0-approval.md；当前只开放 WBS-10、WBS-20 和 WBS-25 表格部分。"

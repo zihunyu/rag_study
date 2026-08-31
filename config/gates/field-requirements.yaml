@@ -1,0 +1,198 @@
+schema_version: 4
+default:
+  priority: P2
+  blocking_gate: G4
+  responsibility: technical_review
+rules:
+  # Runtime/integration configuration: these block only the integration that needs them.
+  - match: "ai_services.mineru.version"
+    priority: P1
+    blocking_gate: G1
+    responsibility: service_probe
+  - match: "ai_services.mineru.*endpoint"
+    priority: P1
+    blocking_gate: G1
+    responsibility: user
+  - match: "ai_services.asr.provider"
+    priority: P1
+    blocking_gate: G2
+    responsibility: user
+  - match: "ai_services.asr.endpoint"
+    priority: P1
+    blocking_gate: G2
+    responsibility: user
+  - match: "ai_services.asr.model_id"
+    priority: P1
+    blocking_gate: G2
+    responsibility: user
+  - match: "ai_services.embedding.endpoint"
+    priority: P1
+    blocking_gate: G2
+    responsibility: user
+  - match: "ai_services.embedding.model_id"
+    priority: P1
+    blocking_gate: G2
+    responsibility: user
+  - match: "ai_services.embedding.dimension"
+    priority: P1
+    blocking_gate: G2
+    responsibility: service_probe
+  - match: "ai_services.embedding.normalize"
+    priority: P1
+    blocking_gate: G2
+    responsibility: service_probe
+  - match: "ai_services.reranker.endpoint"
+    priority: P1
+    blocking_gate: G2
+    responsibility: user
+  - match: "ai_services.reranker.model_id"
+    priority: P1
+    blocking_gate: G2
+    responsibility: user
+  - match: "ai_services.llm.endpoint"
+    priority: P1
+    blocking_gate: G3
+    responsibility: user
+  - match: "ai_services.llm.model_id"
+    priority: P1
+    blocking_gate: G3
+    responsibility: user
+  - match: "ai_services.llm.model_revision"
+    priority: P1
+    blocking_gate: G3
+    responsibility: service_probe
+  - match: "ai_services.llm.timeout_seconds"
+    priority: P1
+    blocking_gate: G3
+    responsibility: technical_review
+  - match: "ai_services.llm.max_concurrency"
+    priority: P1
+    blocking_gate: G3
+    responsibility: service_probe
+  - match: "ai_services.*.model_revision"
+    priority: P1
+    blocking_gate: G2
+    responsibility: service_probe
+  - match: "ai_services.*.timeout_seconds"
+    priority: P1
+    blocking_gate: G2
+    responsibility: technical_review
+  - match: "ai_services.*.max_concurrency"
+    priority: P1
+    blocking_gate: G2
+    responsibility: service_probe
+  - match: "infrastructure.mysql.host"
+    priority: P1
+    blocking_gate: G2
+    responsibility: user
+  - match: "infrastructure.milvus.uri"
+    priority: P1
+    blocking_gate: G2
+    responsibility: user
+  - match: "security_compliance.approved_ai_processing_regions"
+    priority: P1
+    blocking_gate: G1
+    responsibility: technical_review
+    empty_is_missing: true
+
+  # Technical review fields may block a formal Gate, but are never user-fill requests.
+  - match: "adr_approvals.*"
+    priority: P0
+    blocking_gate: G0
+    responsibility: technical_review
+  - match: "capacity.initial_chunk_count"
+    priority: P1
+    blocking_gate: G2
+    responsibility: service_probe
+  - match: "capacity.average_*"
+    priority: P1
+    blocking_gate: G2
+    responsibility: service_probe
+  - match: "infrastructure.local_storage.max_total_size_gb"
+    priority: P1
+    blocking_gate: G1
+    responsibility: system_default
+
+  # Governance inputs do not block G0/G1 local startup or development tests.
+  - match: "project.owners.*"
+    priority: P2
+    blocking_gate: G4
+    responsibility: user
+  - match: "capacity.annual_growth_percent"
+    priority: P2
+    blocking_gate: G4
+    responsibility: user
+  - match: "security_compliance.legal_hold_required"
+    priority: P2
+    blocking_gate: G4
+    responsibility: user
+  - match: "security_compliance.*_retention_days"
+    priority: P2
+    blocking_gate: G4
+    responsibility: user
+  - match: "security_compliance.tenant_offboarding_purge_days"
+    priority: P2
+    blocking_gate: G4
+    responsibility: user
+  - match: "security_compliance.audit_worm_target"
+    priority: P2
+    blocking_gate: G4
+    responsibility: user
+  - match: "slo_and_finops.max_cost_*"
+    priority: P2
+    blocking_gate: G4
+    responsibility: user
+  - match: "slo_and_finops.monthly_budget"
+    priority: P2
+    blocking_gate: G4
+    responsibility: user
+  - match: "evaluation_business.evaluation_dataset_owner"
+    priority: P2
+    blocking_gate: G4
+    responsibility: user
+
+secret_environment:
+  - name: MYSQL_PASSWORD
+    priority: P1
+    blocking_gate: G2
+    required_when: mysql_real
+  - name: MILVUS_TOKEN
+    priority: P1
+    blocking_gate: G2
+    required_when: milvus_authenticated_real
+  - name: RABBITMQ_URL
+    priority: P1
+    blocking_gate: G2
+    required_when: rabbitmq_real
+  - name: REDIS_URL
+    priority: P1
+    blocking_gate: G2
+    required_when: redis_real
+  - name: OIDC_CLIENT_SECRET
+    priority: P1
+    blocking_gate: G2
+    required_when: oidc_real
+  - name: MINERU_TOKEN
+    priority: P1
+    blocking_gate: G1
+    required_when: mineru_hosted_enabled
+  - name: LLM_API_KEY
+    priority: P1
+    blocking_gate: G3
+    required_when: llm_external
+  - name: EMBEDDING_API_KEY
+    priority: P1
+    blocking_gate: G2
+    required_when: embedding_external
+  - name: RERANKER_API_KEY
+    priority: P1
+    blocking_gate: G2
+    required_when: reranker_external
+  - name: OCR_API_KEY
+    priority: P1
+    blocking_gate: G1
+    required_when: ocr_external
+  - name: ASR_API_KEY
+    priority: P1
+    blocking_gate: G2
+    required_when: asr_external

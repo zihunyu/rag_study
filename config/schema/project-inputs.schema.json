@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/ragkb/project-inputs.schema.json",
+  "title": "Enterprise RAG project inputs",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "input_version", "status", "last_updated_at", "project", "scope", "deployment",
+    "capacity", "infrastructure", "ai_services", "security_compliance", "slo_and_finops",
+    "evaluation_business", "adr_approvals"
+  ],
+  "properties": {
+    "input_version": {"const": 1},
+    "status": {"enum": ["pending_user_input", "ready_for_review", "approved"]},
+    "last_updated_at": {"$ref": "#/$defs/stringInput"},
+    "notes": {"type": "string"},
+    "project": {
+      "type": "object",
+      "required": ["display_name", "pilot_business_domain", "initial_tenant_code", "initial_knowledge_space", "timezone", "owners"],
+      "properties": {
+        "display_name": {"type": "string", "minLength": 1},
+        "pilot_business_domain": {"$ref": "#/$defs/stringInput"},
+        "initial_tenant_code": {"$ref": "#/$defs/stringInput"},
+        "initial_knowledge_space": {"$ref": "#/$defs/stringInput"},
+        "timezone": {"type": "string", "minLength": 1},
+        "owners": {"$ref": "#/$defs/stringMap"}
+      },
+      "additionalProperties": false
+    },
+    "scope": {"type": "object"},
+    "deployment": {
+      "type": "object",
+      "required": ["mode", "target_platform", "docker_forbidden", "local_storage_only", "startup_commands", "air_gapped", "production_region", "allowed_data_regions", "gpu_available", "gpu_model_and_count"],
+      "properties": {
+        "mode": {"anyOf": [{"enum": ["local_dev", "on_prem", "private_cloud", "public_cloud"]}, {"const": "__FILL_ME__"}]},
+        "target_platform": {"const": "native_processes"},
+        "docker_forbidden": {"const": true},
+        "local_storage_only": {"const": true},
+        "startup_commands": {
+          "type": "object",
+          "required": ["backend", "worker", "mineru", "frontend", "config_check"],
+          "properties": {
+            "backend": {"const": "python run_backend.py"},
+            "worker": {"const": "python run_worker.py"},
+            "mineru": {"const": "python run_mineru.py"},
+            "frontend": {"const": "npm run dev"},
+            "config_check": {"const": "python scripts/check_config.py"}
+          },
+          "additionalProperties": false
+        },
+        "air_gapped": {"$ref": "#/$defs/boolInput"},
+        "production_region": {"$ref": "#/$defs/stringInput"},
+        "allowed_data_regions": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "gpu_available": {"$ref": "#/$defs/boolInput"},
+        "gpu_model_and_count": {"$ref": "#/$defs/stringInput"}
+      },
+      "additionalProperties": false
+    },
+    "capacity": {
+      "type": "object",
+      "properties": {
+        "initial_document_count": {"$ref": "#/$defs/nonNegativeIntegerInput"},
+        "initial_chunk_count": {"$ref": "#/$defs/nonNegativeIntegerInput"},
+        "daily_new_or_updated_documents": {"$ref": "#/$defs/nonNegativeIntegerInput"},
+        "annual_growth_percent": {"$ref": "#/$defs/nonNegativeNumberInput"},
+        "peak_search_qps": {"$ref": "#/$defs/nonNegativeNumberInput"},
+        "concurrent_ask_requests": {"$ref": "#/$defs/nonNegativeIntegerInput"},
+        "max_file_size_mb": {"$ref": "#/$defs/positiveIntegerInput"},
+        "max_pages_per_document": {"$ref": "#/$defs/positiveIntegerInput"},
+        "average_pages_per_document": {"$ref": "#/$defs/positiveNumberInput"},
+        "average_chunk_tokens": {"$ref": "#/$defs/positiveIntegerInput"}
+      },
+      "additionalProperties": false
+    },
+    "infrastructure": {
+      "type": "object",
+      "required": ["mysql", "milvus", "local_storage", "rabbitmq", "redis", "oidc"],
+      "properties": {
+        "mysql": {"$ref": "#/$defs/nestedObject"},
+        "milvus": {"$ref": "#/$defs/nestedObject"},
+        "local_storage": {"$ref": "#/$defs/localStorage"},
+        "rabbitmq": {"$ref": "#/$defs/nestedObject"},
+        "redis": {"$ref": "#/$defs/nestedObject"},
+        "oidc": {"$ref": "#/$defs/nestedObject"}
+      },
+      "additionalProperties": false
+    },
+    "ai_services": {"$ref": "#/$defs/nestedObject"},
+    "security_compliance": {"$ref": "#/$defs/nestedObject"},
+    "slo_and_finops": {"$ref": "#/$defs/nestedObject"},
+    "evaluation_business": {"$ref": "#/$defs/nestedObject"},
+    "adr_approvals": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "anyOf": [
+          {"enum": ["approve", "reject", "revise"]},
+          {"const": "__FILL_ME__"}
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "stringInput": {"type": "string", "minLength": 1},
+    "boolInput": {"anyOf": [{"type": "boolean"}, {"const": "__FILL_ME__"}]},
+    "nonNegativeNumberInput": {"anyOf": [{"type": "number", "minimum": 0}, {"const": "__FILL_ME__"}]},
+    "positiveNumberInput": {"anyOf": [{"type": "number", "exclusiveMinimum": 0}, {"const": "__FILL_ME__"}]},
+    "nonNegativeIntegerInput": {"anyOf": [{"type": "integer", "minimum": 0}, {"const": "__FILL_ME__"}]},
+    "positiveIntegerInput": {"anyOf": [{"type": "integer", "minimum": 1}, {"const": "__FILL_ME__"}]},
+    "stringMap": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {"$ref": "#/$defs/stringInput"}
+    },
+    "localStorage": {
+      "type": "object",
+      "required": ["root_path", "original_path", "artifact_path", "quarantine_path", "temp_path", "audit_path", "backup_path", "max_total_size_gb", "atomic_rename_required", "checksum_algorithm", "encryption_at_rest"],
+      "properties": {
+        "root_path": {"type": "string", "minLength": 1},
+        "original_path": {"type": "string", "minLength": 1},
+        "artifact_path": {"type": "string", "minLength": 1},
+        "quarantine_path": {"type": "string", "minLength": 1},
+        "temp_path": {"type": "string", "minLength": 1},
+        "audit_path": {"type": "string", "minLength": 1},
+        "backup_path": {"$ref": "#/$defs/stringInput"},
+        "max_total_size_gb": {"$ref": "#/$defs/positiveNumberInput"},
+        "atomic_rename_required": {"const": true},
+        "checksum_algorithm": {"const": "sha256"},
+        "encryption_at_rest": {"$ref": "#/$defs/boolInput"}
+      },
+      "additionalProperties": false
+    },
+    "nestedObject": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "anyOf": [
+          {"type": ["string", "number", "integer", "boolean", "null"]},
+          {"type": "array"},
+          {"$ref": "#/$defs/nestedObject"}
+        ]
+      }
+    }
+  }
+}

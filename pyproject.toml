@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "enterprise-rag-kb"
+version = "0.0.0"
+description = "Enterprise RAG knowledge base (G0 preparation baseline)"
+requires-python = ">=3.12"
+dependencies = [
+  "jsonschema>=4.23,<5",
+  "PyYAML>=6.0,<7",
+]
+
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.13,<2",
+  "pytest>=8.3,<9",
+  "ruff>=0.8,<1",
+  "types-jsonschema>=4.23,<5",
+  "types-PyYAML>=6.0,<7",
+]
+
+[project.scripts]
+ragkb-config = "ragkb.config.cli:main"
+ragkb-spike = "ragkb.spikes.cli:main"
+ragkb-backend = "ragkb.runtime:run_backend"
+ragkb-worker = "ragkb.runtime:run_worker"
+ragkb-mineru = "ragkb.mineru_runtime:run_mineru"
+
+[tool.setuptools]
+package-dir = {"" = "backend/src"}
+
+[tool.setuptools.packages.find]
+where = ["backend/src"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+pythonpath = ["backend/src"]
+testpaths = ["backend/tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "S"]
+ignore = ["S101"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["ragkb"]

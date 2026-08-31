@@ -1,0 +1,10 @@
+{
+  "name": "enterprise-rag-kb-g0-frontend",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "node scripts/g0-dev-server.mjs",
+    "check": "node --check scripts/g0-dev-server.mjs"
+  }
+}
+

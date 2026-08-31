@@ -1,0 +1,34 @@
+# Local user configuration and secrets
+config/user-input/.env.user.local
+config/user-input/*.local.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+*.egg-info/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+dist/
+coverage/
+
+# Local runtime data
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Generated G0 evidence
+artifacts/

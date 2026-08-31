@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/ragkb/canonical-document.schema.json",
+  "title": "CanonicalDocument G0 contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "document_version_id", "language", "nodes", "tables", "media_refs",
+    "parser_revision", "normalization_revision", "content_checksum", "quality_issues"
+  ],
+  "properties": {
+    "document_version_id": {"type": "string", "minLength": 1},
+    "language": {"type": "string", "minLength": 1},
+    "nodes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/node"}
+    },
+    "tables": {"type": "array", "items": {"type": "object"}},
+    "media_refs": {"type": "array", "items": {"type": "object"}},
+    "parser_revision": {"type": "string", "minLength": 1},
+    "normalization_revision": {"type": "string", "minLength": 1},
+    "content_checksum": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"},
+    "quality_issues": {"type": "array", "items": {"type": "string"}}
+  },
+  "$defs": {
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node_id", "parent_node_id", "type", "original_text", "display_text", "locator", "metadata"],
+      "properties": {
+        "node_id": {"type": "string", "minLength": 1},
+        "parent_node_id": {"type": ["string", "null"]},
+        "type": {"enum": ["heading", "paragraph", "list", "table", "code", "image", "audio"]},
+        "original_text": {"type": "string", "minLength": 1},
+        "display_text": {"type": "string", "minLength": 1},
+        "locator": {
+          "type": "object",
+          "minProperties": 1,
+          "properties": {
+            "page": {"type": "integer", "minimum": 1},
+            "slide": {"type": "integer", "minimum": 1},
+            "sheet": {"type": "string", "minLength": 1},
+            "bbox": {
+              "type": "array",
+              "minItems": 4,
+              "maxItems": 4,
+              "items": {"type": "number"}
+            },
+            "char_range": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": {"type": "integer", "minimum": 0}
+            },
+            "start_time": {"type": "number", "minimum": 0},
+            "end_time": {"type": "number", "minimum": 0}
+          },
+          "additionalProperties": false
+        },
+        "metadata": {"type": "object"}
+      }
+    }
+  }
+}
+
