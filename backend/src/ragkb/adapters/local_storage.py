@@ -56,3 +56,28 @@ class LocalFileStorage:
 
     def read_bytes(self, partition: str, key: str) -> bytes:
         return self._safe_path(partition, key).read_bytes()
+
+    def path_for(self, partition: str, key: str) -> Path:
+        return self._safe_path(partition, key)
+
+    def exists(self, partition: str, key: str) -> bool:
+        return self._safe_path(partition, key).is_file()
+
+    def size(self, partition: str, key: str) -> int:
+        return self._safe_path(partition, key).stat().st_size
+
+    def delete(self, partition: str, key: str) -> bool:
+        target = self._safe_path(partition, key)
+        if not target.exists():
+            return False
+        target.unlink()
+        return True
+
+    def promote(self, source_partition: str, source_key: str, target_key: str) -> Path:
+        source = self._safe_path(source_partition, source_key)
+        if not source.is_file():
+            raise FileNotFoundError(source)
+        target = self._safe_path("original", target_key)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(source, target)
+        return target

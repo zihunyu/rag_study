@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ragkb.config.loader import find_repository_root
+from ragkb.config import find_repository_root
 from ragkb.spikes.security import scan_repository_for_container_dependencies
 
 

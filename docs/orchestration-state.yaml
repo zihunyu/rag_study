@@ -9,10 +9,9 @@ last_approved_gate: G0
 stage_status: in_progress
 parallel_workstreams: []
 pending_user_input:
-  - config/user-input/project-inputs.yaml
-  - config/user-input/.env.user.local
+  - config/.env
 last_review_at: "2026-08-31T18:15:00+08:00"
-last_review_result: "APPROVED:G0"
+last_review_result: "CONFIG_MIGRATION_APPROVED_AND_RESUME_G1"
 notes:
   - "缺失配置可使用 Stub 继续非阻断开发，但不得绕过对应 Gate。"
   - "用户强制禁止 Docker/Compose；Python 入口 + npm run dev；内容使用 ./data/storage 本地文件系统。"
@@ -24,3 +23,8 @@ notes:
   - "ASR 已统一映射 G2；LLM 全字段统一映射 G3；分 Gate 回归与 Python 3.12 全质量门通过。"
   - "STAGE_REVIEW_REQUESTED:G0（修订 3）"
   - "G0 已批准，独立证据见 docs/stage-reports/G0-approval.md；当前只开放 WBS-10、WBS-20 和 WBS-25 表格部分。"
+  - "用户确认配置仅保留 config/.env 与 config/.env.example；当前仅恢复配置迁移和旧配置代码删除，其他 G1 继续暂停。"
+  - "配置迁移完成：旧入口删除，Zilliz Cloud 与 MinerU Token 池已验证；等待独立审核。"
+  - "CONFIG_MIGRATION_REVIEW_REQUESTED"
+  - "独立审核通过：66 tests、Ruff、mypy、npm、OpenAPI、密钥扫描通过；等待用户确认后提交迁移。"
+  - "用户已确认 config/.env；G1 gate_ready=true。配置迁移批准，恢复 G1。"

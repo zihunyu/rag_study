@@ -1,4 +1,4 @@
-"""Run one or all G0 Spike harnesses."""
+"""Run technical Harnesses using config/.env only."""
 
 from __future__ import annotations
 
@@ -7,39 +7,39 @@ import json
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from ragkb.config.loader import find_repository_root, load_configuration
+from ragkb.config import find_repository_root, load_env
 from ragkb.spikes.capacity import run_capacity_spike
-from ragkb.spikes.milvus import run_milvus_spike
 from ragkb.spikes.mineru import run_mineru_spike
 from ragkb.spikes.models import run_model_spike
 from ragkb.spikes.security import run_security_spike
+from ragkb.spikes.zilliz import run_zilliz_spike
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run G0 Spike harnesses")
+    parser = argparse.ArgumentParser(description="Run technical Harnesses")
     parser.add_argument(
         "spike",
         nargs="?",
-        choices=["mineru", "milvus", "models", "capacity", "security"],
+        choices=["mineru", "zilliz", "models", "capacity", "security"],
     )
     parser.add_argument("--all", action="store_true")
-    parser.add_argument("--output-dir", type=Path, default=Path("artifacts/g0/spikes"))
+    parser.add_argument("--output-dir", type=Path, default=Path("artifacts/spikes"))
     parser.add_argument(
         "--mineru-manifest",
         type=Path,
-        default=Path("config/spikes/mineru-samples.yaml"),
+        default=Path("backend/tests/fixtures/manifests/format-samples.yaml"),
     )
     args = parser.parse_args(argv)
     if not args.all and not args.spike:
         parser.error("choose a spike or pass --all")
     root = find_repository_root()
-    loaded = load_configuration(root)
+    loaded = load_env(root)
     manifest = args.mineru_manifest
     if not manifest.is_absolute():
         manifest = root / manifest
     runners: dict[str, Callable[[], dict[str, object]]] = {
         "mineru": lambda: run_mineru_spike(loaded, manifest),
-        "milvus": lambda: run_milvus_spike(loaded),
+        "zilliz": lambda: run_zilliz_spike(loaded),
         "models": lambda: run_model_spike(loaded),
         "capacity": lambda: run_capacity_spike(loaded),
         "security": lambda: run_security_spike(loaded),

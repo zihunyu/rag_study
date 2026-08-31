@@ -1,29 +1,41 @@
 # 企业级 RAG 知识库
 
-当前仓库只实施到 **G0 / 阶段 0 准备**。在审核任务返回 `APPROVED:G0` 前，
-FastAPI、Celery/RabbitMQ、Milvus 及供应商模型都只以端口、Stub 和 Spike Harness
-出现，不构成技术选型批准或真实能力验收。
+项目使用原生 Python 进程和 npm，不使用 Docker、Compose 或 Testcontainers。
 
-## G0 快速验证
+## 配置
 
-使用 Codex 工作区 Python 3.12 创建项目本地环境：
+- 实际配置：`config/.env`，被 Git 忽略，禁止提交或复制到日志/聊天；
+- 唯一模板：`config/.env.example`，包含全部类型化配置和逐项说明；
+- 优先级：进程环境变量 > `config/.env` > 程序类型默认值；
+- 检查命令只输出变量名、来源、是否配置和错误码，绝不输出值。
+
+```powershell
+& '.\.venv\Scripts\python.exe' scripts/check_env.py --gate G1
+```
+
+中间件只保留 MySQL 和 Redis。任务队列固定为 Python 本地 SQLite 持久队列。
+向量数据库固定为 Zilliz Cloud 中国区，通过 `pymilvus.MilvusClient` 使用
+`ZILLIZ_CLOUD_URI` 与 `ZILLIZ_CLOUD_TOKEN` 连接。
+
+MinerU 使用 `MINERU_TOKENS` 英文逗号分隔 Token 池，支持 round-robin、单 Token
+并发上限、连续失败、429 冷却和自动故障切换。任何状态、日志和异常均不得包含 Token。
+
+## 环境与启动
 
 ```powershell
 & 'C:\Users\jcy\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' scripts/bootstrap.py
+& '.\.venv\Scripts\python.exe' run_backend.py
+& '.\.venv\Scripts\python.exe' run_worker.py
+cd frontend
+npm ci
+npm run dev
+```
+
+质量检查：
+
+```powershell
 & '.\.venv\Scripts\python.exe' scripts/run_quality.py
 ```
 
-配置优先级与安全边界：
-
-1. 非敏感值：`config/user-input/project-inputs.yaml` 高于
-   `config/defaults/stub-defaults.yaml`。
-2. 密钥：进程环境变量高于 `config/user-input/.env.user.local`；校验器只返回变量名、
-   来源和是否已配置，绝不返回值。
-3. Stub 只解除本地开发依赖，不解除任何 Gate 阻断，也不产生真实性能或质量结论。
-
-开发期进程全部直接由 Python 启动，不依赖容器。文件对象存储默认写入
-`./data/storage`，并隔离为 `original/`、`artifacts/`、`quarantine/`、`temp/`；
-真实 MySQL、Milvus、RabbitMQ 和 Redis 只能连接本机原生服务，否则使用明确的
-本地 Stub。前端阶段批准后统一使用 `npm ci` / `npm run dev`。
-
-详细证据见 `docs/stage-reports/G0.md`。
+运行数据默认位于 `./data/storage` 并被 Git 忽略。当前 Stub/Harness 结果始终带
+`real_acceptance=false`，不能代替真实服务或格式 Gate。

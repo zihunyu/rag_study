@@ -46,3 +46,12 @@
 - 内容存储固定使用可配置的本地文件系统，默认 `./data/storage`；运行数据必须被版本控制忽略。
 - 依赖服务只允许本机原生服务、现有原生服务或 Python 本地/嵌入式适配器。
 - 审核发现 Docker/Compose 文件、命令或必需依赖时，当前 Gate 自动判定为 `CHANGES_REQUIRED`。
+
+## 权威配置边界
+
+- 实际配置只允许 `config/.env`，且必须被 Git 忽略；唯一模板是 `config/.env.example`。
+- 进程环境变量优先于文件；所有字段必须经过类型和条件校验。
+- 配置报告只允许输出变量名、类型、来源、配置状态和错误码，不得输出值。
+- 中间件只保留 MySQL、Redis；任务固定使用 Python 本地 SQLite 持久队列。
+- 检索部署只允许 Zilliz Cloud 中国区，通过 `pymilvus.MilvusClient` URI + Token 契约连接。
+- 任何旧 YAML、旧用户配置目录或第二配置入口出现时，配置迁移审核不通过。

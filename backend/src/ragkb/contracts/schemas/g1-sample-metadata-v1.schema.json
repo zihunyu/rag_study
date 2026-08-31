@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "G1 real sample metadata",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "format", "real_gate", "samples"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "format": {"enum": ["pdf_text", "pdf_scanned_or_image", "docx", "pptx", "spreadsheet"]},
+    "real_gate": {"const": "G1"},
+    "samples": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "file", "real_sample", "expected_locators"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "file": {"type": "string", "minLength": 1},
+          "real_sample": {"const": true},
+          "expected_locators": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "object", "minProperties": 1}
+          },
+          "notes": {"type": "string"}
+        }
+      }
+    }
+  }
+}

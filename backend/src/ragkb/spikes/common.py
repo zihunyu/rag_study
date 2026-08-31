@@ -1,20 +1,8 @@
-"""Shared helpers for safe G0 evidence."""
+"""Shared helpers for secret-safe technical evidence."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
-
-
-def value_at(data: Mapping[str, Any], path: str) -> Any:
-    value: Any = data
-    for part in path.split("."):
-        value = value[part]
-    return value
-
-
-def is_stubbed(stubbed_paths: frozenset[str], path: str) -> bool:
-    return path in stubbed_paths or any(item.startswith(f"{path}.") for item in stubbed_paths)
 
 
 def result(
@@ -33,5 +21,5 @@ def result(
         "assertions": assertions,
         "metrics": dict(metrics or {}),
         "blockers": sorted(set(blockers)),
-        "attestation": "Harness or Stub results are not real-service Gate acceptance evidence.",
+        "attestation": "Harness results are not real-service Gate acceptance evidence.",
     }

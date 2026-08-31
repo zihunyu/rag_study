@@ -1,7 +1,7 @@
 """G0-safe adapters implementing vendor-neutral ports."""
 
 from ragkb.adapters.local_storage import LocalFileStorage
-from ragkb.adapters.mineru import MinerUEndpoint, MinerURouter
+from ragkb.adapters.mineru_pool import MinerUTokenPool
 from ragkb.adapters.stubs import (
     DeterministicEmbedding,
     DeterministicGeneration,
@@ -9,6 +9,7 @@ from ragkb.adapters.stubs import (
     InMemoryJobQueue,
     StubPermissionProjection,
 )
+from ragkb.adapters.zilliz import ZillizCloudAdapter
 
 __all__ = [
     "DeterministicEmbedding",
@@ -16,7 +17,7 @@ __all__ = [
     "DeterministicReranker",
     "InMemoryJobQueue",
     "LocalFileStorage",
-    "MinerUEndpoint",
-    "MinerURouter",
+    "MinerUTokenPool",
     "StubPermissionProjection",
+    "ZillizCloudAdapter",
 ]

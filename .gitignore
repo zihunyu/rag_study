@@ -1,6 +1,5 @@
 # Local user configuration and secrets
-config/user-input/.env.user.local
-config/user-input/*.local.yaml
+config/.env
 
 # Python
 __pycache__/

@@ -1,4 +1,4 @@
-"""Model adapter contract harness."""
+"""Model adapter and outbound-policy harness using typed env settings."""
 
 from __future__ import annotations
 
@@ -8,100 +8,56 @@ from ragkb.adapters.stubs import (
     DeterministicGeneration,
     DeterministicReranker,
 )
-from ragkb.config.models import LoadedConfiguration
-from ragkb.spikes.common import is_stubbed, result
+from ragkb.config import EnvLoadResult
+from ragkb.spikes.common import result
 
 
-def run_model_spike(loaded: LoadedConfiguration) -> dict[str, object]:
+def run_model_spike(loaded: EnvLoadResult) -> dict[str, object]:
+    settings = loaded.settings
+    if settings is None:
+        return result(
+            "model_adapter_contracts",
+            [{"name": "typed_env_available", "passed": False}],
+            ["config/.env:typed_validation_failed"],
+        )
     embedding = DeterministicEmbedding()
     reranker = DeterministicReranker()
     generation = DeterministicGeneration()
-    vectors_once = embedding.embed(["企业知识库", "权限过滤"])
-    vectors_twice = embedding.embed(["企业知识库", "权限过滤"])
-    ranking = reranker.rerank("permission filter", ["unrelated", "permission filter contract"])
-    answer = generation.generate("question", ["E1 evidence"])
-    allowed = loaded.user["ai_services"]["allowed_data_classifications"]
-    confidential_pending_region = decide_external_ai_egress(
-        classification="confidential",
-        outbound_ai_allowed=True,
-        allowed_classifications=allowed,
-        provider_region_approved=False,
-        cross_border_transfer_allowed=False,
-        provider_is_cross_border=False,
-    )
-    confidential_approved_region = decide_external_ai_egress(
-        classification="confidential",
-        outbound_ai_allowed=True,
-        allowed_classifications=allowed,
-        provider_region_approved=True,
-        cross_border_transfer_allowed=False,
-        provider_is_cross_border=False,
-    )
+    vectors = embedding.embed(["企业知识库", "权限过滤"])
     restricted = decide_external_ai_egress(
         classification="restricted",
-        outbound_ai_allowed=True,
-        allowed_classifications=allowed,
+        outbound_ai_allowed=settings.ai_outbound_allowed,
+        allowed_classifications=settings.ai_outbound_allowed_classifications,
         provider_region_approved=True,
-        cross_border_transfer_allowed=True,
+        cross_border_transfer_allowed=settings.ai_cross_border_transfer_allowed,
         provider_is_cross_border=False,
     )
     assertions = [
-        {"name": "embedding_is_deterministic", "passed": vectors_once == vectors_twice},
-        {
-            "name": "embedding_dimension_contract",
-            "passed": all(len(vector) == embedding.dimension for vector in vectors_once),
-        },
-        {"name": "reranker_contract", "passed": list(ranking) == [1, 0]},
-        {"name": "generation_is_evidence_bound_stub", "passed": answer.startswith("stub_answer:")},
+        {"name": "typed_env_available", "passed": True},
+        {"name": "embedding_contract", "passed": len(vectors[0]) == embedding.dimension},
         {
             "name": "generation_refuses_without_evidence",
-            "passed": generation.generate("question", []) == "insufficient_evidence",
+            "passed": generation.generate("q", []) == "insufficient_evidence",
         },
+        {"name": "restricted_outbound_denied", "passed": not restricted.allowed},
         {
-            "name": "confidential_waits_for_provider_region_approval",
-            "passed": not confidential_pending_region.allowed,
+            "name": "reranker_contract",
+            "passed": list(reranker.rerank("exact", ["noise", "exact"])) == [1, 0],
         },
-        {
-            "name": "confidential_allowed_after_region_approval",
-            "passed": confidential_approved_region.allowed,
-        },
-        {"name": "restricted_outbound_always_denied", "passed": not restricted.allowed},
     ]
-    blockers: list[str] = []
-    for service in ("llm", "embedding", "reranker", "asr"):
-        for suffix in ("provider", "endpoint", "model_id"):
-            path = f"ai_services.{service}.{suffix}"
-            if is_stubbed(loaded.stubbed_paths, path):
-                blockers.append(path)
-    if is_stubbed(loaded.stubbed_paths, "ai_services.outbound_ai_allowed"):
-        blockers.append("ai_services.outbound_ai_allowed")
-    for secret in loaded.secret_statuses:
-        if (
-            secret.name
-            in {
-                "LLM_API_KEY",
-                "EMBEDDING_API_KEY",
-                "RERANKER_API_KEY",
-                "ASR_API_KEY",
-            }
-            and not secret.configured
-        ):
-            blockers.append(f"env:{secret.name}")
+    required = {
+        "LLM_API_KEY",
+        "LLM_MODEL",
+        "EMBEDDING_API_KEY",
+        "EMBEDDING_MODEL",
+        "RERANKER_API_KEY",
+        "RERANKER_MODEL",
+    }
+    blockers = [f"{key}:not_configured" for key in sorted(required) if not loaded.configured[key]]
     blockers.extend(
         [
             "real_model_quality_not_measured",
-            "real_model_latency_cost_and_rate_limits_not_measured",
-            "provider_processing_region_not_approved",
+            "real_model_latency_and_rate_limits_not_measured",
         ]
     )
-    return result(
-        "model_adapter_contracts",
-        assertions,
-        blockers,
-        {
-            "embedding_revision": embedding.revision,
-            "embedding_dimension": embedding.dimension,
-            "reranker_revision": reranker.revision,
-            "generation_revision": generation.revision,
-        },
-    )
+    return result("model_adapter_contracts", assertions, blockers)

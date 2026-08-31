@@ -28,9 +28,9 @@ def main() -> int:
         },
         "native_commands": {
             name: shutil.which(name) is not None
-            for name in ("mysql", "redis-server", "rabbitmqctl", "node", "npm", "ruff")
+            for name in ("mysql", "redis-server", "node", "npm", "ruff")
         },
-        "milvus_native_service": "not_auto_detectable; requires configured URI and real Spike",
+        "zilliz_cloud": "not contacted; validate ZILLIZ_CLOUD_* with scripts/check_env.py",
         "secrets_inspected": False,
     }
     rendered = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"

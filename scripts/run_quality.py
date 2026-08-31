@@ -1,4 +1,4 @@
-"""Run every locally available G0 quality check through native processes."""
+"""Run every locally available code-quality check for the current stage."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ def main() -> int:
             _run("bootstrap", [sys.executable, "scripts/bootstrap.py", "--check"]),
             _run(
                 "config",
-                [sys.executable, "scripts/check_config.py", "--gate", "G0", "--allow-blocked"],
+                [sys.executable, "scripts/check_env.py", "--gate", "G1", "--allow-blocked"],
             ),
             _run("ruff", [sys.executable, "-m", "ruff", "check", "."]),
             _run("ruff_format", [sys.executable, "-m", "ruff", "format", "--check", "."]),
@@ -45,16 +45,18 @@ def main() -> int:
                 "spikes",
                 [
                     sys.executable,
-                    "scripts/run_g0_spikes.py",
+                    "scripts/run_spikes.py",
                     "--all",
                     "--output-dir",
-                    "artifacts/g0/spikes",
+                    "artifacts/g1/spikes",
                 ],
             ),
             _run("backend_entry", [sys.executable, "run_backend.py", "--check"]),
-            _run("worker_entry", [sys.executable, "run_worker.py", "--once"]),
+            _run("worker_entry", [sys.executable, "run_worker.py", "--check"]),
             _run("mineru_entry", [sys.executable, "run_mineru.py", "--check"]),
             _run("migration_entry", [sys.executable, "scripts/run_migrations.py", "--check"]),
+            _run("openapi_snapshot", [sys.executable, "scripts/export_openapi.py", "--check"]),
+            _run("secret_scan", [sys.executable, "scripts/scan_secrets.py"]),
             _run("frontend", [shutil.which("npm") or "npm", "run", "check"], ROOT / "frontend"),
             _run("mypy", [sys.executable, "-m", "mypy", "backend/src/ragkb"]),
         ]
@@ -64,7 +66,7 @@ def main() -> int:
         "failed": [item["name"] for item in checks if item["status"] == "FAILED"],
         "skipped": [],
     }
-    output = ROOT / "artifacts/g0/quality-summary.json"
+    output = ROOT / "artifacts/g1/quality-summary.json"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(summary, indent=2, sort_keys=True))

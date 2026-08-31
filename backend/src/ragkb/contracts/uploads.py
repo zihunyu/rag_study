@@ -1,0 +1,54 @@
+"""Repository port for upload, document and version application use cases."""
+
+from __future__ import annotations
+
+from typing import Any, Protocol
+
+from ragkb.domain.state_machines import UploadSessionState
+from ragkb.domain.uploads import UploadSession
+
+
+class UploadRepositoryPort(Protocol):
+    def create_upload_session(
+        self,
+        *,
+        tenant_id: str,
+        space_id: str,
+        filename: str,
+        expected_size: int,
+        expected_sha256: str,
+        declared_mime: str,
+        idempotency_key: str,
+        request_hash: str,
+    ) -> UploadSession: ...
+
+    def idempotency_response(
+        self, operation: str, key: str, request_hash: str
+    ) -> dict[str, Any] | None: ...
+
+    def save_idempotency_response(
+        self,
+        operation: str,
+        key: str,
+        request_hash: str,
+        resource_id: str,
+        response: dict[str, Any],
+    ) -> None: ...
+
+    def get_session(self, session_id: str) -> UploadSession: ...
+
+    def update_session(
+        self,
+        session_id: str,
+        expected_row_version: int,
+        state: UploadSessionState,
+        **fields: str | None,
+    ) -> UploadSession: ...
+
+    def ensure_document_version(self, session: UploadSession) -> tuple[str, str]: ...
+
+    def get_version(self, version_id: str) -> dict[str, Any]: ...
+
+    def save_canonical_document(self, document: Any) -> None: ...
+
+    def mark_version_quarantined(self, version_id: str, parser_revision: str) -> None: ...
