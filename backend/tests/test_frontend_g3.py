@@ -1,0 +1,42 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+
+def test_g3_frontend_exposes_qa_admin_feedback_and_retrieval_debug_contracts() -> None:
+    root = Path(__file__).resolve().parents[2] / "frontend"
+    html = (root / "index.html").read_text(encoding="utf-8")
+    script = (root / "src/App.vue").read_text(encoding="utf-8")
+    api = (root / "src/api.js").read_text(encoding="utf-8")
+    package = (root / "package.json").read_text(encoding="utf-8")
+    for marker in (
+        "可信问答",
+        "知识管理",
+        "检索调试",
+        "追加式审计",
+        "发布 / 回滚",
+        "清理 Outbox 状态",
+        "既有文档新版本",
+        "单文档质量复核",
+        "Pilot Go/No-Go 与灰度",
+        "合成 UAT",
+        "可选观察窗与最终报告",
+    ):
+        assert marker in script
+    assert 'id="app"' in html
+    for endpoint in ("/ask:stream", "/search", "/feedback", "/admin/audit-events"):
+        assert endpoint in script + api
+    assert '"vue"' in package and '"vite"' in package
+    assert '"dev": "vite --host 127.0.0.1"' in package
+    assert '"test": "node --test src/api.test.mjs"' in package
+    assert "cleanup/local_file:run" in script
+    assert "versions/upload-sessions" in script
+    assert "If-Match" in script and "PROCESSING 不可发布" in script
+    assert "quality-report" in script and "/review" in script
+    assert "/admin/diagnostics" in script
+    assert "/governance/pilots" in script
+    assert "/governance/uat-cases" in script
+    assert "final-acceptance-report" in script
+    assert "真实证据缺失时必须保持 BLOCKED" in script
+    assert "cleanup/${store}:complete" not in script
+    assert "说明卡片" not in script

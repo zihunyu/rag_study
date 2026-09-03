@@ -46,6 +46,7 @@
             "slide": {"type": "integer", "minimum": 1},
             "sheet": {"type": "string", "minLength": 1},
             "cell_range": {"type": "string", "minLength": 1},
+            "row": {"type": "integer", "minimum": 1},
             "bbox": {
               "type": "array",
               "minItems": 4,

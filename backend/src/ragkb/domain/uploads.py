@@ -23,6 +23,8 @@ class UploadSession:
     detected_mime: str | None
     document_id: str | None
     document_version_id: str | None
+    target_document_id: str | None
+    target_document_row_version: int | None
     job_id: str | None
     error_code: str | None
     row_version: int

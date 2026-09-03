@@ -23,6 +23,7 @@ class SourceLocator:
     slide: int | None = None
     sheet: str | None = None
     cell_range: str | None = None
+    row: int | None = None
     bbox: tuple[float, float, float, float] | None = None
     char_range: tuple[int, int] | None = None
     start_time: float | None = None
@@ -33,6 +34,8 @@ class SourceLocator:
             raise ValueError("page is one-based")
         if self.slide is not None and self.slide < 1:
             raise ValueError("slide is one-based")
+        if self.row is not None and self.row < 1:
+            raise ValueError("row is one-based")
         if self.char_range is not None:
             start, end = self.char_range
             if start < 0 or end < start:
@@ -50,6 +53,7 @@ class SourceLocator:
                 self.page,
                 self.slide,
                 self.sheet,
+                self.row,
                 self.bbox,
                 self.char_range,
                 self.start_time,
@@ -63,6 +67,7 @@ class SourceLocator:
             "slide": self.slide,
             "sheet": self.sheet,
             "cell_range": self.cell_range,
+            "row": self.row,
             "bbox": list(self.bbox) if self.bbox is not None else None,
             "char_range": list(self.char_range) if self.char_range is not None else None,
             "start_time": self.start_time,

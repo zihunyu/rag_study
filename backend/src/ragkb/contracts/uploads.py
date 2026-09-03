@@ -6,6 +6,7 @@ from typing import Any, Protocol
 
 from ragkb.domain.state_machines import UploadSessionState
 from ragkb.domain.uploads import UploadSession
+from ragkb.domain.validation import DocumentQualityReport
 
 
 class UploadRepositoryPort(Protocol):
@@ -20,6 +21,8 @@ class UploadRepositoryPort(Protocol):
         declared_mime: str,
         idempotency_key: str,
         request_hash: str,
+        target_document_id: str | None = None,
+        target_document_row_version: int | None = None,
     ) -> UploadSession: ...
 
     def idempotency_response(
@@ -51,4 +54,21 @@ class UploadRepositoryPort(Protocol):
 
     def save_canonical_document(self, document: Any) -> None: ...
 
+    def save_quality_report(self, report: DocumentQualityReport) -> None: ...
+
+    def record_local_content(
+        self,
+        document_id: str,
+        version_id: str | None,
+        partition: str,
+        storage_key: str,
+        content_kind: str,
+    ) -> None: ...
+
     def mark_version_quarantined(self, version_id: str, parser_revision: str) -> None: ...
+
+    def mark_version_failed(self, version_id: str, parser_revision: str) -> None: ...
+
+    def mark_version_cancelled(self, version_id: str) -> None: ...
+
+    def mark_version_processing(self, version_id: str) -> None: ...

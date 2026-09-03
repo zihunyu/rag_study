@@ -1,0 +1,40 @@
+schema_version: 1
+dataset_id: g3-synthetic-six-status
+revision: g3-eval-v1
+frozen_at: "2026-09-01T00:00:00Z"
+random_seed: 20260901
+real_acceptance: false
+cases:
+  - case_id: answered-1
+    question: "合成证据支持的问题"
+    expected_status: answered
+    reference_evidence: [E1]
+    adjudication: &adjudication
+      reviewers: [qa-reviewer-a, qa-reviewer-b]
+      decision: agreed
+      rationale: "合成契约裁决，不代表真实效果。"
+  - case_id: insufficient-1
+    question: "没有证据的问题"
+    expected_status: insufficient_evidence
+    reference_evidence: []
+    adjudication: *adjudication
+  - case_id: clarify-1
+    question: "缺少对象范围的问题"
+    expected_status: needs_clarification
+    reference_evidence: []
+    adjudication: *adjudication
+  - case_id: conflict-1
+    question: "合成冲突证据问题"
+    expected_status: conflicting_evidence
+    reference_evidence: [E1, E2]
+    adjudication: *adjudication
+  - case_id: out-of-scope-1
+    question: "范围外问题"
+    expected_status: out_of_scope
+    reference_evidence: []
+    adjudication: *adjudication
+  - case_id: system-error-1
+    question: "合成系统错误问题"
+    expected_status: system_error
+    reference_evidence: [E1]
+    adjudication: *adjudication

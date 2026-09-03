@@ -128,6 +128,7 @@ class EnvSettings(BaseModel):
     mineru_failover_enabled: bool = True
 
     llm_base_url: str = ""
+    llm_allow_http: bool = True
     llm_api_key: SecretStr | None = None
     llm_model: str = ""
     llm_timeout_seconds: float = Field(default=120, gt=0)
@@ -148,6 +149,7 @@ class EnvSettings(BaseModel):
     reranker_max_candidates: int = Field(default=40, gt=0)
     reranker_timeout_seconds: float = Field(default=60, gt=0)
 
+    asr_enabled: bool = False
     asr_base_url: str = ""
     asr_api_key: SecretStr | None = None
     asr_model: str = ""

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -83,6 +83,32 @@ class DocumentVersionResponse(StrictModel):
     parser_revision: str | None
 
 
+class DocumentQualityResponse(StrictModel):
+    document_version_id: str
+    source_format: str
+    parser_revision: str
+    node_count: int
+    locator_coverage: float
+    issue_codes: list[str]
+    disposition: str
+    real_acceptance: bool
+
+
+class DocumentReviewRequest(StrictModel):
+    decision: Literal["APPROVED", "NEEDS_REWORK", "REJECTED"]
+    comment: str = Field(default="", max_length=2000)
+
+
+class DocumentReviewResponse(StrictModel):
+    review_id: str
+    document_version_id: str
+    reviewer_id: str
+    decision: str
+    comment: str
+    quality_revision: str
+    real_acceptance: bool
+
+
 class JobResponse(StrictModel):
     id: str
     operation: str
@@ -91,6 +117,113 @@ class JobResponse(StrictModel):
     max_attempts: int
     cancel_requested: bool
     error_code: str | None
+
+
+class SearchRequest(StrictModel):
+    query: str = Field(min_length=1, max_length=2000)
+    space_id: str | None = None
+    limit: int | None = Field(default=None, ge=1, le=50)
+
+
+class SearchHitResponse(StrictModel):
+    chunk_id: str
+    document_id: str
+    document_version_id: str
+    text: str
+    locator: dict[str, Any]
+    fused_score: float
+    rerank_position: int
+    channels: list[str]
+    parent_chunk_id: str | None = None
+    parent_text: str | None = None
+
+
+class SearchResponse(StrictModel):
+    request_id: str
+    observed_security_watermark: int
+    hits: list[SearchHitResponse]
+    real_acceptance: bool
+    degraded: bool
+    warnings: list[str]
+
+
+class AskRequest(StrictModel):
+    question: str = Field(min_length=1, max_length=4000)
+
+
+class CitationResponse(StrictModel):
+    evidence_id: str
+    source_url: str
+    locator: dict[str, Any]
+
+
+class AskResponse(StrictModel):
+    rag_run_id: str
+    status: str
+    answer: str | None
+    citations: list[CitationResponse]
+    warnings: list[str]
+    verified: bool
+    real_acceptance: bool
+
+
+class EvidenceSourceResponse(StrictModel):
+    evidence_id: str
+    text: str
+    locator: dict[str, Any]
+
+
+class FeedbackRequest(StrictModel):
+    rating: int = Field(ge=1, le=5)
+    reason_code: str = Field(min_length=1, max_length=64)
+    comment: str = Field(default="", max_length=2000)
+
+
+class FeedbackResponse(StrictModel):
+    rag_run_id: str
+    accepted: bool
+    index_generation_id: str
+    retrieval_revision: str
+    prompt_revision: str
+    model_revision: str
+
+
+class RollbackRequest(StrictModel):
+    version_id: str = Field(min_length=1)
+
+
+class PermissionUpdateRequest(StrictModel):
+    target_acl_revision: int = Field(ge=1)
+    required_watermark: int = Field(ge=0)
+    observed_watermark: int = Field(ge=0)
+    projection_ok: bool = True
+
+
+class LifecycleResponse(StrictModel):
+    document_id: str
+    active_version_id: str | None
+    lifecycle_state: str
+    acl_revision: int
+    visible: bool
+    tombstoned: bool
+    row_version: int
+
+
+class DeletionResponse(StrictModel):
+    document_id: str
+    lifecycle_state: str
+    visible: bool
+    cleanup: dict[str, str]
+
+
+class AuditEventResponse(StrictModel):
+    sequence: int
+    action: str
+    resource_id: str
+    trace_id: str
+    governance_revision: str
+    previous_hash: str
+    event_hash: str
 
 
 class HealthResponse(StrictModel):
@@ -105,3 +238,194 @@ class ErrorResponse(StrictModel):
     request_id: str
     retryable: bool
     details: dict[str, Any] = Field(default_factory=dict)
+
+
+class DiagnosticsResponse(StrictModel):
+    revision: str
+    event_count: int
+    events_by_severity: dict[str, int]
+    queue_by_state: dict[str, int]
+    adapter: str
+    otel_export_performed: bool
+    prometheus_export_performed: bool
+    simulated: bool
+    real_acceptance: bool
+
+
+class EvidenceIndexRequest(StrictModel):
+    category: str = Field(min_length=1, max_length=64)
+    revision: str = Field(min_length=1, max_length=128)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class EvidenceIndexResponse(StrictModel):
+    evidence_id: str
+    category: str
+    revision: str
+    content_hash: str
+    simulated: bool = True
+    real_acceptance: bool = False
+
+
+class GovernanceRegisterRequest(StrictModel):
+    category: Literal["RISK", "EXCEPTION"]
+    title: str = Field(min_length=1, max_length=300)
+    owner: str = Field(min_length=1, max_length=100)
+    state: Literal["OPEN", "ACCEPTED", "CLOSED"]
+    revision: str = Field(min_length=1, max_length=128)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class GovernanceRegisterResponse(StrictModel):
+    record_id: str
+    category: str
+    title: str
+    owner: str
+    state: str
+    revision: str
+    metadata: dict[str, Any]
+    simulated: bool
+
+
+class PilotCreateRequest(StrictModel):
+    name: str = Field(min_length=1, max_length=200)
+    feature_flag: str = Field(min_length=1, max_length=100)
+
+
+class PilotResponse(StrictModel):
+    pilot_id: str
+    name: str
+    state: str
+    feature_flag: str
+    blockers: list[str]
+    revision: int
+    simulated: bool
+    real_acceptance: bool
+
+
+class GovernanceSignoffRequest(StrictModel):
+    role: str = Field(min_length=1, max_length=64)
+    decision: Literal["APPROVE", "VETO"]
+    comment: str = Field(default="", max_length=2000)
+
+
+class ReadinessResponse(StrictModel):
+    scope_id: str
+    state: str
+    blockers: list[str]
+    simulated: bool
+    real_acceptance: bool
+
+
+class RolloutBatchResponse(StrictModel):
+    batch_id: str
+    pilot_id: str
+    ordinal: int
+    percentage: int
+    state: str
+    simulated: bool
+
+
+class PilotRollbackRequest(StrictModel):
+    trigger: str = Field(min_length=1, max_length=500)
+
+
+class UATCaseCreateRequest(StrictModel):
+    pilot_id: str = Field(min_length=1)
+    title: str = Field(min_length=1, max_length=200)
+    steps: list[str] = Field(min_length=1)
+    expected: list[str] = Field(min_length=1)
+
+
+class UATEvidenceReference(StrictModel):
+    category: str = Field(min_length=1)
+    revision: str = Field(min_length=1)
+    content_hash: str = Field(pattern=r"^[a-fA-F0-9]{64}$")
+
+
+class UATResultRequest(StrictModel):
+    result: Literal["PASSED", "FAILED", "BLOCKED"]
+    evidence: list[UATEvidenceReference] = Field(default_factory=list)
+    step_results: list[str] = Field(default_factory=list)
+
+
+class UATCaseResponse(StrictModel):
+    case_id: str
+    pilot_id: str
+    title: str
+    steps: list[str]
+    expected: list[str]
+    result: str
+    evidence: list[dict[str, str]]
+    step_results: list[str]
+    simulated: bool
+    row_version: int
+    created_at: float
+    updated_at: float
+
+
+class DefectCreateRequest(StrictModel):
+    scope_type: Literal["pilot", "uat", "observation"]
+    scope_id: str = Field(min_length=1)
+    severity: Literal["P0", "P1", "P2", "P3"]
+    title: str = Field(min_length=1, max_length=300)
+
+
+class DefectResponse(StrictModel):
+    defect_id: str
+    scope_type: str
+    scope_id: str
+    severity: str
+    title: str
+    state: str
+    simulated: bool
+    row_version: int = 1
+    created_at: float | None = None
+    updated_at: float | None = None
+
+
+class ObservationCreateRequest(StrictModel):
+    name: str = Field(min_length=1, max_length=200)
+
+
+class ObservationMetricsRequest(StrictModel):
+    metrics: dict[str, float]
+
+
+class ObservationResponse(StrictModel):
+    window_id: str
+    name: str
+    starts_at: float
+    ends_at: float
+    state: str
+    metrics: dict[str, float]
+    simulated: bool
+    real_acceptance: bool
+    row_version: int
+
+
+class IncidentCreateRequest(StrictModel):
+    severity: Literal["P0", "P1", "P2", "P3"]
+    title: str = Field(min_length=1, max_length=300)
+
+
+class IncidentResponse(StrictModel):
+    incident_id: str
+    window_id: str
+    severity: str
+    title: str
+    state: str
+    simulated: bool
+    row_version: int = 1
+    created_at: float | None = None
+    updated_at: float | None = None
+
+
+class FinalAcceptanceResponse(StrictModel):
+    window_id: str
+    status: str
+    blockers: list[str]
+    synthetic_readiness_state: str
+    simulated: bool
+    real_acceptance: bool
+    generator_revision: str

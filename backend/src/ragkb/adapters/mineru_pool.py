@@ -116,6 +116,20 @@ class MinerUTokenPool[ResultT]:
     def acquire(self, *, now: float | None = None) -> MinerUTokenLease:
         return self._acquire(now=now)
 
+    def acquire_slot(self, slot: int, *, now: float | None = None) -> MinerUTokenLease:
+        timestamp = self._clock() if now is None else now
+        with self._lock:
+            if slot < 0 or slot >= len(self._states):
+                raise MinerURetryableError("MINERU_TOKEN_SLOT_INVALID", 0)
+            state = self._states[slot]
+            if state.cooldown_until > timestamp or state.in_flight >= self._max_concurrency:
+                raise MinerURetryableError(
+                    "MINERU_TOKEN_SLOT_UNAVAILABLE",
+                    max(0, state.cooldown_until - timestamp),
+                )
+            state.in_flight += 1
+            return MinerUTokenLease(self._release, slot, state.token)
+
     def _release(self, slot: int) -> None:
         with self._lock:
             state = self._states[slot]
@@ -126,12 +140,24 @@ class MinerUTokenPool[ResultT]:
             state = self._states[slot]
             state.consecutive_failures = 0
 
+    def record_success(self, slot: int) -> None:
+        self._success(slot)
+
     def _failure(self, slot: int, *, rate_limited: bool, now: float) -> None:
         with self._lock:
             state = self._states[slot]
             state.consecutive_failures += 1
             if rate_limited or state.consecutive_failures >= self._max_failures:
                 state.cooldown_until = now + self._cooldown_seconds
+
+    def record_failure(
+        self, slot: int, *, rate_limited: bool = False, now: float | None = None
+    ) -> None:
+        self._failure(
+            slot,
+            rate_limited=rate_limited,
+            now=self._clock() if now is None else now,
+        )
 
     def call(
         self,

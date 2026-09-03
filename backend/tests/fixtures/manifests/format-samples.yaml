@@ -1,46 +1,65 @@
 schema_version: 1
 description: >-
-  G0 冻结六类 60 槽位采集计划与 Harness；真实样本当前可为 0。前五类真实效果是 G1
-  硬门禁，audio 是 G2 硬门禁；任何 pending 槽位都不得声明格式已支持。
+  原始完整范围为六类 60 槽位。用户当前将 ASR/audio 暂缓，G4 非 ASR 范围只计算
+  五类 50 槽位；audio 历史契约与未来恢复入口保留但不参与当前 ready 计算。
+scope:
+  original_full_scope: 6x10
+  current_non_asr_scope: 5x10
+  audio_deferred: true
+required_intake_fields:
+  - sha256
+  - deidentified
+  - authorization_ref
+  - rights_confirmed
+  - source_classification
+  - expected_locators
+prohibited_actions:
+  - fabricate_real_samples
+  - copy_unapproved_business_data
+  - remove_legal_hold_evidence
 collection_plan:
   - format: pdf_text
     required_count: 10
     owner_role: qa_evaluation
-    real_gate: G1
+    real_gate: G4
     acquisition_status: pending
-    sample_directory: ./data/samples/g1/pdf_text
-    metadata_path: ./data/samples/g1/pdf_text/metadata.yaml
+    sample_directory: ./data/samples/g4/pdf_text
+    metadata_path: ./data/samples/g4/pdf_text/metadata.yaml
   - format: pdf_scanned_or_image
     required_count: 10
     owner_role: qa_evaluation
-    real_gate: G1
+    real_gate: G4
     acquisition_status: pending
-    sample_directory: ./data/samples/g1/pdf_scanned_or_image
-    metadata_path: ./data/samples/g1/pdf_scanned_or_image/metadata.yaml
+    sample_directory: ./data/samples/g4/pdf_scanned_or_image
+    metadata_path: ./data/samples/g4/pdf_scanned_or_image/metadata.yaml
   - format: docx
     required_count: 10
     owner_role: qa_evaluation
-    real_gate: G1
+    real_gate: G4
     acquisition_status: pending
-    sample_directory: ./data/samples/g1/docx
-    metadata_path: ./data/samples/g1/docx/metadata.yaml
+    sample_directory: ./data/samples/g4/docx
+    metadata_path: ./data/samples/g4/docx/metadata.yaml
   - format: pptx
     required_count: 10
     owner_role: qa_evaluation
-    real_gate: G1
+    real_gate: G4
     acquisition_status: pending
-    sample_directory: ./data/samples/g1/pptx
-    metadata_path: ./data/samples/g1/pptx/metadata.yaml
+    sample_directory: ./data/samples/g4/pptx
+    metadata_path: ./data/samples/g4/pptx/metadata.yaml
   - format: spreadsheet
     required_count: 10
     owner_role: qa_evaluation
-    real_gate: G1
+    real_gate: G4
     acquisition_status: pending
-    sample_directory: ./data/samples/g1/spreadsheet
-    metadata_path: ./data/samples/g1/spreadsheet/metadata.yaml
+    sample_directory: ./data/samples/g4/spreadsheet
+    metadata_path: ./data/samples/g4/spreadsheet/metadata.yaml
   - format: audio
     required_count: 10
     owner_role: qa_evaluation
-    real_gate: G2
-    acquisition_status: pending
+    real_gate: G4
+    acquisition_status: deferred_by_user
+    deferred_by_user: true
+    current_scope_required: false
+    sample_directory: ./data/samples/g4/audio
+    metadata_path: ./data/samples/g4/audio/metadata.yaml
 samples: []

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import wave
 from collections.abc import Sequence
 from html.parser import HTMLParser
 from pathlib import Path
@@ -161,22 +162,109 @@ class TextPDFParser:
 
 
 class ImageParserRoute:
-    revision = "image-mineru-route:g1-v1"
+    revision = "offline-ocr-stub:g4-v1"
+
+    def __init__(self, source_format: str = "image") -> None:
+        self.source_format = source_format
 
     def parse(self, source: Path, document_version_id: str) -> CanonicalDocument:
-        raise ParsingDeferred(
-            "MINERU_REQUIRED", "image/scanned parsing requires a real MinerU/OCR adapter"
+        if not source.read_bytes():
+            raise ParsingDeferred("PARSE_EMPTY", "image fixture is empty")
+        text = f"[offline OCR stub:{source.name}:{_checksum(source)[:12]}]"
+        node = CanonicalNode(
+            node_id=new_uuid7(),
+            parent_node_id=None,
+            node_type=NodeType.IMAGE,
+            original_text=text,
+            display_text=text,
+            locator=SourceLocator(page=1, bbox=(0.0, 0.0, 1.0, 1.0)),
+            metadata={"offline_stub": True},
+        )
+        return _document(
+            source,
+            document_version_id,
+            self.source_format,
+            self.revision,
+            [node],
+            quality_issues=["offline_ocr_stub_real_effect_blocked"],
+        )
+
+
+class OfflineOfficeConversionStubParser:
+    revision = "offline-office-conversion-stub:g4-v1"
+
+    def __init__(self, source_format: str) -> None:
+        self.source_format = source_format
+
+    def parse(self, source: Path, document_version_id: str) -> CanonicalDocument:
+        if not source.read_bytes():
+            raise ParsingDeferred("PARSE_EMPTY", "legacy Office fixture is empty")
+        text = f"[offline Office conversion stub:{source.name}:{_checksum(source)[:12]}]"
+        nodes = _text_nodes(
+            [text],
+            locator_factory=lambda _index, offset, length: SourceLocator(
+                char_range=(offset, offset + length)
+            ),
+        )
+        return _document(
+            source,
+            document_version_id,
+            self.source_format,
+            self.revision,
+            nodes,
+            quality_issues=["offline_office_conversion_stub_real_effect_blocked"],
+        )
+
+
+class OfflineASRStubParser:
+    revision = "offline-asr-stub:g4-v1"
+
+    def parse(self, source: Path, document_version_id: str) -> CanonicalDocument:
+        if not source.read_bytes():
+            raise ParsingDeferred("PARSE_EMPTY", "audio fixture is empty")
+        duration = 1.0
+        if source.suffix.casefold() == ".wav":
+            try:
+                with wave.open(str(source), "rb") as audio:
+                    duration = audio.getnframes() / max(1, audio.getframerate())
+            except wave.Error:
+                duration = 1.0
+        text = f"[offline ASR stub:{source.name}:{_checksum(source)[:12]}]"
+        node = CanonicalNode(
+            node_id=new_uuid7(),
+            parent_node_id=None,
+            node_type=NodeType.AUDIO,
+            original_text=text,
+            display_text=text,
+            locator=SourceLocator(start_time=0.0, end_time=max(duration, 0.001)),
+            metadata={"offline_stub": True},
+        )
+        return _document(
+            source,
+            document_version_id,
+            "audio",
+            self.revision,
+            [node],
+            quality_issues=["offline_asr_stub_real_effect_blocked"],
         )
 
 
 class DOCXParser:
-    revision = "python-docx:g1-v1"
+    revision = "python-docx:g1-v2"
 
     def parse(self, source: Path, document_version_id: str) -> CanonicalDocument:
         document = DocxDocument(str(source))
-        texts = [paragraph.text for paragraph in document.paragraphs]
-        for table in document.tables:
-            texts.extend(" | ".join(cell.text for cell in row.cells) for row in table.rows)
+        paragraphs = {paragraph._p: paragraph for paragraph in document.paragraphs}
+        tables = {table._tbl: table for table in document.tables}
+        texts: list[str] = []
+        for child in document.element.body.iterchildren():
+            paragraph = paragraphs.get(child)
+            if paragraph is not None:
+                texts.append(paragraph.text)
+                continue
+            table = tables.get(child)
+            if table is not None:
+                texts.extend(" | ".join(cell.text for cell in row.cells) for row in table.rows)
         nodes = _text_nodes(
             texts,
             locator_factory=lambda _index, offset, length: SourceLocator(
@@ -196,14 +284,29 @@ class DOCXParser:
 
 
 class PPTXParser:
-    revision = "python-pptx:g1-v1"
+    revision = "python-pptx:g1-v2"
 
     def parse(self, source: Path, document_version_id: str) -> CanonicalDocument:
         presentation = Presentation(str(source))
         nodes: list[CanonicalNode] = []
         for slide_number, slide in enumerate(presentation.slides, start=1):
-            for shape in slide.shapes:
-                text = str(getattr(shape, "text", "")).strip()
+            column_width = max(1, presentation.slide_width // 4)
+            shapes = sorted(
+                slide.shapes,
+                key=lambda shape: (
+                    shape.left // column_width,
+                    shape.top,
+                    shape.left,
+                    shape.shape_id,
+                ),
+            )
+            for shape in shapes:
+                if getattr(shape, "has_table", False):
+                    text = "\n".join(
+                        " | ".join(cell.text for cell in row.cells) for row in shape.table.rows
+                    ).strip()
+                else:
+                    text = str(getattr(shape, "text", "")).strip()
                 if not text:
                     continue
                 nodes.append(
@@ -223,7 +326,7 @@ class PPTXParser:
 
 
 class SpreadsheetParser:
-    revision = "spreadsheet-structure:g1-v1"
+    revision = "spreadsheet-structure:g1-v2"
 
     @staticmethod
     def _node(sheet: str, row_number: int, values: Sequence[Any]) -> CanonicalNode | None:
@@ -239,9 +342,19 @@ class SpreadsheetParser:
             original_text=text,
             display_text=text,
             locator=SourceLocator(
-                sheet=sheet, cell_range=f"A{row_number}:{end_column}{row_number}"
+                sheet=sheet,
+                cell_range=f"A{row_number}:{end_column}{row_number}",
+                row=row_number,
             ),
-            metadata={"row": row_number, "values": rendered},
+            metadata={
+                "row": row_number,
+                "source_row_index": row_number,
+                "column_count": len(rendered),
+                "column_addresses": [
+                    get_column_letter(index) for index in range(1, len(rendered) + 1)
+                ],
+                "values": rendered,
+            },
         )
 
     def _xlsx(self, source: Path) -> tuple[list[CanonicalNode], list[dict[str, Any]]]:
@@ -313,17 +426,22 @@ class ParserRouter:
     revision = "parser-router:g1-v1"
 
     def __init__(self) -> None:
+        self._scanned_pdf_stub = ImageParserRoute("pdf_scanned")
         self._routes: dict[str, ParserPort] = {
             "txt": PlainTextParser("txt"),
             "markdown": PlainTextParser("markdown"),
             "html": HTMLUploadParser(),
             "pdf": TextPDFParser(),
             "image": ImageParserRoute(),
+            "pdf_scanned": ImageParserRoute(),
+            "doc": OfflineOfficeConversionStubParser("doc"),
+            "ppt": OfflineOfficeConversionStubParser("ppt"),
             "docx": DOCXParser(),
             "pptx": PPTXParser(),
             "xlsx": SpreadsheetParser(),
             "xls": SpreadsheetParser(),
             "csv": SpreadsheetParser(),
+            "audio": OfflineASRStubParser(),
         }
 
     def route(self, source_format: str) -> ParserPort:
@@ -337,4 +455,9 @@ class ParserRouter:
     def parse(
         self, source_format: str, source: Path, document_version_id: str
     ) -> CanonicalDocument:
-        return self.route(source_format).parse(source, document_version_id)
+        try:
+            return self.route(source_format).parse(source, document_version_id)
+        except ParsingDeferred as error:
+            if source_format == "pdf" and error.code == "OCR_REQUIRED":
+                return self._scanned_pdf_stub.parse(source, document_version_id)
+            raise

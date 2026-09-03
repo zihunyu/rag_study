@@ -46,6 +46,29 @@ def conditional_issues(result: EnvLoadResult) -> tuple[EnvIssue, ...]:
         issues.append(EnvIssue("QUEUE_HEARTBEAT_SECONDS", "QUEUE_HEARTBEAT_NOT_BELOW_LEASE", "G1"))
     if settings.embedding_dimension != settings.zilliz_cloud_dimension:
         issues.append(EnvIssue("EMBEDDING_DIMENSION", "ZILLIZ_DIMENSION_MISMATCH", "G2"))
+    embedding_url = urlparse(settings.embedding_base_url)
+    dashscope_v4 = bool(
+        (embedding_url.hostname or "").casefold()
+        in {"dashscope.aliyuncs.com", "dashscope-intl.aliyuncs.com"}
+        and "/compatible-mode/" in embedding_url.path.casefold()
+        and settings.embedding_model.casefold() == "text-embedding-v4"
+    )
+    if dashscope_v4 and settings.embedding_batch_size > 10:
+        issues.append(
+            EnvIssue(
+                "EMBEDDING_BATCH_SIZE",
+                "DASHSCOPE_TEXT_EMBEDDING_V4_MAX_10",
+                "G4",
+            )
+        )
+    if dashscope_v4 and settings.embedding_dimension != 1024:
+        issues.append(
+            EnvIssue(
+                "EMBEDDING_DIMENSION",
+                "DASHSCOPE_TEXT_EMBEDDING_V4_DIMENSION_1024_REQUIRED",
+                "G4",
+            )
+        )
     if settings.chunk_overlap_tokens >= settings.chunk_target_tokens:
         issues.append(EnvIssue("CHUNK_OVERLAP_TOKENS", "CHUNK_OVERLAP_NOT_BELOW_TARGET", "G1"))
     if settings.retrieval_rerank_top_k > (
@@ -118,12 +141,14 @@ def conditional_issues(result: EnvLoadResult) -> tuple[EnvIssue, ...]:
         ("mineru", settings.mineru_base_url, "MINERU_BASE_URL", "G1"),
         ("embedding", settings.embedding_base_url, "EMBEDDING_BASE_URL", "G2"),
         ("reranker", settings.reranker_base_url, "RERANKER_BASE_URL", "G2"),
-        ("asr", settings.asr_base_url, "ASR_BASE_URL", "G2"),
+        ("asr", settings.asr_base_url, "ASR_BASE_URL", "G4"),
         ("llm", settings.llm_base_url, "LLM_BASE_URL", "G3"),
     ):
         if (
             sensitive
             and _configured(result, key)
+            and not (service == "asr" and not settings.asr_enabled)
+            and not (service == "llm" and settings.llm_allow_http)
             and not _is_https_or_approved_private(settings, service, url)
         ):
             issues.append(EnvIssue(key, "SENSITIVE_TRANSPORT_ENCRYPTION_REQUIRED", gate))
@@ -137,11 +162,17 @@ def conditional_issues(result: EnvLoadResult) -> tuple[EnvIssue, ...]:
         "RERANKER_MODEL",
     ):
         require(key, "G2")
-    for key in ("ASR_BASE_URL", "ASR_API_KEY", "ASR_MODEL"):
-        require(key, "G2")
+    if settings.asr_enabled:
+        for key in ("ASR_BASE_URL", "ASR_API_KEY", "ASR_MODEL"):
+            require(key, "G4")
     for key in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"):
         require(key, "G3")
-    if settings.auth_mode == "oidc":
+    require("APP_SECRET_KEY", "G3")
+    if settings.app_secret_key is not None and len(settings.app_secret_key.get_secret_value()) < 16:
+        issues.append(EnvIssue("APP_SECRET_KEY", "SECRET_TOO_SHORT_MIN_16", "G3"))
+    if settings.auth_mode == "local_single_user":
+        issues.append(EnvIssue("AUTH_MODE", "ENTERPRISE_IDP_DEFERRED", "G5"))
+    else:
         for key in ("OIDC_ISSUER_URL", "OIDC_AUDIENCE", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET"):
             require(key, "G3")
     if settings.otel_enabled:
@@ -156,6 +187,24 @@ def build_env_report(result: EnvLoadResult, requested_gate: str = "G0") -> dict[
         for issue in issues
         if GATE_ORDER.get(issue.blocking_gate, 999) <= GATE_ORDER[requested_gate]
     ]
+    enterprise_auth_issue_keys = {
+        "AUTH_MODE",
+        "APP_SECRET_KEY",
+        "OIDC_ISSUER_URL",
+        "OIDC_AUDIENCE",
+        "OIDC_CLIENT_ID",
+        "OIDC_CLIENT_SECRET",
+    }
+    local_blocking = [
+        issue for issue in issues if GATE_ORDER.get(issue.blocking_gate, 999) <= GATE_ORDER["G0"]
+    ]
+    settings = result.settings
+    local_development_ready = settings is not None and not local_blocking
+    enterprise_oidc_acceptance = bool(
+        settings is not None
+        and settings.auth_mode == "oidc"
+        and not any(issue.key in enterprise_auth_issue_keys for issue in blocking)
+    )
     variables = [
         {
             "name": key,
@@ -181,6 +230,20 @@ def build_env_report(result: EnvLoadResult, requested_gate: str = "G0") -> dict[
             "issue_count": len(issues),
             "blocking_issue_count": len(blocking),
             "gate_ready": not blocking,
+            "local_development_ready": local_development_ready,
+            "enterprise_oidc_acceptance": enterprise_oidc_acceptance,
+            "asr_scope_enabled": settings.asr_enabled if settings is not None else False,
+            "current_validation_scope": "full_with_asr"
+            if settings and settings.asr_enabled
+            else "non_asr",
+        },
+        "g3_auth_readiness": {
+            "mode": settings.auth_mode if settings is not None else "invalid_config",
+            "local_development_ready": local_development_ready,
+            "enterprise_oidc_acceptance": enterprise_oidc_acceptance,
+            "enterprise_blocker_reason": (
+                None if enterprise_oidc_acceptance else "ENTERPRISE_IDP_DEFERRED"
+            ),
         },
         "variables": variables,
         "issues": [

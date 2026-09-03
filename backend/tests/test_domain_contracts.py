@@ -4,6 +4,7 @@ import uuid
 
 import pytest
 from ragkb.domain.documents import CanonicalDocument, CanonicalNode, NodeType, SourceLocator
+from ragkb.domain.entities import Chunk
 from ragkb.domain.ids import new_uuid7
 from ragkb.domain.state_machines import (
     DocumentState,
@@ -64,8 +65,45 @@ def test_locator_rejects_invalid_ranges() -> None:
         SourceLocator()
 
 
+def test_chunk_v1_requires_traceable_revisioned_non_empty_content() -> None:
+    locator = SourceLocator(sheet="Budget", cell_range="A1:B1", row=1)
+    chunk = Chunk(
+        id=new_uuid7(),
+        tenant_id=new_uuid7(),
+        version_id=new_uuid7(),
+        section_id=new_uuid7(),
+        ordinal=0,
+        original_text="Item | Amount",
+        display_text="Item | Amount",
+        retrieval_text="Item | Amount",
+        locator=locator,
+        content_sha256="a" * 64,
+        token_count=3,
+        kind="table",
+    )
+
+    assert chunk.chunking_revision == "node-per-chunk:g1-v1"
+    assert chunk.locator.to_dict()["row"] == 1
+    assert chunk.tokenizer_id == "whitespace-estimate:g1-v1"
+    with pytest.raises(ValueError):
+        Chunk(
+            id=new_uuid7(),
+            tenant_id=new_uuid7(),
+            version_id=new_uuid7(),
+            section_id=new_uuid7(),
+            ordinal=0,
+            original_text="",
+            display_text="",
+            retrieval_text="",
+            locator=locator,
+            content_sha256="not-a-hash",
+            token_count=0,
+        )
+
+
 def test_state_machine_happy_paths_and_invalid_transition() -> None:
     assert transition_job(JobState.QUEUED, JobState.RUNNING) is JobState.RUNNING
+    assert transition_job(JobState.CANCELLED, JobState.QUEUED) is JobState.QUEUED
     assert (
         transition_document(DocumentState.ACTIVE, DocumentState.SWITCHING)
         is DocumentState.SWITCHING

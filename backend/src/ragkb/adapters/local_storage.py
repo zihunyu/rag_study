@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import os
 import tempfile
+from hashlib import sha256
 from pathlib import Path
+
+from ragkb.contracts.ports import StorageIntegrityError
 
 ALLOWED_PARTITIONS = frozenset({"original", "artifacts", "quarantine", "temp", "audit"})
 
@@ -73,11 +76,31 @@ class LocalFileStorage:
         target.unlink()
         return True
 
-    def promote(self, source_partition: str, source_key: str, target_key: str) -> Path:
+    @staticmethod
+    def _sha256(path: Path) -> str:
+        digest = sha256()
+        with path.open("rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def promote(
+        self,
+        source_partition: str,
+        source_key: str,
+        target_key: str,
+        expected_sha256: str,
+    ) -> Path:
         source = self._safe_path(source_partition, source_key)
-        if not source.is_file():
-            raise FileNotFoundError(source)
         target = self._safe_path("original", target_key)
+        if not source.is_file():
+            if target.is_file():
+                if self._sha256(target) != expected_sha256.casefold():
+                    raise StorageIntegrityError("DOC_ORIGINAL_HASH_MISMATCH")
+                return target
+            raise FileNotFoundError(source)
+        if target.exists():
+            raise FileExistsError(target)
         target.parent.mkdir(parents=True, exist_ok=True)
         os.replace(source, target)
         return target

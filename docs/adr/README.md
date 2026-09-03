@@ -14,7 +14,7 @@ MinerU 使用多 Token round-robin 池。旧 YAML 配置、外部消息队列和
 | ADR-003 | 不可变文档版本与发布指针 | Accepted direction | G1 状态机与并发测试 |
 | ADR-004 | 高水位、增量追平、索引代际和回滚窗口 | Accepted direction | G2 真实 Zilliz Cloud 与恢复预算硬验收 |
 | ADR-005 | Transactional Outbox、至少一次消费、Inbox 去重 | Accepted direction | G1 SQLite 持久队列与后续 MySQL 事务兼容验证 |
-| ADR-006 | CanonicalDocument 隔离 MinerU 私有结构 | Accepted direction | G0 冻结六类 60 槽位清单和 Harness；前五类 G1、音频 G2 执行真实硬门禁 |
+| ADR-006 | CanonicalDocument 隔离 MinerU 私有结构 | Accepted direction | G0 冻结六类 60 槽位清单和 Harness；G1/G2 只验契约、适配器与合成 Fixture，六类真实格式统一在 G4 硬验收 |
 | ADR-007 | Zilliz Cloud 中国区原生 BM25 first、应用层 RRF | Migrated | `pymilvus.MilvusClient` URI+Token；G2 验证中文 Analyzer、ARRAY ACL、watermark、质量和 p95 |
 | ADR-008 | 预编译 ACL、security watermark、deny-first | Accepted direction | G2 ARRAY ACL/水位真实硬验收 |
 | ADR-009 | `/search` 与 `/ask` 分离、后端生成引用定位 | Accepted direction | G2/G3 契约验收 |
@@ -32,5 +32,6 @@ MinerU 使用多 Token round-robin 池。旧 YAML 配置、外部消息队列和
 
 ## 范围重基线决定
 
-Excel/CSV 与 WAV/MP3/M4A 已并入 R1。基线为 24 周、约 270 人周；前五类 G1、
-音频 G2 执行真实硬门禁，发布黄金集为 230 份起。
+Excel/CSV 与 WAV/MP3/M4A 已并入 R1。基线为 24 周、约 270 人周；六类真实格式
+统一在 G4 执行硬门禁，G1/G2 只验契约、解析器、适配器、合成 Fixture 与 Harness，
+发布黄金集为 230 份起。

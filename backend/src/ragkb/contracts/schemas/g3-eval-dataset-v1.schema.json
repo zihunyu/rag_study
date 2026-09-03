@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "G3 deterministic RAG evaluation dataset",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "dataset_id", "revision", "frozen_at", "random_seed", "real_acceptance", "cases"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "dataset_id": {"type": "string", "minLength": 1},
+    "revision": {"type": "string", "minLength": 1},
+    "frozen_at": {"type": "string", "minLength": 1},
+    "random_seed": {"type": "integer", "minimum": 0},
+    "real_acceptance": {"const": false},
+    "cases": {
+      "type": "array",
+      "minItems": 6,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["case_id", "question", "expected_status", "reference_evidence", "adjudication"],
+        "properties": {
+          "case_id": {"type": "string", "minLength": 1},
+          "question": {"type": "string", "minLength": 1},
+          "expected_status": {
+            "enum": ["answered", "insufficient_evidence", "needs_clarification", "conflicting_evidence", "out_of_scope", "system_error"]
+          },
+          "reference_evidence": {
+            "type": "array",
+            "items": {"type": "string", "pattern": "^E[1-9][0-9]*$"}
+          },
+          "adjudication": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["reviewers", "decision", "rationale"],
+            "properties": {
+              "reviewers": {"type": "array", "minItems": 2, "items": {"type": "string", "minLength": 1}},
+              "decision": {"enum": ["agreed", "adjudicated"]},
+              "rationale": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    }
+  }
+}

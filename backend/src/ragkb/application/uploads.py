@@ -9,7 +9,7 @@ from dataclasses import asdict
 from typing import Any
 
 from ragkb.contracts.jobs import PersistentJobQueuePort
-from ragkb.contracts.ports import ContentStoragePort
+from ragkb.contracts.ports import ContentStoragePort, StorageIntegrityError
 from ragkb.contracts.uploads import UploadRepositoryPort
 from ragkb.domain.state_machines import UploadSessionState
 from ragkb.domain.uploads import OptimisticConcurrencyError, UploadSession
@@ -62,6 +62,8 @@ class UploadService:
         expected_sha256: str,
         declared_mime: str,
         idempotency_key: str,
+        target_document_id: str | None = None,
+        target_document_row_version: int | None = None,
     ) -> UploadSession:
         safe_filename = self.validator.validate_filename(filename)
         if expected_size < 0:
@@ -76,6 +78,8 @@ class UploadService:
             "expected_size": expected_size,
             "expected_sha256": expected_sha256.casefold(),
             "declared_mime": declared_mime,
+            "target_document_id": target_document_id,
+            "target_document_row_version": target_document_row_version,
         }
         return self.repository.create_upload_session(
             tenant_id=self.tenant_id,
@@ -86,6 +90,31 @@ class UploadService:
             declared_mime=declared_mime,
             idempotency_key=idempotency_key,
             request_hash=self.request_hash(payload),
+            target_document_id=target_document_id,
+            target_document_row_version=target_document_row_version,
+        )
+
+    def create_version_session(
+        self,
+        *,
+        document_id: str,
+        expected_document_row_version: int,
+        space_id: str,
+        filename: str,
+        expected_size: int,
+        expected_sha256: str,
+        declared_mime: str,
+        idempotency_key: str,
+    ) -> UploadSession:
+        return self.create_session(
+            space_id=space_id,
+            filename=filename,
+            expected_size=expected_size,
+            expected_sha256=expected_sha256,
+            declared_mime=declared_mime,
+            idempotency_key=idempotency_key,
+            target_document_id=document_id,
+            target_document_row_version=expected_document_row_version,
         )
 
     def upload_content(
@@ -177,10 +206,34 @@ class UploadService:
             )
         if session.state is UploadSessionState.VALIDATED:
             original_key = (
-                f"tenant/{session.tenant_id}/space/{session.space_id}/document/{session.id}/"
-                f"version/1/original/{session.filename}"
+                (
+                    f"tenant/{session.tenant_id}/space/{session.space_id}/"
+                    f"document/{session.target_document_id}/upload/{session.id}/"
+                    f"original/{session.filename}"
+                )
+                if session.target_document_id
+                else (
+                    f"tenant/{session.tenant_id}/space/{session.space_id}/"
+                    f"document/{session.id}/version/1/original/{session.filename}"
+                )
             )
-            self.storage.promote("quarantine", session.quarantine_key, original_key)
+            try:
+                self.storage.promote(
+                    "quarantine",
+                    session.quarantine_key,
+                    original_key,
+                    session.expected_sha256,
+                )
+            except StorageIntegrityError as error:
+                self.repository.update_session(
+                    session.id,
+                    session.row_version,
+                    UploadSessionState.FAILED,
+                    error_code=error.code,
+                )
+                raise FileValidationError(
+                    error.code, "existing original does not match the validated upload"
+                ) from error
             session = self.repository.update_session(
                 session.id,
                 session.row_version,

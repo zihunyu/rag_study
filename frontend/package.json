@@ -1,10 +1,14 @@
 {
-  "name": "enterprise-rag-kb-g0-frontend",
+  "name": "enterprise-rag-kb-g3-frontend",
   "version": "0.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
-    "dev": "node scripts/g0-dev-server.mjs",
-    "check": "node --check scripts/g0-dev-server.mjs"
-  }
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "test": "node --test src/api.test.mjs",
+    "check": "npm run test && vite build"
+  },
+  "dependencies": { "vue": "^3.5.0" },
+  "devDependencies": { "@vitejs/plugin-vue": "^5.2.0", "vite": "^6.1.0" }
 }
-

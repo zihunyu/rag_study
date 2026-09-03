@@ -34,6 +34,7 @@ class VersionProcessingState(StrEnum):
     VALIDATED = "VALIDATED"
     QUARANTINED = "QUARANTINED"
     FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
 
 
 class PublicationState(StrEnum):
@@ -64,7 +65,7 @@ JOB_TRANSITIONS = {
     JobState.RETRY_WAIT: {JobState.QUEUED, JobState.CANCELLED},
     JobState.CANCEL_REQUESTED: {JobState.CANCELLED, JobState.RETRY_WAIT},
     JobState.FAILED_FINAL: {JobState.QUEUED},
-    JobState.CANCELLED: set(),
+    JobState.CANCELLED: {JobState.QUEUED},
     JobState.SUCCEEDED: set(),
 }
 
@@ -83,9 +84,11 @@ PROCESSING_TRANSITIONS = {
         VersionProcessingState.VALIDATED,
         VersionProcessingState.QUARANTINED,
         VersionProcessingState.FAILED,
+        VersionProcessingState.CANCELLED,
     },
     VersionProcessingState.QUARANTINED: {VersionProcessingState.PROCESSING},
     VersionProcessingState.FAILED: {VersionProcessingState.PROCESSING},
+    VersionProcessingState.CANCELLED: {VersionProcessingState.PROCESSING},
     VersionProcessingState.VALIDATED: set(),
 }
 

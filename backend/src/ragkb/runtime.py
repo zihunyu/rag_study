@@ -1,11 +1,14 @@
-"""Native-process G1 backend and Worker entry points."""
+"""Native-process G1-G4-local backend and Worker entry points."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import sys
 import time
 from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import TextIO
 
 import uvicorn
 
@@ -14,10 +17,37 @@ from ragkb.application.worker import LocalIngestionWorker
 from ragkb.runtime_components import build_runtime_components
 
 
+@dataclass(frozen=True)
+class WorkerIteration:
+    processed: bool
+    failed: bool
+
+
+def run_worker_iteration(
+    worker: LocalIngestionWorker, *, error_stream: TextIO | None = None
+) -> WorkerIteration:
+    try:
+        return WorkerIteration(processed=worker.run_once(), failed=False)
+    except Exception:
+        print(
+            json.dumps(
+                {
+                    "runtime": "g3_native_python_worker",
+                    "event": "task_failed",
+                    "error_code": "WORKER_TASK_FAILED",
+                    "secret_values_in_output": False,
+                },
+                sort_keys=True,
+            ),
+            file=error_stream or sys.stderr,
+        )
+        return WorkerIteration(processed=True, failed=True)
+
+
 def prepare_local_runtime() -> dict[str, object]:
     components = build_runtime_components()
     return {
-        "runtime": "g1_native_python",
+        "runtime": "g3_native_python",
         "storage_root": str(components.storage.root),
         "database_path": str(components.database.path),
         "tenant_id": components.tenant_id,
@@ -28,7 +58,7 @@ def prepare_local_runtime() -> dict[str, object]:
 
 
 def run_backend(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run the G1 native Python FastAPI backend")
+    parser = argparse.ArgumentParser(description="Run the G3 native Python FastAPI backend")
     parser.add_argument("--host")
     parser.add_argument("--port", type=int)
     parser.add_argument("--check", action="store_true")
@@ -51,7 +81,7 @@ def run_backend(argv: Sequence[str] | None = None) -> int:
 
 
 def run_worker(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run the G1 native Python persistent Worker")
+    parser = argparse.ArgumentParser(description="Run the G3 native Python persistent Worker")
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--poll-seconds", type=float)
@@ -62,7 +92,7 @@ def run_worker(argv: Sequence[str] | None = None) -> int:
         print(
             json.dumps(
                 {
-                    "runtime": "g1_native_python_worker",
+                    "runtime": "g3_native_python_worker",
                     "queue_revision": components.queue.revision,
                     "database_path": str(components.database.path),
                     "real_service_acceptance": False,
@@ -81,24 +111,25 @@ def run_worker(argv: Sequence[str] | None = None) -> int:
         lease_seconds=components.settings.queue_lease_seconds,
     )
     if args.once:
-        processed = worker.run_once()
+        iteration = run_worker_iteration(worker)
         print(
             json.dumps(
                 {
-                    "runtime": "g1_native_python_worker",
-                    "processed": processed,
+                    "runtime": "g3_native_python_worker",
+                    "processed": iteration.processed,
+                    "failed": iteration.failed,
                     "recovered_expired": recovered,
                     "real_service_acceptance": False,
                 },
                 sort_keys=True,
             )
         )
-        return 0
-    print("G1 native Python Worker started")
+        return 1 if iteration.failed else 0
+    print("G3 native Python Worker started")
     try:
         while True:
-            processed = worker.run_once()
-            if not processed:
+            iteration = run_worker_iteration(worker)
+            if not iteration.processed:
                 time.sleep(args.poll_seconds or components.settings.queue_poll_interval_seconds)
     except KeyboardInterrupt:
         return 0

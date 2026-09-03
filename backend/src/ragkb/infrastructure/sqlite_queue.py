@@ -7,7 +7,7 @@ import sqlite3
 import time
 from typing import Any
 
-from ragkb.contracts.jobs import QueueConflictError, QueueJob, QueueLeaseError
+from ragkb.contracts.jobs import QueueConflictError, QueueJob, QueueLeaseError, QueueStateError
 from ragkb.domain.ids import new_uuid7
 from ragkb.domain.state_machines import JobState
 from ragkb.infrastructure.sqlite import SQLiteDatabase
@@ -187,8 +187,12 @@ class SQLitePersistentJobQueue:
         timestamp = self._timestamp(now)
         with self.database.transaction(immediate=True) as connection:
             job = self._get_in(connection, job_id)
-            if job.state is not JobState.RUNNING or job.lease_owner != worker_id:
+            if job.state not in {JobState.RUNNING, JobState.CANCEL_REQUESTED} or (
+                job.lease_owner != worker_id
+            ):
                 raise QueueLeaseError("job is not leased by this worker")
+            if job.state is JobState.CANCEL_REQUESTED or job.cancel_requested:
+                return job
             connection.execute(
                 """
                 UPDATE job_queue SET heartbeat_at = ?, lease_expires_at = ?, updated_at = ?
@@ -268,11 +272,29 @@ class SQLitePersistentJobQueue:
             )
             return self._get_in(connection, job_id)
 
+    def acknowledge_cancel(self, job_id: str, worker_id: str) -> QueueJob:
+        with self.database.transaction(immediate=True) as connection:
+            job = self._get_in(connection, job_id)
+            if (
+                job.state is not JobState.CANCEL_REQUESTED
+                or not job.cancel_requested
+                or job.lease_owner != worker_id
+            ):
+                raise QueueLeaseError("cancel request is not leased by this worker")
+            connection.execute(
+                """
+                UPDATE job_queue SET state = ?, lease_owner = NULL, lease_expires_at = NULL,
+                    heartbeat_at = NULL, next_retry_at = NULL, updated_at = ? WHERE id = ?
+                """,
+                (JobState.CANCELLED.value, time.time(), job_id),
+            )
+            return self._get_in(connection, job_id)
+
     def retry(self, job_id: str) -> QueueJob:
         with self.database.transaction(immediate=True) as connection:
             job = self._get_in(connection, job_id)
-            if job.state is not JobState.FAILED_FINAL:
-                raise ValueError("only FAILED_FINAL jobs can be retried manually")
+            if job.state not in {JobState.FAILED_FINAL, JobState.CANCELLED}:
+                raise QueueStateError("only FAILED_FINAL or CANCELLED jobs can be retried manually")
             timestamp = time.time()
             connection.execute(
                 """

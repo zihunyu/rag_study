@@ -75,14 +75,19 @@ def test_retry_and_final_failure_semantics(tmp_path: Path) -> None:
 def test_cancel_queued_and_running_jobs(tmp_path: Path) -> None:
     queue = _queue(tmp_path)
     queued = queue.enqueue("parse", {}, "queued", "hash-1")
-    assert queue.request_cancel(queued.id).state is JobState.CANCELLED
+    cancelled = queue.request_cancel(queued.id)
+    assert cancelled.state is JobState.CANCELLED
+    assert queue.retry(cancelled.id).state is JobState.QUEUED
+    assert queue.request_cancel(cancelled.id).state is JobState.CANCELLED
 
     running = queue.enqueue("parse", {}, "running", "hash-2", available_at=20)
     lease = queue.lease("worker", now=20)
     assert lease is not None and lease.id == running.id
     requested = queue.request_cancel(running.id)
     assert requested.state is JobState.CANCEL_REQUESTED
-    assert queue.complete(running.id, "worker").state is JobState.CANCELLED
+    heartbeat = queue.heartbeat(running.id, "worker", now=21)
+    assert heartbeat.cancel_requested is True
+    assert queue.acknowledge_cancel(running.id, "worker").state is JobState.CANCELLED
 
 
 def test_wrong_worker_cannot_mutate_lease(tmp_path: Path) -> None:

@@ -38,6 +38,35 @@ def _create_session(
     )
 
 
+def _complete_session(
+    client: TestClient,
+    space_id: str,
+    content: bytes,
+    *,
+    filename: str,
+    key: str,
+) -> dict[str, object]:
+    created = _create_session(
+        client,
+        space_id,
+        content,
+        filename=filename,
+        mime="text/plain",
+        key=f"create-{key}",
+    )
+    uploaded = client.put(
+        f"/api/v1/upload-sessions/{created.json()['upload_session_id']}/content",
+        headers={"If-Match": created.headers["etag"]},
+        content=content,
+    )
+    completed = client.post(
+        f"/api/v1/upload-sessions/{created.json()['upload_session_id']}:complete",
+        headers={"If-Match": uploaded.headers["etag"], "Idempotency-Key": f"complete-{key}"},
+    )
+    assert completed.status_code == 202
+    return completed.json()
+
+
 def test_upload_complete_document_job_and_worker_flow(tmp_path: Path) -> None:
     components = _components(tmp_path)
     client = TestClient(create_app(components))
@@ -79,6 +108,20 @@ def test_upload_complete_document_job_and_worker_flow(tmp_path: Path) -> None:
     assert job_after.json()["state"] == "SUCCEEDED"
     versions = client.get(f"/api/v1/documents/{result['document_id']}/versions")
     assert versions.json()[0]["processing_state"] == "VALIDATED"
+    with components.database.connect() as connection:
+        chunk = connection.execute(
+            """
+            SELECT kind, chunking_revision, tokenizer_id, status
+            FROM chunks WHERE version_id = ? ORDER BY ordinal LIMIT 1
+            """,
+            (result["document_version_id"],),
+        ).fetchone()
+    assert dict(chunk) == {
+        "kind": "paragraph",
+        "chunking_revision": "node-per-chunk:g1-v1",
+        "tokenizer_id": "whitespace-estimate:g1-v1",
+        "status": "STAGED",
+    }
 
     replay = client.post(
         f"/api/v1/upload-sessions/{session_id}:complete",
@@ -193,6 +236,8 @@ def test_openapi_contains_frozen_g1_paths_and_headers(tmp_path: Path) -> None:
     assert app.version == "1.0.0"
     assert "/api/v1/spaces/{space_id}/upload-sessions" in schema["paths"]
     assert "/api/v1/upload-sessions/{session_id}:complete" in schema["paths"]
+    assert "/api/v1/ingestion-jobs/{job_id}:cancel" in schema["paths"]
+    assert "/api/v1/ingestion-jobs/{job_id}:retry" in schema["paths"]
     create_parameters = schema["paths"]["/api/v1/spaces/{space_id}/upload-sessions"]["post"][
         "parameters"
     ]
@@ -201,6 +246,134 @@ def test_openapi_contains_frozen_g1_paths_and_headers(tmp_path: Path) -> None:
         "parameters"
     ]
     assert any(item["name"] == "If-Match" and item["required"] for item in put_parameters)
+    cancel_parameters = schema["paths"]["/api/v1/ingestion-jobs/{job_id}:cancel"]["post"][
+        "parameters"
+    ]
+    assert {item["name"] for item in cancel_parameters} >= {"If-Match", "Idempotency-Key"}
+
+
+def test_job_cancel_and_manual_retry_api_are_idempotent_and_etag_guarded(
+    tmp_path: Path,
+) -> None:
+    components = _components(tmp_path)
+    client = TestClient(create_app(components))
+    queued = components.queue.enqueue("parse", {}, "cancel-key", "cancel-hash")
+    before_cancel = client.get(f"/api/v1/ingestion-jobs/{queued.id}")
+
+    cancelled = client.post(
+        f"/api/v1/ingestion-jobs/{queued.id}:cancel",
+        headers={
+            "If-Match": before_cancel.headers["etag"],
+            "Idempotency-Key": "cancel-request",
+        },
+    )
+    replay = client.post(
+        f"/api/v1/ingestion-jobs/{queued.id}:cancel",
+        headers={
+            "If-Match": before_cancel.headers["etag"],
+            "Idempotency-Key": "cancel-request",
+        },
+    )
+
+    assert cancelled.status_code == 202
+    assert cancelled.json()["state"] == "CANCELLED"
+    assert replay.json() == cancelled.json()
+    assert replay.headers["etag"] == cancelled.headers["etag"]
+
+    failed = components.queue.enqueue("parse", {}, "retry-key", "retry-hash", max_attempts=1)
+    leased = components.queue.lease("worker")
+    assert leased is not None and leased.id == failed.id
+    components.queue.fail(leased.id, "worker", "PERMANENT", retryable=False)
+    before_retry = client.get(f"/api/v1/ingestion-jobs/{failed.id}")
+    stale = client.post(
+        f"/api/v1/ingestion-jobs/{failed.id}:retry",
+        headers={"If-Match": '"QUEUED:0"', "Idempotency-Key": "stale-retry"},
+    )
+    retried = client.post(
+        f"/api/v1/ingestion-jobs/{failed.id}:retry",
+        headers={
+            "If-Match": before_retry.headers["etag"],
+            "Idempotency-Key": "retry-request",
+        },
+    )
+
+    assert stale.status_code == 412
+    assert retried.status_code == 202
+    assert retried.json()["state"] == "QUEUED"
+    assert retried.json()["attempt"] == 0
+
+
+def test_queued_cancel_and_retry_synchronize_document_version(tmp_path: Path) -> None:
+    components = _components(tmp_path)
+    client = TestClient(create_app(components))
+    completed = _complete_session(
+        client,
+        components.space_id,
+        b"queued cancellation",
+        filename="queued.txt",
+        key="queued",
+    )
+    job_id = str(completed["job_id"])
+    version_id = str(completed["document_version_id"])
+    queued = client.get(f"/api/v1/ingestion-jobs/{job_id}")
+
+    cancelled = client.post(
+        f"/api/v1/ingestion-jobs/{job_id}:cancel",
+        headers={"If-Match": queued.headers["etag"], "Idempotency-Key": "cancel-queued"},
+    )
+
+    assert cancelled.status_code == 202
+    assert cancelled.json()["state"] == "CANCELLED"
+    assert components.repository.get_version(version_id)["processing_state"] == "CANCELLED"
+
+    retried = client.post(
+        f"/api/v1/ingestion-jobs/{job_id}:retry",
+        headers={
+            "If-Match": cancelled.headers["etag"],
+            "Idempotency-Key": "retry-cancelled",
+        },
+    )
+
+    assert retried.status_code == 202
+    assert retried.json()["state"] == "QUEUED"
+    assert components.repository.get_version(version_id)["processing_state"] == "PROCESSING"
+
+
+def test_retry_wait_cancel_synchronizes_document_version(tmp_path: Path) -> None:
+    components = _components(tmp_path)
+    client = TestClient(create_app(components))
+    completed = _complete_session(
+        client,
+        components.space_id,
+        b"retry wait cancellation",
+        filename="retry-wait.txt",
+        key="retry-wait",
+    )
+    job_id = str(completed["job_id"])
+    version_id = str(completed["document_version_id"])
+    leased = components.queue.lease("retry-wait-worker")
+    assert leased is not None and leased.id == job_id
+    waiting = components.queue.fail(
+        job_id,
+        "retry-wait-worker",
+        "TEMPORARY",
+        retryable=True,
+        retry_delay=3600,
+    )
+    assert waiting.state.value == "RETRY_WAIT"
+    response = client.get(f"/api/v1/ingestion-jobs/{job_id}")
+
+    cancelled = client.post(
+        f"/api/v1/ingestion-jobs/{job_id}:cancel",
+        headers={
+            "If-Match": response.headers["etag"],
+            "Idempotency-Key": "cancel-retry-wait",
+        },
+    )
+
+    assert cancelled.status_code == 202
+    assert cancelled.json()["state"] == "CANCELLED"
+    assert components.repository.get_version(version_id)["processing_state"] == "CANCELLED"
 
 
 def test_request_id_is_echoed_and_errors_use_standard_shape(tmp_path: Path) -> None:

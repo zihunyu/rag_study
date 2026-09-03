@@ -31,7 +31,9 @@ FORMAT_BY_EXTENSION = {
     ".tif": ("image", "image/tiff"),
     ".tiff": ("image", "image/tiff"),
     ".docx": ("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+    ".doc": ("doc", "application/msword"),
     ".pptx": ("pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"),
+    ".ppt": ("ppt", "application/vnd.ms-powerpoint"),
     ".xlsx": ("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
     ".xls": ("xls", "application/vnd.ms-excel"),
     ".md": ("markdown", "text/markdown"),
@@ -39,6 +41,9 @@ FORMAT_BY_EXTENSION = {
     ".html": ("html", "text/html"),
     ".htm": ("html", "text/html"),
     ".csv": ("csv", "text/csv"),
+    ".wav": ("audio", "audio/wav"),
+    ".mp3": ("audio", "audio/mpeg"),
+    ".m4a": ("audio", "audio/mp4"),
 }
 
 
@@ -148,7 +153,7 @@ class UploadFileValidator:
             raise FileValidationError("DOC_MAGIC_MISMATCH", "PDF magic is missing")
         if extension in {".docx", ".pptx", ".xlsx"}:
             detected = self._validate_archive(path, extension)
-        elif extension in {".xls"}:
+        elif extension in {".xls", ".doc", ".ppt"}:
             if not prefix.startswith(bytes.fromhex("D0CF11E0A1B11AE1")):
                 raise FileValidationError("DOC_MAGIC_MISMATCH", "OLE magic is missing")
             source_format, mime = FORMAT_BY_EXTENSION[extension]
@@ -161,13 +166,25 @@ class UploadFileValidator:
             raise FileValidationError("DOC_MAGIC_MISMATCH", "GIF magic is missing")
         elif extension in {".tif", ".tiff"} and not prefix.startswith((b"II*\x00", b"MM\x00*")):
             raise FileValidationError("DOC_MAGIC_MISMATCH", "TIFF magic is missing")
-        else:
+        elif extension == ".wav" and not (prefix.startswith(b"RIFF") and prefix[8:12] == b"WAVE"):
+            raise FileValidationError("DOC_MAGIC_MISMATCH", "WAV magic is missing")
+        elif extension == ".mp3" and not (
+            prefix.startswith(b"ID3")
+            or (len(prefix) >= 2 and prefix[0] == 0xFF and prefix[1] & 0xE0 == 0xE0)
+        ):
+            raise FileValidationError("DOC_MAGIC_MISMATCH", "MP3 magic is missing")
+        elif extension == ".m4a" and prefix[4:8] != b"ftyp":
+            raise FileValidationError("DOC_MAGIC_MISMATCH", "M4A ftyp box is missing")
+        elif extension in {".md", ".txt", ".html", ".htm", ".csv"}:
             try:
                 path.read_text(encoding="utf-8")
             except UnicodeDecodeError as error:
                 raise FileValidationError(
                     "DOC_TEXT_ENCODING", "text input must be UTF-8"
                 ) from error
+            source_format, mime = FORMAT_BY_EXTENSION[extension]
+            detected = DetectedFile(source_format, mime, extension)
+        else:
             source_format, mime = FORMAT_BY_EXTENSION[extension]
             detected = DetectedFile(source_format, mime, extension)
         normalized_declared = declared_mime.split(";", 1)[0].strip().casefold()

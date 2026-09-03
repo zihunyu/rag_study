@@ -5,11 +5,11 @@ from pathlib import Path
 
 import jsonschema
 import openpyxl
-import pytest
 from docx import Document
 from pptx import Presentation
+from pptx.util import Inches
 from pypdf import PdfWriter
-from ragkb.document_processing.parsers import ParserRouter, ParsingDeferred
+from ragkb.document_processing.parsers import ParserRouter
 from ragkb.domain.ids import new_uuid7
 
 
@@ -65,6 +65,29 @@ def test_xlsx_and_csv_preserve_sheet_row_and_formula(tmp_path: Path) -> None:
     assert csv_doc.tables[0]["non_empty_rows"] == 2
 
 
+def test_spreadsheet_and_csv_keep_source_row_column_and_record_sequence(tmp_path: Path) -> None:
+    csv_path = tmp_path / "quoted.csv"
+    csv_path.write_text('a,b,c\nfirst,"line-one\nline-two",last\nnext,mid,end\n', encoding="utf-8")
+    workbook = openpyxl.Workbook()
+    first = workbook.active
+    first.title = "First"
+    first.append(["left", "right", "tail"])
+    second = workbook.create_sheet("Second")
+    second.append(["other", "record"])
+    xlsx_path = tmp_path / "sequence.xlsx"
+    workbook.save(xlsx_path)
+
+    router = ParserRouter()
+    csv_doc = router.parse("csv", csv_path, new_uuid7())
+    xlsx_doc = router.parse("xlsx", xlsx_path, new_uuid7())
+
+    assert [node.locator.row for node in csv_doc.nodes] == [1, 2, 3]
+    assert csv_doc.nodes[1].metadata["column_addresses"] == ["A", "B", "C"]
+    assert "line-one\nline-two" in csv_doc.nodes[1].display_text.replace("\r\n", "\n")
+    assert [node.locator.sheet for node in xlsx_doc.nodes] == ["First", "Second"]
+    assert xlsx_doc.nodes[0].locator.cell_range == "A1:C1"
+
+
 def test_docx_and_pptx_routes_have_traceable_locators(tmp_path: Path) -> None:
     router = ParserRouter()
     docx_path = tmp_path / "sample.docx"
@@ -86,7 +109,36 @@ def test_docx_and_pptx_routes_have_traceable_locators(tmp_path: Path) -> None:
     assert pptx_result.nodes[0].locator.slide == 1
 
 
-def test_blank_pdf_and_image_routes_defer_without_claiming_support(tmp_path: Path) -> None:
+def test_pptx_spatial_cards_and_table_preserve_container_reading_order(tmp_path: Path) -> None:
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    left_top = slide.shapes.add_textbox(Inches(0.5), Inches(0.5), Inches(2), Inches(0.5))
+    left_top.text_frame.text = "card-left-top"
+    left_bottom = slide.shapes.add_textbox(Inches(0.5), Inches(2), Inches(2), Inches(0.5))
+    left_bottom.text_frame.text = "card-left-bottom"
+    right_top = slide.shapes.add_textbox(Inches(4.5), Inches(0.5), Inches(2), Inches(0.5))
+    right_top.text_frame.text = "card-right-top"
+    table = slide.shapes.add_table(2, 2, Inches(4.5), Inches(2), Inches(2), Inches(1)).table
+    table.cell(0, 0).text = "table-a"
+    table.cell(0, 1).text = "table-b"
+    table.cell(1, 0).text = "table-c"
+    table.cell(1, 1).text = "table-d"
+    path = tmp_path / "cards.pptx"
+    presentation.save(path)
+
+    parsed = ParserRouter().parse("pptx", path, new_uuid7())
+
+    assert [node.display_text for node in parsed.nodes] == [
+        "card-left-top",
+        "card-left-bottom",
+        "card-right-top",
+        "table-a | table-b\ntable-c | table-d",
+    ]
+
+
+def test_blank_pdf_and_image_routes_use_offline_stub_without_claiming_real_support(
+    tmp_path: Path,
+) -> None:
     router = ParserRouter()
     pdf = tmp_path / "blank.pdf"
     writer = PdfWriter()
@@ -96,14 +148,14 @@ def test_blank_pdf_and_image_routes_defer_without_claiming_support(tmp_path: Pat
     image = tmp_path / "image.png"
     image.write_bytes(b"\x89PNG\r\n\x1a\n")
 
-    with pytest.raises(ParsingDeferred) as pdf_error:
-        router.parse("pdf", pdf, new_uuid7())
-    with pytest.raises(ParsingDeferred) as image_error:
-        router.parse("image", image, new_uuid7())
+    pdf_result = router.parse("pdf", pdf, new_uuid7())
+    image_result = router.parse("image", image, new_uuid7())
 
-    assert pdf_error.value.code == "OCR_REQUIRED"
-    assert image_error.value.code == "MINERU_REQUIRED"
-    assert pdf_error.value.real_acceptance is False
+    assert pdf_result.source_format == "pdf_scanned"
+    assert image_result.source_format == "image"
+    assert "offline_ocr_stub_real_effect_blocked" in pdf_result.quality_issues
+    assert "offline_ocr_stub_real_effect_blocked" in image_result.quality_issues
+    assert pdf_result.real_acceptance is False
 
 
 def test_canonical_output_validates_against_v1_schema(tmp_path: Path) -> None:

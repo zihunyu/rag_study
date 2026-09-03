@@ -34,6 +34,10 @@ class QueueLeaseError(RuntimeError):
     pass
 
 
+class QueueStateError(RuntimeError):
+    pass
+
+
 class PersistentJobQueuePort(Protocol):
     def enqueue(
         self,
@@ -73,6 +77,8 @@ class PersistentJobQueuePort(Protocol):
     ) -> QueueJob: ...
 
     def request_cancel(self, job_id: str) -> QueueJob: ...
+
+    def acknowledge_cancel(self, job_id: str, worker_id: str) -> QueueJob: ...
 
     def retry(self, job_id: str) -> QueueJob: ...
 

@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Protocol
 
 from ragkb.domain.documents import CanonicalDocument
+from ragkb.domain.retrieval import AuthorizedChunk, IndexCandidate, SearchContext
+
+
+class StorageIntegrityError(RuntimeError):
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
 
 
 class ParsingDeferred(RuntimeError):
@@ -27,7 +34,13 @@ class ContentStoragePort(Protocol):
 
     def delete(self, partition: str, key: str) -> bool: ...
 
-    def promote(self, source_partition: str, source_key: str, target_key: str) -> Path: ...
+    def promote(
+        self,
+        source_partition: str,
+        source_key: str,
+        target_key: str,
+        expected_sha256: str,
+    ) -> Path: ...
 
 
 class ParserPort(Protocol):
@@ -73,3 +86,29 @@ class PermissionProjectionPort(Protocol):
     def allowed(self, resource_tokens: Sequence[str], subject_tokens: Sequence[str]) -> bool: ...
 
     def watermark_ready(self, active_watermark: int, observed_watermark: int) -> bool: ...
+
+
+class HybridIndexPort(Protocol):
+    revision: str
+
+    def observed_security_watermark(self, context: SearchContext) -> int: ...
+
+    def search_bm25(
+        self, query: str, context: SearchContext, limit: int
+    ) -> Sequence[IndexCandidate]: ...
+
+    def search_dense(
+        self, vector: Sequence[float], context: SearchContext, limit: int
+    ) -> Sequence[IndexCandidate]: ...
+
+
+class RetrievalControlPlanePort(Protocol):
+    revision: str
+
+    def authorize_chunks(
+        self, chunk_ids: Sequence[str], context: SearchContext
+    ) -> Mapping[str, AuthorizedChunk]: ...
+
+    def authorize_parent(
+        self, parent_chunk_id: str, context: SearchContext
+    ) -> AuthorizedChunk | None: ...
