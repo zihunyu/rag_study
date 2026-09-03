@@ -51,10 +51,10 @@ def test_recorded_migrations_apply_once_and_second_run_is_idempotent() -> None:
     first = apply_mysql_migrations(connection)
     second = apply_mysql_migrations(connection)
 
-    assert first["applied_count"] == len(MYSQL_MIGRATIONS) == 5
+    assert first["applied_count"] == len(MYSQL_MIGRATIONS) == 7
     assert first["skipped_count"] == 0
     assert second["applied_count"] == 0
-    assert second["skipped_count"] == 5
+    assert second["skipped_count"] == 7
     assert connection.applied == {migration_id for migration_id, _ in MYSQL_MIGRATIONS}
     assert not any("DROP " in statement.upper() for statement in connection.statements)
 

@@ -187,6 +187,7 @@ def _observation_response(item: dict[str, object]) -> ObservationResponse:
 
 
 def _ensure_document_visible(runtime: RuntimeComponents, document_id: str) -> None:
+    runtime.lifecycle_store.reload()
     if not runtime.lifecycle_store.is_accessible(document_id):
         raise ResourceNotFoundError(document_id)
 
@@ -196,6 +197,7 @@ def _ensure_document_readable(
     document_id: str,
     principal: RequestPrincipal,
 ) -> None:
+    runtime.lifecycle_store.reload()
     record = runtime.lifecycle_store.documents.get(document_id)
     if record is None or runtime.lifecycle_store.is_tombstoned(document_id):
         raise ResourceNotFoundError(document_id)
@@ -282,6 +284,10 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
     )
     if runtime.model_transport is not None:
         app.add_event_handler("shutdown", runtime.model_transport.close)
+    oidc_decoder = getattr(runtime.authenticator, "verified_decoder", None)
+    close_oidc_decoder = getattr(oidc_decoder, "close", None)
+    if callable(close_oidc_decoder):
+        app.add_event_handler("shutdown", close_oidc_decoder)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(runtime.settings.cors_origins),
@@ -768,18 +774,17 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
         _require_local_tenant(runtime, principal)
         if body.space_id is not None and body.space_id != runtime.space_id:
             raise ResourceNotFoundError(body.space_id)
+        runtime.lifecycle_store.reload()
+        release = runtime.retrieval_release.current_release(principal.tenant_id, runtime.space_id)
         context = SearchContext(
             tenant_id=principal.tenant_id,
             space_ids=(runtime.space_id,),
             subject_scope_tokens=principal.scope_tokens,
             clearance_level=3,
             as_of_epoch=int(time.time()),
-            active_generation_id=runtime.settings.retrieval_active_generation_id,
-            active_permission_revision=max(
-                (record.acl_revision for record in runtime.lifecycle_store.documents.values()),
-                default=0,
-            ),
-            required_security_watermark=0,
+            active_generation_id=release.active_generation_id,
+            active_permission_revision=release.active_permission_revision,
+            required_security_watermark=release.security_watermark,
         )
         result = await run_in_threadpool(
             runtime.search_service.search, body.query, context, limit=body.limit
@@ -816,6 +821,7 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
         principal = _principal(request)
         _require_role(principal, "reader", "knowledge_maintainer", "admin")
         _require_local_tenant(runtime, principal)
+        runtime.lifecycle_store.reload()
         result = await run_in_threadpool(
             runtime.qa_service.ask,
             body.question,
@@ -834,6 +840,7 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
         principal = _principal(request)
         _require_role(principal, "reader", "knowledge_maintainer", "admin")
         _require_local_tenant(runtime, principal)
+        runtime.lifecycle_store.reload()
 
         def stream() -> Iterator[str]:
             for stage in ("retrieval_started", "evidence_validation_started"):

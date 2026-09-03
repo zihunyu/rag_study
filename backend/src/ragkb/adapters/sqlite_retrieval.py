@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
-from ragkb.domain.retrieval import AuthorizedChunk, SearchContext
+from ragkb.domain.retrieval import AuthorizedChunk, RetrievalRelease, SearchContext
 from ragkb.infrastructure.sqlite import SQLiteDatabase
 
 
@@ -85,8 +85,13 @@ class SQLiteRetrievalControlPlane:
 
     def put_for_test(self, chunk: AuthorizedChunk) -> None:
         """Seed the local adapter only; production control-plane writes use MySQL migrations."""
+        self.upsert_chunks((chunk,))
+
+    def upsert_chunks(self, chunks: Sequence[AuthorizedChunk]) -> None:
+        if not chunks:
+            return
         with self.database.transaction(immediate=True) as connection:
-            connection.execute(
+            connection.executemany(
                 """
                 INSERT OR REPLACE INTO retrieval_projections(
                     chunk_id, tenant_id, space_id, document_id, document_version_id,
@@ -96,24 +101,108 @@ class SQLiteRetrievalControlPlane:
                     valid_to_epoch, permission_revision, current_version
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
+                [
+                    (
+                        chunk.chunk_id,
+                        chunk.tenant_id,
+                        chunk.space_id,
+                        chunk.document_id,
+                        chunk.document_version_id,
+                        chunk.parent_chunk_id,
+                        chunk.display_text,
+                        chunk.retrieval_text,
+                        json.dumps(chunk.locator, sort_keys=True),
+                        chunk.content_checksum,
+                        chunk.visibility,
+                        json.dumps(chunk.acl_scope_tokens),
+                        chunk.classification_level,
+                        chunk.lifecycle_projection,
+                        chunk.valid_from_epoch,
+                        chunk.valid_to_epoch,
+                        chunk.permission_revision,
+                        int(chunk.current_version),
+                    )
+                    for chunk in chunks
+                ],
+            )
+
+    def set_document_projection(
+        self,
+        document_id: str,
+        *,
+        active_version_id: str | None,
+        lifecycle_projection: str,
+        permission_revision: int,
+    ) -> None:
+        with self.database.transaction(immediate=True) as connection:
+            connection.execute(
+                """
+                UPDATE retrieval_projections
+                SET lifecycle_projection = ?, permission_revision = ?,
+                    current_version = CASE WHEN document_version_id = ? THEN 1 ELSE 0 END
+                WHERE document_id = ?
+                """,
                 (
-                    chunk.chunk_id,
-                    chunk.tenant_id,
-                    chunk.space_id,
-                    chunk.document_id,
-                    chunk.document_version_id,
-                    chunk.parent_chunk_id,
-                    chunk.display_text,
-                    chunk.retrieval_text,
-                    json.dumps(chunk.locator, sort_keys=True),
-                    chunk.content_checksum,
-                    chunk.visibility,
-                    json.dumps(chunk.acl_scope_tokens),
-                    chunk.classification_level,
-                    chunk.lifecycle_projection,
-                    chunk.valid_from_epoch,
-                    chunk.valid_to_epoch,
-                    chunk.permission_revision,
-                    int(chunk.current_version),
+                    lifecycle_projection,
+                    permission_revision,
+                    active_version_id or "",
+                    document_id,
                 ),
             )
+            connection.execute(
+                """
+                UPDATE local_search_index SET security_watermark = ?
+                WHERE chunk_id IN (
+                    SELECT chunk_id FROM retrieval_projections WHERE document_id = ?
+                )
+                """,
+                (permission_revision, document_id),
+            )
+
+    def delete_document_projection(self, document_id: str) -> None:
+        with self.database.transaction(immediate=True) as connection:
+            connection.execute(
+                "DELETE FROM retrieval_projections WHERE document_id = ?", (document_id,)
+            )
+
+
+class StaticRetrievalReleaseProvider:
+    revision = "static-retrieval-release:v1"
+
+    def __init__(self, release: RetrievalRelease) -> None:
+        self.release = release
+
+    def current_release(self, tenant_id: str, space_id: str) -> RetrievalRelease:
+        if tenant_id != self.release.tenant_id or space_id != self.release.space_id:
+            raise KeyError("retrieval release")
+        return self.release
+
+
+class LocalRetrievalReleaseProvider:
+    revision = "local-dynamic-retrieval-release:v1"
+
+    def __init__(
+        self,
+        *,
+        tenant_id: str,
+        space_id: str,
+        generation_id: str,
+        permission_revision: Callable[[], int],
+        security_watermark: Callable[[], int],
+    ) -> None:
+        self.tenant_id = tenant_id
+        self.space_id = space_id
+        self.generation_id = generation_id
+        self.permission_revision = permission_revision
+        self.security_watermark = security_watermark
+
+    def current_release(self, tenant_id: str, space_id: str) -> RetrievalRelease:
+        if tenant_id != self.tenant_id or space_id != self.space_id:
+            raise KeyError("retrieval release")
+        return RetrievalRelease(
+            tenant_id,
+            space_id,
+            self.generation_id,
+            self.permission_revision(),
+            self.security_watermark(),
+        )

@@ -3,29 +3,43 @@
 from __future__ import annotations
 
 import math
-import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Protocol
+
+import jieba
 
 from ragkb.domain.retrieval import AuthorizedChunk, IndexCandidate, SearchContext
 
-_TERM_PATTERN = re.compile(r"[\u3400-\u9fff]|[A-Za-z0-9_]+", re.UNICODE)
+
+class TextAnalyzerPort(Protocol):
+    revision: str
+
+    def analyze(self, text: str) -> tuple[str, ...]: ...
+
+
+class MilvusChineseAnalyzer:
+    """Jieba search-mode plus alphanumeric filtering, matching Milvus `chinese`."""
+
+    revision = "milvus-chinese-jieba-search-cnalphanumonly:v1"
+
+    def analyze(self, text: str) -> tuple[str, ...]:
+        return tuple(
+            token
+            for token in jieba.cut_for_search(text)
+            if token
+            and all(character.isalnum() or "\u3400" <= character <= "\u9fff" for character in token)
+        )
+
+
+_DEFAULT_ANALYZER = MilvusChineseAnalyzer()
 
 
 def analyze_terms(text: str) -> tuple[str, ...]:
-    """Small deterministic analyzer that handles CJK characters and Latin terms."""
+    """Compatibility facade for the default analyzer."""
 
-    normalized = text.casefold()
-    base = [match.group(0) for match in _TERM_PATTERN.finditer(normalized)]
-    cjk_bigrams = [
-        left + right
-        for left, right in zip(base, base[1:], strict=False)
-        if len(left) == len(right) == 1
-        and "\u3400" <= left <= "\u9fff"
-        and "\u3400" <= right <= "\u9fff"
-    ]
-    return tuple(base + cjk_bigrams)
+    return _DEFAULT_ANALYZER.analyze(text)
 
 
 @dataclass(frozen=True)
@@ -49,11 +63,14 @@ class LocalHybridIndex:
         security_watermark: int = 0,
         bm25_k1: float = 1.5,
         bm25_b: float = 0.75,
+        analyzer: TextAnalyzerPort | None = None,
     ) -> None:
         self._records: dict[str, LocalIndexRecord] = {item.chunk_id: item for item in records}
         self._watermark = security_watermark
         self._k1 = bm25_k1
         self._b = bm25_b
+        self._analyzer = analyzer or _DEFAULT_ANALYZER
+        self.analyzer_revision = self._analyzer.revision
 
     def upsert(self, records: Sequence[LocalIndexRecord]) -> None:
         for record in records:
@@ -84,10 +101,10 @@ class LocalHybridIndex:
         self, query: str, context: SearchContext, limit: int
     ) -> Sequence[IndexCandidate]:
         del context
-        query_terms = analyze_terms(query)
+        query_terms = self._analyzer.analyze(query)
         if not query_terms or not self._records:
             return ()
-        tokenized = {key: analyze_terms(item.text) for key, item in self._records.items()}
+        tokenized = {key: self._analyzer.analyze(item.text) for key, item in self._records.items()}
         document_count = len(tokenized)
         average_length = sum(map(len, tokenized.values())) / document_count or 1.0
         document_frequency: Counter[str] = Counter()

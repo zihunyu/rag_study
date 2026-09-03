@@ -19,6 +19,8 @@ PROJECT_TABLES = frozenset(
         "retrieval_releases",
         "index_entries",
         "retrieval_outbox",
+        "retrieval_chunk_projections",
+        "retrieval_release_state",
     }
 )
 

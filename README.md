@@ -11,7 +11,8 @@ BM25 + Dense 检索、查询类型感知融合、Rerank、基于证据生成、�
   及 Zilliz 或 Milvus。生产模式禁止明文 HTTP，也禁止任何 `Deterministic*`/`Fake*` 组件。
 
 `real_acceptance=true` 不能由一个布尔配置打开。只有真实评测生成的验收证据文件，其 Provider、
-模型、Prompt、索引代际、数据集版本和内容哈希均与当前运行时一致时，系统才会返回该标记。
+模型、Prompt、索引代际、数据集版本和指标均与当前运行时一致，并通过受保护密钥 HMAC 签名、
+提交绑定和有效期校验时，系统才会返回该标记。
 
 ## 前置条件
 
@@ -61,15 +62,23 @@ cd frontend && npm ci && npm run dev
 ```text
 APP_ENV=production
 APP_DEBUG=false
+APP_REVISION=<40 位部署 Commit SHA>
 RAG_RUNTIME_PROFILE=production
 REAL_PROVIDER_CALLS_ENABLED=true
+EXTERNAL_LIFECYCLE_MUTATIONS_ENABLED=true
+RAG_ACCEPTANCE_SIGNING_KEY=<受保护 CI Secret>
+AUTH_MODE=oidc
+OIDC_TENANT_ID=<Token tenant_id 必须匹配的部署租户>
+OIDC_DEFAULT_SPACE_ID=<默认知识空间>
 RETRIEVAL_ACTIVE_GENERATION_ID=<已对账的不可变代际>
 VECTOR_BACKEND=zilliz                 # 或 milvus
 LLM_ALLOW_HTTP=false
 ```
 
 同时配置模型、向量库、身份、数据区域和密钥。`production + http://` 会在 G0 配置门禁中直接
-失败。密钥只能放在 `config/.env`、部署 Secret Store 或进程环境中，禁止写入日志和仓库。
+失败。Production 启动会执行完整 G4 配置门禁，并要求 OIDC Discovery/JWKS、MySQL 检索控制面、
+Redis 验证答案缓存、真实 MinerU OCR Parser 和外部生命周期写入均可配置。密钥只能放在
+`config/.env`、部署 Secret Store 或进程环境中，禁止写入日志和仓库。
 
 向量后端：
 
@@ -81,6 +90,19 @@ LLM_ALLOW_HTTP=false
 429/502/503/504 重试、指数退避、`Retry-After` 支持和熔断。生成 Prompt 把检索内容明确标为
 不可信数据，最终答案还必须通过引用和权限二次校验。
 
+首次部署先执行显式批准的基础设施操作，再发布检索 Release：
+
+```text
+python scripts/provision_mysql_g2.py --approval MYSQL_DATABASE_CREATE_AND_MIGRATE_APPROVED
+python scripts/provision_zilliz_g2.py --approval ZILLIZ_COLLECTION_CREATE_APPROVED
+python scripts/set_retrieval_release.py --approval RETRIEVAL_RELEASE_UPDATE_APPROVED \
+  --tenant-id <tenant> --space-id <space> --generation-id <generation> \
+  --permission-revision <revision> --security-watermark <watermark>
+```
+
+生产 Worker 将扫描 PDF/图片和旧 Office 文件送入真实 MinerU，验证结果 ZIP 后转换为 Canonical
+Document；Markdown、HTML、DOCX 和 PPTX 的标题结构则由本地真实解析器保留。
+
 ## 分片与检索
 
 `CHUNK_STRATEGY` 支持 `token`、`structure` 和 `semantic`。默认结构化分片保留标题/章节路径，
@@ -89,7 +111,7 @@ LLM_ALLOW_HTTP=false
 
 检索会并发执行 BM25 与 Embedding/Dense 路径，并按查询类型调整权重：型号、错误码等精确查询
 提高 BM25 权重，自然语言查询保持默认 Hybrid。送入模型前还会执行 Unicode/标点归一化、
-近重复过滤及单文档证据数量限制。
+近重复过滤及单文档、单章节证据数量限制。
 
 ## 质量与测试
 
@@ -121,7 +143,7 @@ Compose 使用同一个持久卷共享本地存储；Zilliz/Milvus 和模型 Pro
 
 搜索和问答记录 `rag.ask`、evidence build、BM25、Dense、Embedding、fusion、rerank、LLM 与
 citation verify 的嵌套 Span。默认在诊断接口中汇总；安装 `.[observability]` 后可由部署层桥接
-OpenTelemetry SDK/OTLP。
+OpenTelemetry SDK/OTLP。依赖已经进入锁文件，生产镜像无需临时安装。
 
 权限过滤在检索与生成前执行，生成后再次复核。删除、撤权或索引代际变化会自然使答案缓存
 失效。外部真实调用仍需部署负责人显式开启，所有状态和异常只能暴露稳定错误码。

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 
+from ragkb.contracts.ports import EmbeddingPort
 from ragkb.domain.documents import CanonicalDocument, CanonicalNode, NodeType, SourceLocator
 from ragkb.domain.entities import Chunk
 
@@ -293,3 +295,36 @@ class SemanticChunker(TokenAwareChunker):
         )
         parents = tuple(replace(item, chunking_revision=revision) for item in result.parent_chunks)
         return ChunkingResult(enriched, parents, revision)
+
+
+class EmbeddingSemanticBoundaryScorer:
+    """Cosine similarity scorer backed by the configured embedding provider."""
+
+    def __init__(self, embedding: EmbeddingPort) -> None:
+        self.embedding = embedding
+        self._cache: dict[str, tuple[float, ...]] = {}
+
+    def _vector(self, text: str) -> tuple[float, ...]:
+        cached = self._cache.get(text)
+        if cached is not None:
+            return cached
+        vectors = self.embedding.embed((text,))
+        if len(vectors) != 1:
+            raise ValueError("semantic scorer requires exactly one embedding")
+        vector = tuple(map(float, vectors[0]))
+        self._cache[text] = vector
+        return vector
+
+    def __call__(self, left: str, right: str) -> float:
+        left_vector = self._vector(left)
+        right_vector = self._vector(right)
+        if len(left_vector) != len(right_vector):
+            raise ValueError("semantic scorer embedding dimension mismatch")
+        left_norm = math.sqrt(sum(value * value for value in left_vector))
+        right_norm = math.sqrt(sum(value * value for value in right_vector))
+        if not left_norm or not right_norm:
+            return 0.0
+        return sum(
+            left_value * right_value
+            for left_value, right_value in zip(left_vector, right_vector, strict=True)
+        ) / (left_norm * right_norm)

@@ -108,6 +108,51 @@ MYSQL_MIGRATIONS: tuple[tuple[str, str], ...] = (
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
         """,
     ),
+    (
+        "006_retrieval_chunk_projections",
+        """
+        CREATE TABLE IF NOT EXISTS retrieval_chunk_projections (
+            chunk_id VARCHAR(255) PRIMARY KEY,
+            tenant_id VARCHAR(255) NOT NULL,
+            space_id VARCHAR(255) NOT NULL,
+            document_id VARCHAR(255) NOT NULL,
+            document_version_id VARCHAR(255) NOT NULL,
+            parent_chunk_id VARCHAR(255),
+            display_text MEDIUMTEXT NOT NULL,
+            retrieval_text MEDIUMTEXT NOT NULL,
+            locator_json JSON NOT NULL,
+            content_checksum CHAR(64) NOT NULL,
+            visibility VARCHAR(32) NOT NULL,
+            acl_scope_tokens_json JSON NOT NULL,
+            classification_level INT UNSIGNED NOT NULL,
+            lifecycle_projection VARCHAR(32) NOT NULL,
+            valid_from_epoch BIGINT UNSIGNED NOT NULL,
+            valid_to_epoch BIGINT UNSIGNED NOT NULL DEFAULT 0,
+            permission_revision BIGINT UNSIGNED NOT NULL,
+            current_version BOOLEAN NOT NULL DEFAULT FALSE,
+            updated_at DATETIME(6) NOT NULL,
+            KEY idx_retrieval_projection_scope (
+                tenant_id, space_id, lifecycle_projection,
+                current_version, permission_revision
+            ),
+            KEY idx_retrieval_projection_document (document_id, document_version_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+        """,
+    ),
+    (
+        "007_retrieval_release_state",
+        """
+        CREATE TABLE IF NOT EXISTS retrieval_release_state (
+            tenant_id VARCHAR(255) NOT NULL,
+            space_id VARCHAR(255) NOT NULL,
+            active_generation_id VARCHAR(255) NOT NULL,
+            active_permission_revision BIGINT UNSIGNED NOT NULL,
+            security_watermark BIGINT UNSIGNED NOT NULL,
+            updated_at DATETIME(6) NOT NULL,
+            PRIMARY KEY (tenant_id, space_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+        """,
+    ),
 )
 
 MYSQL_G3_MIGRATION_REVISION = "mysql-trusted-qa-lifecycle:g3-v1"

@@ -12,6 +12,7 @@ const auditEvents = ref([]);
 const error = ref("");
 const lifecycle = ref({ documentId: "", versionId: "", targetRevision: 2, watermark: 1 });
 const versionUpload = ref({ documentRowVersion: "", file: null, sha256: "", status: null });
+const upload = ref({ file: null, sha256: "", status: null, error: "" });
 const cleanup = ref(null);
 const feedback = ref({ rating: 5, comment: "" });
 const quality = ref(null);
@@ -75,6 +76,59 @@ async function selectVersionFile(event) {
     .map((value) => value.toString(16).padStart(2, "0"))
     .join("");
 }
+async function selectUploadFile(event) {
+  const file = event.target.files?.[0] ?? null;
+  upload.value.file = file;
+  if (!file) return;
+  const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+  upload.value.sha256 = [...new Uint8Array(digest)]
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("");
+}
+async function uploadDocument() {
+  const file = upload.value.file;
+  if (!file) {
+    upload.value.error = "UPLOAD_FILE_REQUIRED";
+    return;
+  }
+  if (!upload.value.sha256) {
+    upload.value.error = "UPLOAD_HASH_PENDING";
+    return;
+  }
+  upload.value.error = "";
+  try {
+    const spaces = await request("/spaces");
+    if (!spaces.length) throw new Error("SPACE_NOT_AVAILABLE");
+    const created = await request(`/spaces/${spaces[0].id}/upload-sessions`, {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotency("upload-create") },
+      body: JSON.stringify({
+        filename: file.name,
+        expected_size: file.size,
+        expected_sha256: upload.value.sha256,
+        declared_mime: file.type || "application/octet-stream",
+      }),
+    });
+    const uploadedResponse = await fetch(sourceUrl(created.upload_path), {
+      method: "PUT",
+      headers: { "If-Match": `"${created.row_version}"` },
+      body: file,
+    });
+    if (!uploadedResponse.ok) throw new Error("UPLOAD_CONTENT_FAILED");
+    const uploaded = await uploadedResponse.json();
+    upload.value.status = await request(`/upload-sessions/${created.upload_session_id}:complete`, {
+      method: "POST",
+      headers: {
+        "If-Match": `"${uploaded.row_version}"`,
+        "Idempotency-Key": idempotency("upload-complete"),
+      },
+    });
+    lifecycle.value.documentId = upload.value.status.document_id;
+    lifecycle.value.versionId = upload.value.status.document_version_id;
+  } catch (cause) {
+    upload.value.error = cause.message;
+  }
+}
 async function loadDocumentVersionEtag() {
   const document = await request(`/documents/${lifecycle.value.documentId}`);
   versionUpload.value.documentRowVersion = String(document.row_version);
@@ -101,7 +155,7 @@ async function uploadNewVersion() {
   );
   if (!createdResponse.ok) throw new Error("VERSION_SESSION_CREATE_FAILED");
   const created = await createdResponse.json();
-  const uploadedResponse = await fetch(apiUrl(created.upload_path), {
+  const uploadedResponse = await fetch(sourceUrl(created.upload_path), {
     method: "PUT",
     headers: { "If-Match": `"${created.row_version}"` },
     body: file,
@@ -240,6 +294,7 @@ async function generateAcceptance() {
         <article><h3>{{ result?.status ?? '尚未运行' }}</h3><p class="answer">{{ result?.answer ?? '答案仅在引用与权限复核后显示。' }}</p><a v-for="citation in citations" :key="citation.evidence_id" :href="citation.href" target="_blank">{{ citation.evidence_id }} · 签名来源</a><form v-if="result" @submit.prevent="submitFeedback"><select v-model="feedback.rating"><option :value="5">有帮助</option><option :value="1">无帮助</option></select><input v-model="feedback.comment" placeholder="反馈说明"><button>提交反馈</button></form><p class="error">{{ error }}</p></article>
       </section>
       <section v-if="tab==='admin'">
+        <article><h3>上传新文档</h3><input data-testid="initial-upload-file" type="file" @change="selectUploadFile"><button data-testid="initial-upload-submit" :disabled="!upload.sha256" @click="uploadDocument">上传并创建索引任务</button><code data-testid="initial-upload-hash">{{ upload.sha256 }}</code><p class="error" data-testid="initial-upload-error">{{ upload.error }}</p><pre data-testid="initial-upload-result">{{ JSON.stringify(upload.status,null,2) }}</pre></article>
         <article><h3>发布 / 回滚 / 权限 / 删除</h3><input v-model="lifecycle.documentId" placeholder="Document ID"><input v-model="lifecycle.versionId" placeholder="Version ID"><input v-model="lifecycle.targetRevision" type="number" placeholder="ACL revision"><input v-model="lifecycle.watermark" type="number" placeholder="Watermark"><div class="actions"><button @click="publish">发布</button><button @click="rollback">回滚</button><button @click="permissions">权限转换</button><button @click="revoke">撤权</button><button class="danger" @click="removeDocument">删除</button></div></article>
         <article><h3>既有文档新版本</h3><button @click="loadDocumentVersionEtag">读取 Document row version</button><input v-model="versionUpload.documentRowVersion" placeholder="If-Match row version"><input type="file" @change="selectVersionFile"><button @click="uploadNewVersion">上传不可变新版本</button><p>PROCESSING 不可发布；Worker 验证为 STAGED 后再使用上方“发布”。</p><pre>{{ JSON.stringify(versionUpload.status,null,2) }}</pre></article>
         <article><h3>单文档质量复核</h3><button @click="loadQuality">读取质量报告</button><select v-model="documentReview.decision"><option>APPROVED</option><option>NEEDS_REWORK</option><option>REJECTED</option></select><input v-model="documentReview.comment" placeholder="复核说明"><button @click="submitDocumentReview">提交复核</button><pre>{{ JSON.stringify({quality,review:documentReview.result},null,2) }}</pre></article>

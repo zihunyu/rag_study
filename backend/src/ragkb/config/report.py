@@ -42,11 +42,26 @@ def conditional_issues(result: EnvLoadResult) -> tuple[EnvIssue, ...]:
         if settings.app_debug:
             issues.append(EnvIssue("APP_DEBUG", "PRODUCTION_DEBUG_FORBIDDEN", "G4"))
         require("APP_SECRET_KEY", "G4")
+        require("APP_REVISION", "G0")
+        if settings.app_revision and (
+            len(settings.app_revision) != 40
+            or any(character not in "0123456789abcdef" for character in settings.app_revision)
+        ):
+            issues.append(EnvIssue("APP_REVISION", "GIT_COMMIT_SHA_REQUIRED", "G0"))
         if settings.rag_runtime_profile != "production":
             issues.append(EnvIssue("RAG_RUNTIME_PROFILE", "PRODUCTION_PROFILE_REQUIRED", "G0"))
         if not settings.real_provider_calls_enabled:
             issues.append(
                 EnvIssue("REAL_PROVIDER_CALLS_ENABLED", "PRODUCTION_PROVIDERS_NOT_ENABLED", "G0")
+            )
+        require("RAG_ACCEPTANCE_SIGNING_KEY", "G0")
+        if not settings.external_lifecycle_mutations_enabled:
+            issues.append(
+                EnvIssue(
+                    "EXTERNAL_LIFECYCLE_MUTATIONS_ENABLED",
+                    "PRODUCTION_LIFECYCLE_MUTATIONS_NOT_ENABLED",
+                    "G0",
+                )
             )
         if settings.retrieval_active_generation_id.startswith("local-"):
             issues.append(
@@ -60,7 +75,12 @@ def conditional_issues(result: EnvLoadResult) -> tuple[EnvIssue, ...]:
             issues.append(EnvIssue("LLM_BASE_URL", "PRODUCTION_HTTPS_REQUIRED", "G0"))
     if settings.queue_heartbeat_seconds >= settings.queue_lease_seconds:
         issues.append(EnvIssue("QUEUE_HEARTBEAT_SECONDS", "QUEUE_HEARTBEAT_NOT_BELOW_LEASE", "G1"))
-    if settings.embedding_dimension != settings.zilliz_cloud_dimension:
+    configured_vector_dimension = (
+        settings.vector_dimension
+        if settings.vector_backend == "milvus"
+        else settings.zilliz_cloud_dimension
+    )
+    if settings.embedding_dimension != configured_vector_dimension:
         issues.append(EnvIssue("EMBEDDING_DIMENSION", "ZILLIZ_DIMENSION_MISMATCH", "G2"))
     embedding_url = urlparse(settings.embedding_base_url)
     dashscope_v4 = bool(
@@ -130,9 +150,19 @@ def conditional_issues(result: EnvLoadResult) -> tuple[EnvIssue, ...]:
         require("VECTOR_URI", "G2")
     require("ZILLIZ_CLOUD_DIMENSION", "G2")
     require("EMBEDDING_DIMENSION", "G2")
-    if not settings.zilliz_cloud_enable_bm25:
+    bm25_enabled = (
+        settings.vector_enable_bm25
+        if settings.vector_backend == "milvus"
+        else settings.zilliz_cloud_enable_bm25
+    )
+    if not bm25_enabled:
         issues.append(EnvIssue("ZILLIZ_CLOUD_ENABLE_BM25", "ZILLIZ_BM25_REQUIRED", "G2"))
-    if settings.zilliz_cloud_security_consistency_level != "Strong":
+    security_consistency = (
+        settings.vector_security_consistency_level
+        if settings.vector_backend == "milvus"
+        else settings.zilliz_cloud_security_consistency_level
+    )
+    if security_consistency != "Strong":
         issues.append(
             EnvIssue(
                 "ZILLIZ_CLOUD_SECURITY_CONSISTENCY_LEVEL",
@@ -198,6 +228,9 @@ def conditional_issues(result: EnvLoadResult) -> tuple[EnvIssue, ...]:
     else:
         for key in ("OIDC_ISSUER_URL", "OIDC_AUDIENCE", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET"):
             require(key, "G3")
+        if settings.app_env == "production":
+            require("OIDC_TENANT_ID", "G3")
+            require("OIDC_DEFAULT_SPACE_ID", "G3")
     if settings.otel_enabled:
         require("OTEL_EXPORTER_OTLP_ENDPOINT", "G4")
     return tuple(issues)

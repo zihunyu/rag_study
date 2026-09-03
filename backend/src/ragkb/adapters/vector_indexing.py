@@ -9,9 +9,11 @@ from typing import Any, Protocol
 
 from pymilvus.exceptions import MilvusException
 
+from ragkb.application.tracing import InMemoryTracer, TracerPort
 from ragkb.config import EnvSettings
-from ragkb.contracts.ports import EmbeddingPort
+from ragkb.contracts.ports import EmbeddingPort, RetrievalProjectionPort
 from ragkb.document_processing.chunking import ChunkingResult
+from ragkb.domain.errors import VectorBatchWriteError
 from ragkb.domain.retrieval import AuthorizedChunk
 
 
@@ -20,6 +22,62 @@ def vector_collection_name(settings: EnvSettings) -> str:
         settings.vector_collection
         if settings.vector_backend == "milvus"
         else settings.zilliz_cloud_collection
+    )
+
+
+def vector_dense_field(settings: EnvSettings) -> str:
+    return (
+        settings.vector_dense_field
+        if settings.vector_backend == "milvus"
+        else settings.zilliz_cloud_dense_field
+    )
+
+
+def vector_sparse_field(settings: EnvSettings) -> str:
+    return (
+        settings.vector_sparse_field
+        if settings.vector_backend == "milvus"
+        else settings.zilliz_cloud_sparse_field
+    )
+
+
+def vector_metric_type(settings: EnvSettings) -> str:
+    return (
+        settings.vector_metric_type
+        if settings.vector_backend == "milvus"
+        else settings.zilliz_cloud_metric_type
+    )
+
+
+def vector_dimension(settings: EnvSettings) -> int:
+    return (
+        settings.vector_dimension
+        if settings.vector_backend == "milvus"
+        else settings.zilliz_cloud_dimension
+    )
+
+
+def vector_analyzer(settings: EnvSettings) -> str:
+    return (
+        settings.vector_bm25_analyzer
+        if settings.vector_backend == "milvus"
+        else settings.zilliz_cloud_bm25_analyzer
+    )
+
+
+def vector_timeout(settings: EnvSettings) -> float:
+    return (
+        settings.vector_timeout_seconds
+        if settings.vector_backend == "milvus"
+        else settings.zilliz_cloud_timeout_seconds
+    )
+
+
+def vector_security_consistency(settings: EnvSettings) -> str:
+    return (
+        settings.vector_security_consistency_level
+        if settings.vector_backend == "milvus"
+        else settings.zilliz_cloud_security_consistency_level
     )
 
 
@@ -78,22 +136,23 @@ class ZillizSafeProjectionWriter:
     def _insert_batch(self, batch: Sequence[Mapping[str, Any]], batch_number: int) -> None:
         for attempt in range(self._settings.zilliz_write_max_retries + 1):
             try:
-                response = self._client.insert(
+                response = self._client.upsert(
                     collection_name=vector_collection_name(self._settings),
                     data=[dict(record) for record in batch],
-                    timeout=self._settings.zilliz_cloud_timeout_seconds,
+                    timeout=vector_timeout(self._settings),
                 )
                 if isinstance(response, Mapping):
-                    inserted = response.get("insert_count")
+                    inserted = response.get("upsert_count", response.get("insert_count"))
                     if inserted is not None and int(str(inserted)) != len(batch):
                         raise ValueError("ZILLIZ_BATCH_INSERT_COUNT_MISMATCH")
                 return
             except (MilvusException, TimeoutError, ConnectionError) as error:
                 if attempt >= self._settings.zilliz_write_max_retries:
-                    chunk_ids = tuple(str(record["zilliz_pk"]) for record in batch)
-                    raise RuntimeError(
-                        f"ZILLIZ_BATCH_INSERT_FAILED:batch={batch_number}:count={len(batch)}:"
-                        f"first_pk={chunk_ids[0]}"
+                    chunk_ids = tuple(str(record["chunk_id"]) for record in batch)
+                    raise VectorBatchWriteError(
+                        "VECTOR_BATCH_UPSERT_FAILED",
+                        batch_number=batch_number,
+                        chunk_ids=chunk_ids,
                     ) from error
                 self._sleep(self._settings.model_http_backoff_seconds * (2**attempt))
 
@@ -113,17 +172,19 @@ class ZillizChunkIndexingSink:
     def __init__(
         self,
         adapter: ConnectedVectorAdapter,
-        control_plane: Any,
+        control_plane: RetrievalProjectionPort,
         embedding: EmbeddingPort,
         settings: EnvSettings,
         *,
         generation_id: str,
+        tracer: TracerPort | None = None,
     ) -> None:
         self.adapter = adapter
         self.control_plane = control_plane
         self.embedding = embedding
         self.settings = settings
         self.generation_id = generation_id
+        self.tracer = tracer or InMemoryTracer()
 
     def index(
         self,
@@ -137,7 +198,11 @@ class ZillizChunkIndexingSink:
         vectors: list[Sequence[float]] = []
         for start in range(0, len(result.chunks), self.settings.embedding_batch_size):
             batch = result.chunks[start : start + self.settings.embedding_batch_size]
-            vectors.extend(self.embedding.embed([item.retrieval_text for item in batch]))
+            with self.tracer.span(
+                "document.embedding.batch",
+                {"batch_size": len(batch), "provider": self.settings.embedding_model},
+            ):
+                vectors.extend(self.embedding.embed([item.retrieval_text for item in batch]))
         if len(vectors) != len(result.chunks):
             raise ValueError("ZILLIZ_INDEX_EMBEDDING_COUNT_MISMATCH")
         now = int(time.time())
@@ -157,7 +222,8 @@ class ZillizChunkIndexingSink:
                     "language": "und",
                     "valid_from_epoch": now,
                     "valid_to_epoch": 0,
-                    "lifecycle_projection": "SERVING",
+                    "lifecycle_projection": "STAGED",
+                    "current_version": False,
                     "visibility": "TENANT",
                     "acl_scope_tokens": [],
                     "permission_revision": permission_revision,
@@ -169,18 +235,22 @@ class ZillizChunkIndexingSink:
                     "applicable_versions": [],
                     "region_codes": [],
                     "retrieval_text": chunk.retrieval_text,
-                    self.settings.zilliz_cloud_dense_field: list(vector),
+                    vector_dense_field(self.settings): list(vector),
                     "index_generation_id": self.generation_id,
-                    "analyzer_revision": self.settings.zilliz_cloud_bm25_analyzer,
+                    "analyzer_revision": vector_analyzer(self.settings),
                     "content_checksum": chunk.content_sha256,
                 }
             )
-        ZillizSafeProjectionWriter(self.adapter._connected(), self.settings).insert_records(records)
-        put_projection = getattr(self.control_plane, "put_for_test", None)
-        if not callable(put_projection):
-            raise TypeError("production retrieval projection sink is not writable")
+        with self.tracer.span(
+            "document.vector.write",
+            {"chunk_count": len(records), "backend": self.settings.vector_backend},
+        ):
+            ZillizSafeProjectionWriter(self.adapter._connected(), self.settings).insert_records(
+                records
+            )
+        projections: list[AuthorizedChunk] = []
         for chunk in (*result.parent_chunks, *result.chunks):
-            put_projection(
+            projections.append(
                 AuthorizedChunk(
                     chunk_id=chunk.id,
                     tenant_id=tenant_id,
@@ -190,15 +260,21 @@ class ZillizChunkIndexingSink:
                     parent_chunk_id=chunk.parent_chunk_id,
                     display_text=chunk.display_text,
                     retrieval_text=chunk.retrieval_text,
-                    locator=chunk.locator.to_dict(),
+                    locator={
+                        **chunk.locator.to_dict(),
+                        "section_id": chunk.section_id,
+                        "section_path": chunk.metadata.get("section_path", "root"),
+                        "heading": chunk.metadata.get("heading", ""),
+                    },
                     content_checksum=chunk.content_sha256,
                     visibility="TENANT",
                     acl_scope_tokens=(),
                     classification_level=0,
-                    lifecycle_projection="SERVING",
+                    lifecycle_projection="STAGED",
                     valid_from_epoch=now,
                     valid_to_epoch=0,
                     permission_revision=permission_revision,
-                    current_version=True,
+                    current_version=False,
                 )
             )
+        self.control_plane.upsert_chunks(projections)

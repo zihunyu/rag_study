@@ -68,26 +68,35 @@ class SQLiteUploadRepository:
             row_version=int(row["row_version"]),
         )
 
-    def ensure_local_hierarchy(self, tenant_code: str, space_name: str) -> tuple[str, str]:
+    def ensure_local_hierarchy(
+        self,
+        tenant_code: str,
+        space_name: str,
+        *,
+        tenant_id_override: str | None = None,
+        space_id_override: str | None = None,
+    ) -> tuple[str, str]:
         now = time.time()
         with self.database.transaction(immediate=True) as connection:
             tenant = connection.execute(
                 "SELECT id FROM tenants WHERE code = ?", (tenant_code,)
             ).fetchone()
             if tenant is None:
-                tenant_id = new_uuid7()
+                tenant_id = tenant_id_override or new_uuid7()
                 connection.execute(
                     "INSERT INTO tenants(id, code, status, created_at) VALUES (?, ?, 'ACTIVE', ?)",
                     (tenant_id, tenant_code, now),
                 )
             else:
                 tenant_id = str(tenant["id"])
+                if tenant_id_override is not None and tenant_id != tenant_id_override:
+                    raise ValueError("TENANT_ID_OVERRIDE_MISMATCH")
             space = connection.execute(
                 "SELECT id FROM knowledge_spaces WHERE tenant_id = ? AND name = ?",
                 (tenant_id, space_name),
             ).fetchone()
             if space is None:
-                space_id = new_uuid7()
+                space_id = space_id_override or new_uuid7()
                 connection.execute(
                     """
                     INSERT INTO knowledge_spaces(id, tenant_id, name, status, created_at)
@@ -97,6 +106,8 @@ class SQLiteUploadRepository:
                 )
             else:
                 space_id = str(space["id"])
+                if space_id_override is not None and space_id != space_id_override:
+                    raise ValueError("SPACE_ID_OVERRIDE_MISMATCH")
             corpus = connection.execute(
                 "SELECT id FROM corpora WHERE space_id = ? AND name = 'uploads'", (space_id,)
             ).fetchone()

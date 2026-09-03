@@ -155,7 +155,7 @@ class SubprocessOwnedProcessRunner:
     def run(
         self, command: Sequence[str], *, cwd: Path, timeout_seconds: float
     ) -> OwnedProcessResult:
-        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0
         process = subprocess.Popen(  # noqa: S603
             list(command),
             cwd=cwd,

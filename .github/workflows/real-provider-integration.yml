@@ -11,8 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     environment: real-rag-acceptance
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - run: python -m pip install -r requirements.lock
@@ -23,6 +23,7 @@ jobs:
           RAG_RUNTIME_PROFILE: production
           REAL_PROVIDER_CALLS_ENABLED: "true"
           APP_DEBUG: "false"
+          APP_REVISION: ${{ github.sha }}
           APP_SECRET_KEY: ${{ secrets.APP_SECRET_KEY }}
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}

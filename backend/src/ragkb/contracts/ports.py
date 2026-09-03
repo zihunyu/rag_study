@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 from ragkb.domain.documents import CanonicalDocument
-from ragkb.domain.retrieval import AuthorizedChunk, IndexCandidate, SearchContext
+from ragkb.domain.retrieval import AuthorizedChunk, IndexCandidate, RetrievalRelease, SearchContext
 
 if TYPE_CHECKING:
     from ragkb.document_processing.chunking import ChunkingResult
@@ -121,3 +121,26 @@ class RetrievalControlPlanePort(Protocol):
     def authorize_parent(
         self, parent_chunk_id: str, context: SearchContext
     ) -> AuthorizedChunk | None: ...
+
+
+class DocumentProjectionPort(Protocol):
+    def set_document_projection(
+        self,
+        document_id: str,
+        *,
+        active_version_id: str | None,
+        lifecycle_projection: str,
+        permission_revision: int,
+    ) -> None: ...
+
+    def delete_document_projection(self, document_id: str) -> None: ...
+
+
+class RetrievalProjectionPort(RetrievalControlPlanePort, DocumentProjectionPort, Protocol):
+    def upsert_chunks(self, chunks: Sequence[AuthorizedChunk]) -> None: ...
+
+
+class RetrievalReleasePort(Protocol):
+    revision: str
+
+    def current_release(self, tenant_id: str, space_id: str) -> RetrievalRelease: ...

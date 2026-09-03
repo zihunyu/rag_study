@@ -54,7 +54,21 @@ class EnvSettings(BaseModel):
     app_env: Literal["development", "testing", "production"] = "development"
     rag_runtime_profile: Literal["local", "production"] = "local"
     rag_acceptance_evidence_path: Path = Path("./artifacts/acceptance/real-rag.json")
+    rag_acceptance_signing_key: SecretStr | None = None
+    rag_acceptance_max_age_hours: int = Field(default=168, gt=0)
+    rag_acceptance_min_cases: int = Field(default=100, gt=0)
+    rag_acceptance_required_query_types: tuple[str, ...] = (
+        "identifier",
+        "keyword",
+        "semantic",
+        "multihop",
+        "temporal",
+        "negative",
+        "unanswerable",
+        "permission",
+    )
     real_provider_calls_enabled: bool = False
+    external_lifecycle_mutations_enabled: bool = False
     app_host: str = "127.0.0.1"
     app_port: int = Field(default=8000, ge=1, le=65535)
     frontend_host: str = "127.0.0.1"
@@ -62,6 +76,7 @@ class EnvSettings(BaseModel):
     app_timezone: str = "Asia/Hong_Kong"
     app_debug: bool = True
     app_secret_key: SecretStr | None = None
+    app_revision: str = ""
     cors_origins: tuple[str, ...] = ("http://127.0.0.1:5173",)
 
     local_storage_root: Path = Path("./data/storage")
@@ -117,6 +132,15 @@ class EnvSettings(BaseModel):
     vector_token: SecretStr | None = None
     vector_database: str = "default"
     vector_collection: str = "rag_chunks"
+    vector_dimension: int = Field(default=1024, gt=0)
+    vector_metric_type: Literal["COSINE", "IP", "L2"] = "COSINE"
+    vector_enable_bm25: bool = True
+    vector_bm25_analyzer: str = "chinese"
+    vector_dense_field: str = "dense_vector"
+    vector_sparse_field: str = "sparse_vector"
+    vector_timeout_seconds: float = Field(default=30, gt=0)
+    vector_consistency_level: Literal["Strong", "Session", "Bounded", "Eventually"] = "Bounded"
+    vector_security_consistency_level: Literal["Strong"] = "Strong"
 
     queue_database_path: Path = Path("./data/storage/queue/jobs.sqlite3")
     queue_poll_interval_seconds: float = Field(default=1, gt=0)
@@ -137,6 +161,10 @@ class EnvSettings(BaseModel):
     mineru_enable_table: bool = True
     mineru_enable_formula: bool = True
     mineru_failover_enabled: bool = True
+    mineru_runtime_max_files: int = Field(default=100_000, gt=0)
+    mineru_runtime_max_requests: int = Field(default=3_300_000, gt=0)
+    mineru_runtime_max_polls_per_file: int = Field(default=60, gt=0)
+    mineru_runtime_poll_interval_seconds: float = Field(default=2, gt=0)
 
     llm_base_url: str = ""
     llm_allow_http: bool = False
@@ -148,6 +176,7 @@ class EnvSettings(BaseModel):
     llm_temperature: float = Field(default=0.0, ge=0, le=2)
     llm_top_p: float = Field(default=1.0, gt=0, le=1)
     llm_prompt_revision: str = "grounded-qa:v1"
+    llm_generation_cache_ttl_seconds: int = Field(default=3600, gt=0)
     model_http_connect_timeout_seconds: float = Field(default=10, gt=0)
     model_http_pool_timeout_seconds: float = Field(default=10, gt=0)
     model_http_max_connections: int = Field(default=100, gt=0)
@@ -169,6 +198,7 @@ class EnvSettings(BaseModel):
     reranker_api_key: SecretStr | None = None
     reranker_model: str = ""
     reranker_max_candidates: int = Field(default=40, gt=0)
+    reranker_max_concurrency: int = Field(default=4, gt=0)
     reranker_timeout_seconds: float = Field(default=60, gt=0)
 
     asr_enabled: bool = False
@@ -183,6 +213,7 @@ class EnvSettings(BaseModel):
     chunk_overlap_tokens: int = Field(default=80, ge=0)
     chunk_min_tokens: int = Field(default=20, gt=0)
     chunk_max_tokens: int = Field(default=800, gt=0)
+    chunk_semantic_threshold: float = Field(default=0.45, ge=-1, le=1)
     parent_chunk_max_tokens: int = Field(default=1200, gt=0)
     retrieval_bm25_top_k: int = Field(default=50, gt=0)
     retrieval_active_generation_id: str = "local-g3-generation"
@@ -195,6 +226,7 @@ class EnvSettings(BaseModel):
     retrieval_final_evidence_count: int = Field(default=8, gt=0)
     retrieval_near_duplicate_threshold: float = Field(default=0.92, ge=0, le=1)
     retrieval_max_chunks_per_document: int = Field(default=3, gt=0)
+    retrieval_max_chunks_per_section: int = Field(default=2, gt=0)
 
     upload_max_file_size_mb: int = Field(default=200, gt=0)
     upload_max_pages: int = Field(default=600, gt=0)
@@ -236,6 +268,11 @@ class EnvSettings(BaseModel):
     oidc_audience: str = ""
     oidc_client_id: str = ""
     oidc_client_secret: SecretStr | None = None
+    oidc_discovery_timeout_seconds: float = Field(default=10, gt=0)
+    oidc_jwks_cache_seconds: int = Field(default=3600, gt=0)
+    oidc_allowed_algorithms: tuple[str, ...] = ("RS256", "ES256")
+    oidc_tenant_id: str = ""
+    oidc_default_space_id: str = ""
 
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     log_dir: Path = Path("./data/storage/logs")
@@ -250,6 +287,8 @@ class EnvSettings(BaseModel):
         "ai_outbound_allowed_classifications",
         "ai_approved_processing_regions",
         "ai_trusted_private_transport_services",
+        "oidc_allowed_algorithms",
+        "rag_acceptance_required_query_types",
         mode="before",
     )
     @classmethod
@@ -282,6 +321,7 @@ class EnvLoadResult:
 SECRET_KEYS = frozenset(
     {
         "APP_SECRET_KEY",
+        "RAG_ACCEPTANCE_SIGNING_KEY",
         "MYSQL_PASSWORD",
         "REDIS_PASSWORD",
         "ZILLIZ_CLOUD_TOKEN",

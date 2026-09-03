@@ -191,13 +191,26 @@ class _GuardedModelAdapter:
         settings: EnvSettings,
         transport: JsonTransport | None,
         external_call_approved: bool,
+        max_concurrency: int,
     ) -> None:
         self._transport = transport or HttpxJsonTransport(settings)
         self._external_call_approved = external_call_approved
+        self._operation_semaphore = threading.BoundedSemaphore(max_concurrency)
 
     def _guard(self) -> None:
         if self._transport.real_network and not self._external_call_approved:
             raise BillableCallApprovalRequired("BILLABLE_MODEL_CALL_APPROVAL_REQUIRED")
+
+    def _post_json(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        payload: Mapping[str, Any],
+        timeout: float,
+    ) -> Mapping[str, Any]:
+        with self._operation_semaphore:
+            return self._transport.post_json(url, headers=headers, payload=payload, timeout=timeout)
 
 
 class OpenAICompatibleEmbeddingAdapter(_GuardedModelAdapter):
@@ -214,6 +227,7 @@ class OpenAICompatibleEmbeddingAdapter(_GuardedModelAdapter):
             settings=settings,
             transport=transport,
             external_call_approved=external_call_approved,
+            max_concurrency=settings.embedding_max_concurrency,
         )
         self._settings = settings
         self.dimension = settings.embedding_dimension
@@ -223,7 +237,7 @@ class OpenAICompatibleEmbeddingAdapter(_GuardedModelAdapter):
         if not texts or any(not text.strip() for text in texts):
             raise ValueError("embedding input must contain non-empty text")
         key = self._settings.embedding_api_key
-        response = self._transport.post_json(
+        response = self._post_json(
             f"{self._settings.embedding_base_url.rstrip('/')}/embeddings",
             headers={"Authorization": f"Bearer {key.get_secret_value() if key else ''}"},
             payload={"model": self._settings.embedding_model, "input": list(texts)},
@@ -278,6 +292,7 @@ class OpenAICompatibleRerankerAdapter(_GuardedModelAdapter):
             settings=settings,
             transport=transport,
             external_call_approved=external_call_approved,
+            max_concurrency=settings.reranker_max_concurrency,
         )
         self._settings = settings
 
@@ -288,7 +303,7 @@ class OpenAICompatibleRerankerAdapter(_GuardedModelAdapter):
         if not query.strip() or any(not document.strip() for document in documents):
             raise ValueError("reranker query and documents must be non-empty")
         key = self._settings.reranker_api_key
-        response = self._transport.post_json(
+        response = self._post_json(
             f"{self._settings.reranker_base_url.rstrip('/')}/rerank",
             headers={"Authorization": f"Bearer {key.get_secret_value() if key else ''}"},
             payload={
@@ -347,6 +362,7 @@ class OpenAICompatibleBufferedGenerator(_GuardedModelAdapter):
             settings=settings,
             transport=transport,
             external_call_approved=external_call_approved,
+            max_concurrency=settings.llm_max_concurrency,
         )
         self._settings = settings
         self.revision = (
@@ -374,7 +390,7 @@ class OpenAICompatibleBufferedGenerator(_GuardedModelAdapter):
             f'<evidence id="{item.evidence_id}">\n{item.text}\n</evidence>' for item in evidence
         )
         key = self._settings.llm_api_key
-        response = self._transport.post_json(
+        response = self._post_json(
             f"{self._settings.llm_base_url.rstrip('/')}/chat/completions",
             headers={"Authorization": f"Bearer {key.get_secret_value() if key else ''}"},
             payload={

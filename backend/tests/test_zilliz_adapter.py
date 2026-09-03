@@ -218,9 +218,9 @@ def test_production_projection_writer_never_uses_multi_entity_batch(tmp_path: Pa
         def __init__(self) -> None:
             self.batch_sizes: list[int] = []
 
-        def insert(self, **kwargs):
+        def upsert(self, **kwargs):
             self.batch_sizes.append(len(kwargs["data"]))
-            return {"insert_count": len(kwargs["data"])}
+            return {"upsert_count": len(kwargs["data"])}
 
     client = _WriterClient()
     writer = ZillizSafeProjectionWriter(client, loaded.settings)
@@ -246,12 +246,12 @@ def test_projection_writer_honors_batch_size_and_retries_timeout(tmp_path: Path)
             self.calls = 0
             self.batch_sizes: list[int] = []
 
-        def insert(self, **kwargs):
+        def upsert(self, **kwargs):
             self.calls += 1
             self.batch_sizes.append(len(kwargs["data"]))
             if self.calls == 1:
                 raise TimeoutError
-            return {"insert_count": len(kwargs["data"])}
+            return {"upsert_count": len(kwargs["data"])}
 
     client = _RetryClient()
     writer = ZillizSafeProjectionWriter(client, settings, sleep=lambda _: None)

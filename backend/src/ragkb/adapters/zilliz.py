@@ -7,13 +7,27 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from pymilvus import FunctionType, MilvusClient
+from pymilvus.exceptions import (
+    ConnectError,
+    DataNotMatchException,
+    MilvusException,
+    MilvusUnavailableException,
+    SchemaMismatchRetryableException,
+)
 
 from ragkb.adapters.vector_indexing import (
     ZillizChunkIndexingSink,
     ZillizSafeProjectionWriter,
     vector_collection_name,
+    vector_dense_field,
+    vector_dimension,
+    vector_metric_type,
+    vector_security_consistency,
+    vector_sparse_field,
+    vector_timeout,
 )
 from ragkb.config import EnvSettings
+from ragkb.domain.errors import ProviderAuthenticationError, ProviderUnavailable, SchemaMismatch
 from ragkb.domain.retrieval import IndexCandidate, SearchContext
 
 __all__ = [
@@ -21,6 +35,7 @@ __all__ = [
     "ZILLIZ_REQUIRED_FIELDS",
     "ZillizChunkIndexingSink",
     "ZillizCloudAdapter",
+    "MilvusHybridAdapter",
     "ZillizSafeProjectionWriter",
     "build_zilliz_filter",
     "required_zilliz_fields",
@@ -41,6 +56,7 @@ ZILLIZ_BASE_FIELDS = frozenset(
         "valid_from_epoch",
         "valid_to_epoch",
         "lifecycle_projection",
+        "current_version",
         "visibility",
         "acl_scope_tokens",
         "permission_revision",
@@ -61,9 +77,7 @@ ZILLIZ_REQUIRED_FIELDS = ZILLIZ_BASE_FIELDS.union({"dense_vector", "sparse_vecto
 
 
 def required_zilliz_fields(settings: EnvSettings) -> frozenset[str]:
-    return ZILLIZ_BASE_FIELDS.union(
-        {settings.zilliz_cloud_dense_field, settings.zilliz_cloud_sparse_field}
-    )
+    return ZILLIZ_BASE_FIELDS.union({vector_dense_field(settings), vector_sparse_field(settings)})
 
 
 def _quoted(value: str) -> str:
@@ -80,6 +94,7 @@ def build_zilliz_filter(context: SearchContext) -> str:
             f"space_id in [{spaces}]",
             f"index_generation_id == {_quoted(context.active_generation_id)}",
             'lifecycle_projection == "SERVING"',
+            "current_version == true",
             f"classification_level <= {context.clearance_level}",
             f"permission_revision <= {context.active_permission_revision}",
             f"valid_from_epoch <= {context.as_of_epoch}",
@@ -89,8 +104,8 @@ def build_zilliz_filter(context: SearchContext) -> str:
     )
 
 
-class ZillizCloudAdapter:
-    revision = "zilliz-cloud-pymilvus:g2-v1"
+class MilvusHybridAdapter:
+    revision = "milvus-hybrid-pymilvus:v1"
 
     def __init__(
         self,
@@ -115,29 +130,38 @@ class ZillizCloudAdapter:
             db_name=(
                 self._settings.vector_database if generic else self._settings.zilliz_cloud_database
             ),
-            timeout=self._settings.zilliz_cloud_timeout_seconds,
+            timeout=vector_timeout(self._settings),
         )
         return self._client
 
     def _connected(self) -> Any:
         return self._client if self._client is not None else self.connect()
 
+    @staticmethod
+    def _provider_error(error: MilvusException) -> Exception:
+        code = int(getattr(error, "code", 0) or 0)
+        if isinstance(error, (DataNotMatchException, SchemaMismatchRetryableException)):
+            return SchemaMismatch("VECTOR_SCHEMA_MISMATCH")
+        if code in {401, 403}:
+            return ProviderAuthenticationError("VECTOR_AUTHENTICATION_FAILED")
+        return ProviderUnavailable("VECTOR_DATABASE_UNAVAILABLE")
+
     def read_only_inspect(self) -> dict[str, object]:
         client = self._connected()
         required_fields = required_zilliz_fields(self._settings)
-        databases = client.list_databases(timeout=self._settings.zilliz_cloud_timeout_seconds)
+        databases = client.list_databases(timeout=vector_timeout(self._settings))
         database_name = (
             self._settings.vector_database
             if self._settings.vector_backend == "milvus"
             else self._settings.zilliz_cloud_database
         )
         database_list_contains_name = database_name in set(map(str, databases))
-        collections = client.list_collections(timeout=self._settings.zilliz_cloud_timeout_seconds)
+        collections = client.list_collections(timeout=vector_timeout(self._settings))
         session_usable = isinstance(collections, Sequence)
         collection_exists = bool(
             client.has_collection(
                 collection_name=vector_collection_name(self._settings),
-                timeout=self._settings.zilliz_cloud_timeout_seconds,
+                timeout=vector_timeout(self._settings),
             )
         )
         if not collection_exists:
@@ -157,12 +181,12 @@ class ZillizCloudAdapter:
             }
         description = client.describe_collection(
             collection_name=vector_collection_name(self._settings),
-            timeout=self._settings.zilliz_cloud_timeout_seconds,
+            timeout=vector_timeout(self._settings),
         )
         fields = description.get("fields", []) if isinstance(description, Mapping) else []
         by_name = {str(field.get("name")): field for field in fields if isinstance(field, Mapping)}
         missing = sorted(required_fields.difference(by_name))
-        dense = by_name.get(self._settings.zilliz_cloud_dense_field, {})
+        dense = by_name.get(vector_dense_field(self._settings), {})
         dense_params = dense.get("params", {}) if isinstance(dense, Mapping) else {}
         dimension = int(dense_params.get("dim", 0)) if isinstance(dense_params, Mapping) else 0
         text_field = by_name.get("retrieval_text", {})
@@ -187,7 +211,7 @@ class ZillizCloudAdapter:
                 break
         compatible = (
             not missing
-            and dimension == self._settings.zilliz_cloud_dimension
+            and dimension == vector_dimension(self._settings)
             and analyzer_enabled
             and bm25_function
         )
@@ -202,7 +226,7 @@ class ZillizCloudAdapter:
             "collection_exists": True,
             "schema_compatible": compatible,
             "missing_fields": missing,
-            "dense_dimension_matches": dimension == self._settings.zilliz_cloud_dimension,
+            "dense_dimension_matches": dimension == vector_dimension(self._settings),
             "analyzer_enabled": analyzer_enabled,
             "bm25_function_present": bm25_function,
             "zilliz_collection_create_approval_required": not compatible,
@@ -237,31 +261,101 @@ class ZillizCloudAdapter:
     def search_bm25(
         self, query: str, context: SearchContext, limit: int
     ) -> Sequence[IndexCandidate]:
-        results = self._connected().search(
-            collection_name=vector_collection_name(self._settings),
-            data=[query],
-            anns_field=self._settings.zilliz_cloud_sparse_field,
-            filter=build_zilliz_filter(context),
-            limit=limit,
-            output_fields=["chunk_id", "document_version_id", "parent_chunk_id"],
-            consistency_level=self._settings.zilliz_cloud_security_consistency_level,
-        )
+        try:
+            results = self._connected().search(
+                collection_name=vector_collection_name(self._settings),
+                data=[query],
+                anns_field=vector_sparse_field(self._settings),
+                filter=build_zilliz_filter(context),
+                limit=limit,
+                output_fields=["chunk_id", "document_version_id", "parent_chunk_id"],
+                consistency_level=vector_security_consistency(self._settings),
+            )
+        except (MilvusUnavailableException, ConnectError) as error:
+            raise ProviderUnavailable("VECTOR_BM25_UNAVAILABLE") from error
+        except MilvusException as error:
+            raise self._provider_error(error) from error
         return self._candidates(results, "bm25")
 
     def search_dense(
         self, vector: Sequence[float], context: SearchContext, limit: int
     ) -> Sequence[IndexCandidate]:
-        results = self._connected().search(
-            collection_name=vector_collection_name(self._settings),
-            data=[list(vector)],
-            anns_field=self._settings.zilliz_cloud_dense_field,
-            filter=build_zilliz_filter(context),
-            limit=limit,
-            output_fields=["chunk_id", "document_version_id", "parent_chunk_id"],
-            search_params={"metric_type": self._settings.zilliz_cloud_metric_type},
-            consistency_level=self._settings.zilliz_cloud_security_consistency_level,
-        )
+        try:
+            results = self._connected().search(
+                collection_name=vector_collection_name(self._settings),
+                data=[list(vector)],
+                anns_field=vector_dense_field(self._settings),
+                filter=build_zilliz_filter(context),
+                limit=limit,
+                output_fields=["chunk_id", "document_version_id", "parent_chunk_id"],
+                search_params={"metric_type": vector_metric_type(self._settings)},
+                consistency_level=vector_security_consistency(self._settings),
+            )
+        except (MilvusUnavailableException, ConnectError) as error:
+            raise ProviderUnavailable("VECTOR_DENSE_UNAVAILABLE") from error
+        except MilvusException as error:
+            raise self._provider_error(error) from error
         return self._candidates(results, "dense")
+
+    def set_document_projection(
+        self,
+        document_id: str,
+        *,
+        active_version_id: str | None,
+        lifecycle_projection: str,
+        permission_revision: int,
+    ) -> None:
+        client = self._connected()
+        try:
+            rows = client.query(
+                collection_name=vector_collection_name(self._settings),
+                filter=f"document_id == {_quoted(document_id)}",
+                output_fields=["zilliz_pk", "document_version_id"],
+                consistency_level=vector_security_consistency(self._settings),
+            )
+            if rows:
+                client.upsert(
+                    collection_name=vector_collection_name(self._settings),
+                    data=[
+                        {
+                            "zilliz_pk": str(row["zilliz_pk"]),
+                            "lifecycle_projection": lifecycle_projection,
+                            "permission_revision": permission_revision,
+                            "current_version": bool(
+                                active_version_id
+                                and str(row["document_version_id"]) == active_version_id
+                            ),
+                        }
+                        for row in rows
+                    ],
+                    partial_update=True,
+                    timeout=vector_timeout(self._settings),
+                )
+        except MilvusException as error:
+            raise self._provider_error(error) from error
+
+    def delete_document_projection(self, document_id: str) -> None:
+        try:
+            self._connected().delete(
+                collection_name=vector_collection_name(self._settings),
+                filter=f"document_id == {_quoted(document_id)}",
+                timeout=vector_timeout(self._settings),
+            )
+        except MilvusException as error:
+            raise self._provider_error(error) from error
+
+    def document_projection_exists(self, document_id: str) -> bool:
+        try:
+            rows = self._connected().query(
+                collection_name=vector_collection_name(self._settings),
+                filter=f"document_id == {_quoted(document_id)}",
+                output_fields=["zilliz_pk"],
+                limit=1,
+                consistency_level=vector_security_consistency(self._settings),
+            )
+            return bool(rows)
+        except MilvusException as error:
+            raise self._provider_error(error) from error
 
     def safe_status(self) -> dict[str, object]:
         return {
@@ -273,9 +367,17 @@ class ZillizCloudAdapter:
                 else self._settings.zilliz_cloud_database
             ),
             "collection_configured": bool(vector_collection_name(self._settings)),
-            "bm25_enabled": self._settings.zilliz_cloud_enable_bm25,
-            "security_consistency": self._settings.zilliz_cloud_security_consistency_level,
+            "bm25_enabled": (
+                self._settings.vector_enable_bm25
+                if self._settings.vector_backend == "milvus"
+                else self._settings.zilliz_cloud_enable_bm25
+            ),
+            "security_consistency": vector_security_consistency(self._settings),
             "token_in_status": False,
             "real_connection_attempted": self._real_connection_attempted,
             "mutating_call_performed": False,
         }
+
+
+class ZillizCloudAdapter(MilvusHybridAdapter):
+    revision = "zilliz-cloud-pymilvus:g2-v2"

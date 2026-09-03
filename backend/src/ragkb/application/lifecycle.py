@@ -12,6 +12,7 @@ from functools import wraps
 from typing import Any, Concatenate, Protocol, cast
 
 from ragkb.contracts.lifecycle import CleanupExecutorPort, PublicationReadinessPort
+from ragkb.contracts.ports import DocumentProjectionPort
 from ragkb.domain.ids import new_uuid7
 from ragkb.domain.lifecycle import (
     AuditEvent,
@@ -139,11 +140,33 @@ class LifecycleService:
         *,
         cleanup_executors: Mapping[str, CleanupExecutorPort] | None = None,
         publication_readiness: PublicationReadinessPort | None = None,
+        retrieval_projection: DocumentProjectionPort | None = None,
+        allow_external_cleanup: bool = False,
     ) -> None:
         self.store = store
         self.tenant_id = tenant_id
         self.cleanup_executors = dict(cleanup_executors or {})
         self.publication_readiness = publication_readiness
+        self.retrieval_projection = retrieval_projection
+        self.allow_external_cleanup = allow_external_cleanup
+
+    def _project_document(
+        self,
+        record: LifecycleRecord,
+        *,
+        lifecycle_projection: str,
+        active_version_id: str | None = None,
+    ) -> None:
+        if self.retrieval_projection is None:
+            return
+        self.retrieval_projection.set_document_projection(
+            record.document_id,
+            active_version_id=(
+                record.active_version_id if active_version_id is None else active_version_id
+            ),
+            lifecycle_projection=lifecycle_projection,
+            permission_revision=record.acl_revision,
+        )
 
     @contextmanager
     def _atomic(self) -> Iterator[None]:
@@ -285,6 +308,7 @@ class LifecycleService:
         record.lifecycle_state = LifecycleState.ACTIVE
         record.visible = True
         record.row_version += 1
+        self._project_document(record, lifecycle_projection="SERVING")
         self._audit("publication.projection_swapped", document_id, trace_id)
         self._audit("document.published", document_id, trace_id)
         self._persist(
@@ -335,6 +359,7 @@ class LifecycleService:
         record.lifecycle_state = LifecycleState.ACTIVE
         record.visible = True
         record.row_version += 1
+        self._project_document(record, lifecycle_projection="SERVING")
         self._audit("rollback.projection_swapped", document_id, trace_id)
         self._audit("document.rolled_back", document_id, trace_id)
         self._persist(
@@ -382,6 +407,7 @@ class LifecycleService:
         record.lifecycle_state = LifecycleState.SECURITY_TRANSITION
         record.visible = False
         record.row_version += 1
+        self._project_document(record, lifecycle_projection="SECURITY_TRANSITION")
         transition = SecurityTransition(
             new_uuid7(), document_id, target_acl_revision, required_watermark
         )
@@ -480,6 +506,7 @@ class LifecycleService:
         record.lifecycle_state = LifecycleState.ACTIVE
         record.visible = True
         record.row_version += 1
+        self._project_document(record, lifecycle_projection="SERVING")
         self._audit("acl.transition_verified", record.document_id, trace_id)
         if persist_state:
             self.store.persist_state(tenant_id=self.tenant_id)
@@ -498,6 +525,7 @@ class LifecycleService:
         record.lifecycle_state = LifecycleState.REVOKED
         record.visible = False
         record.row_version += 1
+        self._project_document(record, lifecycle_projection="REVOKED")
         self._audit("document.revoked", document_id, trace_id)
         self._persist(operation, event_id, payload, self._record_dict(record))
         return record
@@ -521,6 +549,8 @@ class LifecycleService:
         record.tombstoned = True
         record.active_version_id = None
         record.row_version += 1
+        if self.retrieval_projection is not None:
+            self.retrieval_projection.delete_document_projection(document_id)
         tombstone = DeletionTombstone(
             document_id,
             {
@@ -553,7 +583,7 @@ class LifecycleService:
     ) -> CleanupStatus:
         if store not in CLEANUP_STORES:
             raise ValueError("unknown cleanup store")
-        if store in EXTERNAL_CLEANUP_STORES:
+        if store in EXTERNAL_CLEANUP_STORES and not self.allow_external_cleanup:
             raise CleanupApprovalRequired("EXTERNAL_CLEANUP_REQUIRES_APPROVAL")
         operation = f"cleanup:{document_id}:{store}"
         key = event_id or operation

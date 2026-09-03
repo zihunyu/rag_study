@@ -1,5 +1,6 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { webcrypto } from "node:crypto";
 
 import App from "./App.vue";
 
@@ -55,5 +56,43 @@ describe("trusted QA UI", () => {
     expect(wrapper.text()).toContain("SSE_REQUEST_FAILED");
     expect(wrapper.text()).toContain("system_error");
     expect(wrapper.text()).toContain("答案仅在引用与权限复核后显示");
+  });
+
+  it("uploads an initial document and exposes its indexing job", async () => {
+    vi.stubGlobal("crypto", webcrypto);
+    const responses = [
+      [{ id: "space-1" }],
+      { upload_session_id: "upload-1", upload_path: "/api/v1/upload-sessions/upload-1/content", row_version: 1 },
+      { row_version: 2 },
+      { document_id: "document-1", document_version_id: "version-1", job_id: "job-1" },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify(responses.shift()), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    const wrapper = mount(App);
+    await button(wrapper, "知识管理").trigger("click");
+    const input = wrapper.get('[data-testid="initial-upload-file"]');
+    const file = new File(["policy"], "policy.md", { type: "text/markdown" });
+    Object.defineProperty(file, "arrayBuffer", {
+      value: async () => new TextEncoder().encode("policy").buffer,
+    });
+    Object.defineProperty(input.element, "files", { value: [file] });
+    await input.trigger("change");
+    await vi.waitFor(() => {
+      expect(wrapper.get('[data-testid="initial-upload-hash"]').text()).toHaveLength(64);
+    });
+    expect(wrapper.get('[data-testid="initial-upload-submit"]').attributes("disabled")).toBeUndefined();
+    await wrapper.get('[data-testid="initial-upload-submit"]').trigger("click");
+    await flushPromises();
+    await flushPromises();
+
+    expect(wrapper.get('[data-testid="initial-upload-error"]').text()).toBe("");
+    expect(wrapper.get('[data-testid="initial-upload-result"]').text()).toContain("version-1");
   });
 });

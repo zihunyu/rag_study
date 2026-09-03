@@ -111,6 +111,7 @@ def run_worker(argv: Sequence[str] | None = None) -> int:
         lease_seconds=components.settings.queue_lease_seconds,
         chunker=components.chunker,
         indexing_sink=components.indexing_sink,
+        tracer=components.tracer,
     )
     if args.once:
         iteration = run_worker_iteration(worker)

@@ -6,6 +6,7 @@ import time
 from collections.abc import Callable
 
 from ragkb.application.search import HybridSearchService
+from ragkb.contracts.ports import RetrievalReleasePort
 from ragkb.domain.ids import new_uuid7
 from ragkb.domain.rag import Evidence, EvidencePackage
 from ragkb.domain.retrieval import SearchContext
@@ -25,6 +26,7 @@ class SearchBackedEvidenceProvider:
         prompt_revision: str,
         model_revision: str,
         final_evidence_count: int,
+        release_provider: RetrievalReleasePort | None = None,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self.search_service = search_service
@@ -35,6 +37,7 @@ class SearchBackedEvidenceProvider:
         self.prompt_revision = prompt_revision
         self.model_revision = model_revision
         self.final_evidence_count = final_evidence_count
+        self.release_provider = release_provider
         self.clock = clock
 
     def build_package(
@@ -46,16 +49,33 @@ class SearchBackedEvidenceProvider:
         subject_scope_tokens: tuple[str, ...] = (),
     ) -> EvidencePackage:
         query_time = int(self.clock())
-        permission_revision = self.active_permission_revision()
+        release = (
+            self.release_provider.current_release(tenant_id, self.space_id)
+            if self.release_provider is not None
+            else None
+        )
+        permission_revision = (
+            release.active_permission_revision
+            if release is not None
+            else self.active_permission_revision()
+        )
+        active_generation_id = (
+            release.active_generation_id if release is not None else self.active_generation_id
+        )
+        required_watermark = (
+            release.security_watermark
+            if release is not None
+            else self.required_security_watermark()
+        )
         context = SearchContext(
             tenant_id=tenant_id,
             space_ids=(self.space_id,),
             subject_scope_tokens=subject_scope_tokens,
             clearance_level=3,
             as_of_epoch=query_time,
-            active_generation_id=self.active_generation_id,
+            active_generation_id=active_generation_id,
             active_permission_revision=permission_revision,
-            required_security_watermark=self.required_security_watermark(),
+            required_security_watermark=required_watermark,
         )
         result = self.search_service.search(
             question,
@@ -85,7 +105,7 @@ class SearchBackedEvidenceProvider:
             user_id=user_id,
             query=question,
             query_time_epoch=query_time,
-            index_generation_id=self.active_generation_id,
+            index_generation_id=active_generation_id,
             retrieval_revision=self.search_service.revision,
             prompt_revision=self.prompt_revision,
             model_revision=self.model_revision,

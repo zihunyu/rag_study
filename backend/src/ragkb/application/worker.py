@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, Protocol
 
+from ragkb.application.tracing import InMemoryTracer, TracerPort
 from ragkb.contracts.jobs import PersistentJobQueuePort
 from ragkb.contracts.ports import ChunkerPort, ContentStoragePort, ParserRouterPort, ParsingDeferred
 from ragkb.contracts.uploads import UploadRepositoryPort
@@ -37,6 +38,7 @@ class LocalIngestionWorker:
         lease_seconds: float = 600,
         chunker: ChunkerPort | None = None,
         indexing_sink: LocalIndexingSinkPort | None = None,
+        tracer: TracerPort | None = None,
     ) -> None:
         self.queue = queue
         self.repository = repository
@@ -46,6 +48,7 @@ class LocalIngestionWorker:
         self.lease_seconds = lease_seconds
         self.chunker = chunker
         self.indexing_sink = indexing_sink
+        self.tracer = tracer or InMemoryTracer()
 
     def run_once(self) -> bool:
         job = self.queue.lease(self.worker_id, lease_seconds=self.lease_seconds)
@@ -59,9 +62,10 @@ class LocalIngestionWorker:
         source_format = str(job.payload["source_format"])
         source = self.storage.path_for("original", str(version["original_key"]))
         try:
-            document = self.parser_router.parse(source_format, source, version_id)
+            with self.tracer.span("document.parse", {"source_format": source_format}):
+                document = self.parser_router.parse(source_format, source, version_id)
             chunking = (
-                self.chunker.chunk(document, tenant_id=str(job.payload["tenant_id"]))
+                self._chunk(document, tenant_id=str(job.payload["tenant_id"]))
                 if self.chunker is not None
                 else None
             )
@@ -117,3 +121,9 @@ class LocalIngestionWorker:
                 self.repository.mark_version_failed(version_id, self.parser_router.revision)
             raise
         return True
+
+    def _chunk(self, document: Any, *, tenant_id: str) -> Any:
+        if self.chunker is None:
+            raise RuntimeError("CHUNKER_UNAVAILABLE")
+        with self.tracer.span("document.chunk"):
+            return self.chunker.chunk(document, tenant_id=tenant_id)

@@ -43,15 +43,15 @@ class _ReadinessClient:
         self.index_calls += 1
         return value
 
-    def insert(self, **kwargs):
-        self.events.append("insert")
+    def upsert(self, **kwargs):
+        self.events.append("upsert")
         self.insert_calls += 1
         data = kwargs["data"]
         self.batch_sizes.append(len(data))
         if self.fail_insert_at == self.insert_calls:
             raise AttributeError("simulated MutationResult batch compatibility failure")
         self.stored.update(str(item["zilliz_pk"]) for item in data)
-        return {"insert_count": len(data)}
+        return {"upsert_count": len(data)}
 
     def get(self, **kwargs):
         self.events.append("get")
@@ -128,7 +128,7 @@ def test_readiness_timeout_returns_explicit_error_and_never_inserts() -> None:
     assert failed.value.error_code == "ZILLIZ_COLLECTION_NOT_READY"
     assert failed.value.confirmed_count == 0
     assert client.insert_calls == 0
-    assert "insert" not in client.events
+    assert "upsert" not in client.events
 
 
 def test_batch_failure_has_no_confirmed_ids_or_cleanup_claim() -> None:
@@ -152,7 +152,7 @@ def test_batch_failure_has_no_confirmed_ids_or_cleanup_claim() -> None:
             monotonic=lambda: 0,
         )
 
-    assert failed.value.stage == "insert_synthetic_batches"
+    assert failed.value.stage == "upsert_synthetic_batches"
     assert failed.value.error_type == "AttributeError"
     assert failed.value.confirmed_count == 0
     assert failed.value.cleaned_count == 0

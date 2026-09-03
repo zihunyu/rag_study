@@ -111,6 +111,7 @@ class HybridSearchService:
         identifier_bm25_weight: float = 2.0,
         near_duplicate_threshold: float = 0.92,
         max_chunks_per_document: int = 3,
+        max_chunks_per_section: int = 2,
         real_acceptance: bool = False,
         tracer: TracerPort | None = None,
         lifecycle_authorizer: Callable[[AuthorizedChunk, SearchContext], bool] | None = None,
@@ -129,6 +130,7 @@ class HybridSearchService:
         self.identifier_bm25_weight = identifier_bm25_weight
         self.near_duplicate_threshold = near_duplicate_threshold
         self.max_chunks_per_document = max_chunks_per_document
+        self.max_chunks_per_section = max_chunks_per_section
         self.real_acceptance = real_acceptance
         self.tracer = tracer or InMemoryTracer()
         self.lifecycle_authorizer = lifecycle_authorizer
@@ -221,13 +223,20 @@ class HybridSearchService:
         seen_checksums: set[str] = set()
         selected_texts: list[str] = []
         document_counts: Counter[str] = Counter()
+        section_counts: Counter[str] = Counter()
         for candidate, score, channels in fused:
             chunk = authorized.get(candidate.chunk_id)
+            section_key = (
+                str(chunk.locator.get("section_path", chunk.document_id))
+                if chunk is not None
+                else ""
+            )
             if (
                 chunk is None
                 or not self._currently_authorized(chunk, context)
                 or chunk.content_checksum in seen_checksums
                 or document_counts[chunk.document_id] >= self.max_chunks_per_document
+                or section_counts[section_key] >= self.max_chunks_per_section
                 or any(
                     near_duplicate(
                         chunk.retrieval_text,
@@ -241,6 +250,7 @@ class HybridSearchService:
             seen_checksums.add(chunk.content_checksum)
             selected_texts.append(chunk.retrieval_text)
             document_counts[chunk.document_id] += 1
+            section_counts[section_key] += 1
             deduplicated.append((chunk, score, channels))
             if len(deduplicated) >= self.rerank_top_k:
                 break

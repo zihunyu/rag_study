@@ -260,19 +260,7 @@ class InMemoryVerifiedAnswerCache:
 
     @staticmethod
     def _key(package: EvidencePackage) -> str:
-        payload = {
-            "tenant_id": package.tenant_id,
-            "user_id": package.user_id,
-            "permission_revision": package.permission_revision,
-            "query": " ".join(package.query.casefold().split()),
-            "index_generation_id": package.index_generation_id,
-            "retrieval_revision": package.retrieval_revision,
-            "prompt_revision": package.prompt_revision,
-            "model_revision": package.model_revision,
-            "evidence": [asdict(item) for item in package.evidence],
-        }
-        serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+        return verified_answer_cache_key(package)
 
     def get(self, package: EvidencePackage) -> DraftAnswer | None:
         with self._lock:
@@ -284,3 +272,19 @@ class InMemoryVerifiedAnswerCache:
             if len(self._values) >= self.max_entries:
                 self._values.pop(next(iter(self._values)))
             self._values[key] = draft
+
+
+def verified_answer_cache_key(package: EvidencePackage) -> str:
+    payload = {
+        "tenant_id": package.tenant_id,
+        "user_id": package.user_id,
+        "permission_revision": package.permission_revision,
+        "query": " ".join(package.query.casefold().split()),
+        "index_generation_id": package.index_generation_id,
+        "retrieval_revision": package.retrieval_revision,
+        "prompt_revision": package.prompt_revision,
+        "model_revision": package.model_revision,
+        "evidence": [asdict(item) for item in package.evidence],
+    }
+    serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()

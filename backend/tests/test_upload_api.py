@@ -117,7 +117,7 @@ def test_upload_complete_document_job_and_worker_flow(tmp_path: Path) -> None:
             (result["document_version_id"],),
         ).fetchone()
     assert dict(chunk) == {
-        "kind": "paragraph",
+        "kind": "heading",
         "chunking_revision": "node-per-chunk:g1-v1",
         "tokenizer_id": "whitespace-estimate:g1-v1",
         "status": "STAGED",

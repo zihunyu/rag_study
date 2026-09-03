@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Callable, Mapping
 from typing import Any
+
+import httpx
+import jwt
 
 from ragkb.config import EnvSettings
 from ragkb.domain.auth import RequestPrincipal
@@ -103,3 +107,68 @@ def _audiences(value: object) -> tuple[str, ...]:
 
 def unavailable_oidc_decoder(token: str, issuer: str, audience: str) -> Mapping[str, Any]:
     raise AuthenticationError("OIDC_VERIFIED_DECODER_NOT_CONFIGURED")
+
+
+class OIDCDiscoveryJWTDecoder:
+    """HTTPS discovery and cached JWKS verification for production bearer tokens."""
+
+    revision = "oidc-discovery-jwks-pyjwt:v1"
+
+    def __init__(self, settings: EnvSettings) -> None:
+        self.settings = settings
+        self._client = httpx.Client(timeout=settings.oidc_discovery_timeout_seconds)
+        self._lock = threading.Lock()
+        self._jwks: dict[str, Any] = {}
+        self._expires_at = 0.0
+
+    def close(self) -> None:
+        self._client.close()
+
+    def _refresh(self, issuer: str) -> None:
+        response = self._client.get(f"{issuer.rstrip('/')}/.well-known/openid-configuration")
+        response.raise_for_status()
+        discovery = response.json()
+        if not isinstance(discovery, Mapping) or discovery.get("issuer") != issuer:
+            raise AuthenticationError("OIDC_DISCOVERY_ISSUER_INVALID")
+        jwks_uri = discovery.get("jwks_uri")
+        if not isinstance(jwks_uri, str) or not jwks_uri.startswith("https://"):
+            raise AuthenticationError("OIDC_JWKS_URI_INVALID")
+        jwks_response = self._client.get(jwks_uri)
+        jwks_response.raise_for_status()
+        document = jwks_response.json()
+        keys = document.get("keys") if isinstance(document, Mapping) else None
+        if not isinstance(keys, list) or not keys:
+            raise AuthenticationError("OIDC_JWKS_INVALID")
+        parsed: dict[str, Any] = {}
+        for item in keys:
+            if not isinstance(item, dict) or not isinstance(item.get("kid"), str):
+                continue
+            parsed[item["kid"]] = jwt.PyJWK.from_dict(item).key
+        if not parsed:
+            raise AuthenticationError("OIDC_JWKS_INVALID")
+        self._jwks = parsed
+        self._expires_at = time.monotonic() + self.settings.oidc_jwks_cache_seconds
+
+    def __call__(self, token: str, issuer: str, audience: str) -> Mapping[str, Any]:
+        header = jwt.get_unverified_header(token)
+        algorithm = header.get("alg")
+        key_id = header.get("kid")
+        if algorithm not in self.settings.oidc_allowed_algorithms or not isinstance(key_id, str):
+            raise AuthenticationError("OIDC_TOKEN_HEADER_INVALID")
+        with self._lock:
+            if time.monotonic() >= self._expires_at or key_id not in self._jwks:
+                self._refresh(issuer)
+            key = self._jwks.get(key_id)
+        if key is None:
+            raise AuthenticationError("OIDC_SIGNING_KEY_NOT_FOUND")
+        claims = jwt.decode(
+            token,
+            key=key,
+            algorithms=list(self.settings.oidc_allowed_algorithms),
+            audience=audience,
+            issuer=issuer,
+            options={"require": ["exp", "iss", "aud", "sub"]},
+        )
+        if not isinstance(claims, Mapping):
+            raise AuthenticationError("OIDC_TOKEN_CLAIMS_INVALID")
+        return claims

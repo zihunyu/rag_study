@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import replace
 from pathlib import Path
 
+import httpx
+import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
-from ragkb.adapters.auth import AuthenticationError, OIDCJWTAuthenticator
+from ragkb.adapters.auth import (
+    AuthenticationError,
+    OIDCDiscoveryJWTDecoder,
+    OIDCJWTAuthenticator,
+)
 from ragkb.api.app import create_app
 from ragkb.config import load_env
 from ragkb.runtime_components import build_runtime_components
@@ -131,3 +139,39 @@ def test_api_uses_oidc_principal_for_401_403_and_tenant_fail_closed(tmp_path: Pa
         "bearerFormat": "JWT",
     }
     assert schema["paths"]["/api/v1/ask"]["post"]["security"] == [{"BearerAuth": []}]
+
+
+def test_production_oidc_decoder_discovers_and_caches_jwks(tmp_path: Path) -> None:
+    settings = _oidc_settings(tmp_path)
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(private_key.public_key()))
+    public_jwk.update({"kid": "key-1", "alg": "RS256", "use": "sig"})
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        if request.url.path.endswith("openid-configuration"):
+            return httpx.Response(
+                200,
+                json={
+                    "issuer": settings.oidc_issuer_url,
+                    "jwks_uri": "https://issuer.example/.well-known/jwks.json",
+                },
+                request=request,
+            )
+        return httpx.Response(200, json={"keys": [public_jwk]}, request=request)
+
+    decoder = OIDCDiscoveryJWTDecoder(settings)
+    decoder._client.close()
+    decoder._client = httpx.Client(transport=httpx.MockTransport(handler))
+    token = jwt.encode(
+        _claims("tenant-1", ["reader"]),
+        private_key,
+        algorithm="RS256",
+        headers={"kid": "key-1"},
+    )
+
+    assert decoder(token, settings.oidc_issuer_url, settings.oidc_audience)["sub"] == "oidc-user"
+    assert decoder(token, settings.oidc_issuer_url, settings.oidc_audience)["sub"] == "oidc-user"
+    assert len(requests) == 2
+    decoder.close()

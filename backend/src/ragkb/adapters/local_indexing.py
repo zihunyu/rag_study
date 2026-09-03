@@ -8,6 +8,7 @@ from collections.abc import Sequence
 
 from ragkb.adapters.retrieval_memory import LocalHybridIndex, LocalIndexRecord
 from ragkb.adapters.sqlite_retrieval import SQLiteRetrievalControlPlane
+from ragkb.application.tracing import InMemoryTracer, TracerPort
 from ragkb.contracts.ports import EmbeddingPort
 from ragkb.document_processing.chunking import ChunkingResult
 from ragkb.domain.retrieval import AuthorizedChunk, IndexCandidate, SearchContext
@@ -71,12 +72,14 @@ class SQLiteLocalIndexingSink:
         *,
         generation_id: str,
         embedding_batch_size: int = 32,
+        tracer: TracerPort | None = None,
     ) -> None:
         self.database = database
         self.control_plane = control_plane
         self.embedding = embedding
         self.generation_id = generation_id
         self.embedding_batch_size = embedding_batch_size
+        self.tracer = tracer or InMemoryTracer()
 
     def index(
         self,
@@ -90,10 +93,53 @@ class SQLiteLocalIndexingSink:
         vectors: list[Sequence[float]] = []
         for start in range(0, len(result.chunks), self.embedding_batch_size):
             batch = result.chunks[start : start + self.embedding_batch_size]
-            vectors.extend(self.embedding.embed([item.retrieval_text for item in batch]))
+            with self.tracer.span(
+                "document.embedding.batch", {"batch_size": len(batch), "provider": "local"}
+            ):
+                vectors.extend(self.embedding.embed([item.retrieval_text for item in batch]))
         if len(vectors) != len(result.chunks):
             raise ValueError("LOCAL_INDEX_EMBEDDING_COUNT_MISMATCH")
         parent_by_id = {item.id: item for item in result.parent_chunks}
+        with self.tracer.span("document.vector.write", {"chunk_count": len(result.chunks)}):
+            self._write_index(result, vectors, permission_revision)
+        projections: list[AuthorizedChunk] = []
+        for chunk in (*result.parent_chunks, *result.chunks):
+            parent = parent_by_id.get(chunk.id)
+            projections.append(
+                AuthorizedChunk(
+                    chunk_id=chunk.id,
+                    tenant_id=tenant_id,
+                    space_id=space_id,
+                    document_id=document_id,
+                    document_version_id=chunk.version_id,
+                    parent_chunk_id=None if parent is not None else chunk.parent_chunk_id,
+                    display_text=chunk.display_text,
+                    retrieval_text=chunk.retrieval_text,
+                    locator={
+                        **chunk.locator.to_dict(),
+                        "section_id": chunk.section_id,
+                        "section_path": chunk.metadata.get("section_path", "root"),
+                        "heading": chunk.metadata.get("heading", ""),
+                    },
+                    content_checksum=chunk.content_sha256,
+                    visibility="TENANT",
+                    acl_scope_tokens=(),
+                    classification_level=0,
+                    lifecycle_projection="SERVING",
+                    valid_from_epoch=0,
+                    valid_to_epoch=0,
+                    permission_revision=permission_revision,
+                    current_version=True,
+                )
+            )
+        self.control_plane.upsert_chunks(projections)
+
+    def _write_index(
+        self,
+        result: ChunkingResult,
+        vectors: Sequence[Sequence[float]],
+        permission_revision: int,
+    ) -> None:
         with self.database.transaction(immediate=True) as connection:
             version_ids = {item.version_id for item in result.chunks}
             for version_id in version_ids:
@@ -119,27 +165,3 @@ class SQLiteLocalIndexingSink:
                         time.time(),
                     ),
                 )
-        for chunk in (*result.parent_chunks, *result.chunks):
-            parent = parent_by_id.get(chunk.id)
-            self.control_plane.put_for_test(
-                AuthorizedChunk(
-                    chunk_id=chunk.id,
-                    tenant_id=tenant_id,
-                    space_id=space_id,
-                    document_id=document_id,
-                    document_version_id=chunk.version_id,
-                    parent_chunk_id=None if parent is not None else chunk.parent_chunk_id,
-                    display_text=chunk.display_text,
-                    retrieval_text=chunk.retrieval_text,
-                    locator=chunk.locator.to_dict(),
-                    content_checksum=chunk.content_sha256,
-                    visibility="TENANT",
-                    acl_scope_tokens=(),
-                    classification_level=0,
-                    lifecycle_projection="SERVING",
-                    valid_from_epoch=0,
-                    valid_to_epoch=0,
-                    permission_revision=permission_revision,
-                    current_version=True,
-                )
-            )

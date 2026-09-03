@@ -1,378 +1,58 @@
-"""Explicitly approved Zilliz G2 provisioning and synthetic validation."""
+"""Explicitly approved Zilliz/Milvus provisioning orchestration."""
 
 from __future__ import annotations
 
 import time
-import uuid
 from collections.abc import Callable
 from typing import Any
 
-from pymilvus import DataType, Function, FunctionType, MilvusClient
+from pymilvus import MilvusClient
 
-from ragkb.adapters.vector_indexing import ZillizSafeProjectionWriter
 from ragkb.adapters.zilliz import ZillizCloudAdapter, required_zilliz_fields
+from ragkb.adapters.zilliz_lifecycle_probe import (
+    ZILLIZ_SAFE_WRITE_BATCH_SIZE,
+    ZillizSyntheticCleanupFailed,
+    ZillizSyntheticEntityNotVisible,
+    ZillizSyntheticLifecycleError,
+    run_synthetic_lifecycle,
+    synthetic_records,
+)
+from ragkb.adapters.zilliz_readiness import (
+    ZillizCollectionNotReady,
+    request_collection_load_if_needed,
+    wait_for_collection_ready,
+)
+from ragkb.adapters.zilliz_schema import (
+    ZillizCollectionCapacityError,
+    ZillizSchemaConflict,
+    build_sdk_schema,
+    database_creation_required,
+    database_switch_required,
+)
 from ragkb.application.search import rrf_fuse
 from ragkb.config import EnvSettings
 from ragkb.domain.retrieval import SearchContext
 from ragkb.infrastructure.zilliz_plan import build_zilliz_collection_plan
 
 CREATE_APPROVAL = "ZILLIZ_COLLECTION_CREATE_APPROVED"
-ZILLIZ_SAFE_WRITE_BATCH_SIZE = 256
 
-
-class ZillizSchemaConflict(RuntimeError):
-    pass
-
-
-class ZillizCollectionCapacityError(RuntimeError):
-    pass
-
-
-class ZillizCollectionNotReady(RuntimeError):
-    pass
-
-
-class ZillizSyntheticEntityNotVisible(RuntimeError):
-    pass
-
-
-class ZillizSyntheticCleanupFailed(RuntimeError):
-    pass
-
-
-class ZillizSyntheticLifecycleError(RuntimeError):
-    def __init__(
-        self,
-        *,
-        stage: str,
-        error_type: str,
-        confirmed_count: int,
-        cleaned_count: int,
-        remaining_count: int,
-        error_code: str,
-    ) -> None:
-        super().__init__("ZILLIZ_SYNTHETIC_LIFECYCLE_FAILED")
-        self.stage = stage
-        self.error_type = error_type
-        self.confirmed_count = confirmed_count
-        self.cleaned_count = cleaned_count
-        self.remaining_count = remaining_count
-        self.error_code = error_code
-
-
-def database_creation_required(settings: EnvSettings, listed_databases: set[str]) -> bool:
-    return (
-        settings.zilliz_cloud_database.casefold() != "default"
-        and settings.zilliz_cloud_database not in listed_databases
-    )
-
-
-def database_switch_required(settings: EnvSettings) -> bool:
-    return settings.zilliz_cloud_database.casefold() != "default"
-
-
-def _datatype(name: str) -> DataType:
-    return {
-        "VARCHAR": DataType.VARCHAR,
-        "ARRAY": DataType.ARRAY,
-        "INT8": DataType.INT8,
-        "INT32": DataType.INT32,
-        "INT64": DataType.INT64,
-        "FLOAT_VECTOR": DataType.FLOAT_VECTOR,
-        "SPARSE_FLOAT_VECTOR": DataType.SPARSE_FLOAT_VECTOR,
-    }[name]
-
-
-def build_sdk_schema(client: Any, settings: EnvSettings) -> tuple[Any, Any]:
-    plan = build_zilliz_collection_plan(settings)
-    schema = client.create_schema(auto_id=False, enable_dynamic_field=False)
-    for field in plan["schema"]["fields"]:
-        field_name = str(field["name"])
-        field_type = str(field["type"])
-        kwargs = {
-            key: value
-            for key, value in field.items()
-            if key not in {"name", "type", "primary", "dimension"}
-        }
-        if field.get("primary"):
-            kwargs["is_primary"] = True
-            kwargs["auto_id"] = False
-        if field_type == "FLOAT_VECTOR":
-            kwargs["dim"] = int(field["dimension"])
-        if field_type == "ARRAY":
-            kwargs["element_type"] = _datatype(str(field["element_type"]))
-        schema.add_field(field_name=field_name, datatype=_datatype(field_type), **kwargs)
-    schema.add_function(
-        Function(
-            name="retrieval_text_bm25",
-            function_type=FunctionType.BM25,
-            input_field_names=["retrieval_text"],
-            output_field_names=[settings.zilliz_cloud_sparse_field],
-        )
-    )
-    index_params = client.prepare_index_params()
-    for index in plan["schema"]["indexes"]:
-        kwargs = {
-            key: value
-            for key, value in index.items()
-            if key not in {"field", "index_type", "index_name"}
-        }
-        index_params.add_index(
-            field_name=str(index["field"]),
-            index_type=str(index["index_type"]),
-            index_name=str(index["index_name"]),
-            **kwargs,
-        )
-    return schema, index_params
-
-
-def wait_for_collection_ready(
-    client: Any,
-    settings: EnvSettings,
-    *,
-    total_timeout_seconds: float = 30,
-    max_polls: int = 20,
-    poll_interval_seconds: float = 1,
-    sleep: Callable[[float], None] = time.sleep,
-    monotonic: Callable[[], float] = time.monotonic,
-) -> dict[str, object]:
-    if total_timeout_seconds <= 0 or max_polls < 1 or poll_interval_seconds < 0:
-        raise ValueError("readiness timeout, polls and interval are invalid")
-    expected_indexes = {
-        str(index["index_name"])
-        for index in build_zilliz_collection_plan(settings)["schema"]["indexes"]
-    }
-    deadline = monotonic() + total_timeout_seconds
-    last_loaded = False
-    last_index_count = 0
-    for poll in range(1, max_polls + 1):
-        load_state = client.get_load_state(
-            collection_name=settings.zilliz_cloud_collection,
-            timeout=settings.zilliz_cloud_timeout_seconds,
-        )
-        state = str(load_state.get("state", load_state.get("load_state", "")))
-        last_loaded = state.casefold().endswith("loaded")
-        indexes = set(
-            map(
-                str,
-                client.list_indexes(collection_name=settings.zilliz_cloud_collection),
-            )
-        )
-        last_index_count = len(indexes)
-        if last_loaded and expected_indexes.issubset(indexes):
-            return {
-                "ready": True,
-                "poll_count": poll,
-                "loaded": True,
-                "index_count": len(indexes),
-                "expected_index_count": len(expected_indexes),
-                "mutating_call_performed": False,
-            }
-        now = monotonic()
-        if poll >= max_polls or now >= deadline:
-            break
-        sleep(min(poll_interval_seconds, max(0.0, deadline - now)))
-    raise ZillizCollectionNotReady(
-        f"ZILLIZ_COLLECTION_NOT_READY:loaded={last_loaded}:indexes={last_index_count}"
-    )
-
-
-def request_collection_load_if_needed(client: Any, settings: EnvSettings) -> str:
-    load_state = client.get_load_state(
-        collection_name=settings.zilliz_cloud_collection,
-        timeout=settings.zilliz_cloud_timeout_seconds,
-    )
-    state = str(load_state.get("state", load_state.get("load_state", "")))
-    if state.casefold().endswith("loaded"):
-        return "already_loaded"
-    try:
-        client.load(
-            collection_name=settings.zilliz_cloud_collection,
-            timeout=settings.zilliz_cloud_timeout_seconds,
-        )
-    except AttributeError:
-        return "load_return_attribute_error_requires_readiness_confirmation"
-    return "load_requested"
-
-
-def run_synthetic_lifecycle(
-    client: Any,
-    settings: EnvSettings,
-    records: list[dict[str, Any]],
-    validate: Callable[[tuple[str, ...]], dict[str, object]],
-    **readiness_options: Any,
-) -> dict[str, object]:
-    confirmed_ids: list[str] = []
-    cleaned_count = 0
-    remaining_count = 0
-    stage = "wait_collection_ready"
-    primary_error: Exception | None = None
-    validation: dict[str, object] | None = None
-    readiness: dict[str, object] | None = None
-    try:
-        readiness = wait_for_collection_ready(client, settings, **readiness_options)
-        stage = "insert_synthetic_batches"
-        inserted_ids = ZillizSafeProjectionWriter(client, settings).insert_records(records)
-        stage = "confirm_synthetic_batch"
-        visible = client.get(
-            collection_name=settings.zilliz_cloud_collection,
-            ids=list(inserted_ids),
-            output_fields=["zilliz_pk"],
-            timeout=settings.zilliz_cloud_timeout_seconds,
-            consistency_level=settings.zilliz_cloud_security_consistency_level,
-        )
-        visible_ids = {str(item.get("zilliz_pk", "")) for item in visible}
-        if not set(inserted_ids).issubset(visible_ids):
-            raise ZillizSyntheticEntityNotVisible(
-                "ZILLIZ_SYNTHETIC_ENTITY_NOT_VISIBLE_AFTER_INSERT"
-            )
-        confirmed_ids.extend(inserted_ids)
-        stage = "validate_search"
-        validation = validate(tuple(confirmed_ids))
-    except Exception as error:
-        primary_error = error
-    finally:
-        if confirmed_ids:
-            try:
-                client.delete(
-                    collection_name=settings.zilliz_cloud_collection,
-                    ids=confirmed_ids,
-                    timeout=settings.zilliz_cloud_timeout_seconds,
-                )
-                cleaned_count = len(confirmed_ids)
-                remaining = client.get(
-                    collection_name=settings.zilliz_cloud_collection,
-                    ids=confirmed_ids,
-                    output_fields=["zilliz_pk"],
-                    timeout=settings.zilliz_cloud_timeout_seconds,
-                    consistency_level=settings.zilliz_cloud_security_consistency_level,
-                )
-                remaining_count = len(remaining)
-                if remaining_count:
-                    raise ZillizSyntheticCleanupFailed("ZILLIZ_SYNTHETIC_CLEANUP_NOT_CONFIRMED")
-            except Exception as cleanup_error:
-                if primary_error is None:
-                    primary_error = cleanup_error
-                    stage = "cleanup_confirmed_synthetic"
-    if primary_error is not None:
-        error_code = (
-            "ZILLIZ_COLLECTION_NOT_READY"
-            if isinstance(primary_error, ZillizCollectionNotReady)
-            else "ZILLIZ_SYNTHETIC_LIFECYCLE_FAILED"
-        )
-        raise ZillizSyntheticLifecycleError(
-            stage=stage,
-            error_type=type(primary_error).__name__,
-            confirmed_count=len(confirmed_ids),
-            cleaned_count=cleaned_count,
-            remaining_count=remaining_count,
-            error_code=error_code,
-        ) from primary_error
-    if readiness is None or validation is None:
-        raise RuntimeError("synthetic lifecycle completed without evidence")
-    return {
-        "readiness": readiness,
-        "validation": validation,
-        "confirmed_ids": tuple(confirmed_ids),
-        "inserted_count": len(confirmed_ids),
-        "cleaned_count": cleaned_count,
-        "remaining_count": remaining_count,
-        "safe_batch_size": ZILLIZ_SAFE_WRITE_BATCH_SIZE,
-    }
-
-
-def _synthetic_records(settings: EnvSettings) -> tuple[list[dict[str, Any]], dict[str, str]]:
-    marker = f"__ragkb_g2_auto__{uuid.uuid4().hex[:12]}"
-    ids = {
-        "authorized": f"{marker}_authorized",
-        "denied": f"{marker}_denied",
-        "expired": f"{marker}_expired",
-        "wrong_generation": f"{marker}_wrong_generation",
-    }
-    now = int(time.time())
-    dimension = settings.zilliz_cloud_dimension
-
-    def vector(position: int) -> list[float]:
-        values = [0.0] * dimension
-        values[position % dimension] = 1.0
-        return values
-
-    def record(
-        key: str,
-        text: str,
-        *,
-        acl: list[str],
-        generation: str = f"{marker}_generation",
-        valid_to: int = 0,
-        vector_position: int,
-    ) -> dict[str, Any]:
-        entity_id = ids[key]
-        return {
-            "zilliz_pk": entity_id,
-            "tenant_id": f"{marker}_tenant",
-            "space_id": f"{marker}_space",
-            "corpus_id": f"{marker}_corpus",
-            "document_id": f"{entity_id}_document",
-            "document_version_id": f"{entity_id}_version",
-            "chunk_id": entity_id,
-            "parent_chunk_id": "",
-            "chunk_type": "paragraph",
-            "language": "zh",
-            "valid_from_epoch": now - 60,
-            "valid_to_epoch": valid_to,
-            "lifecycle_projection": "SERVING",
-            "visibility": "RESTRICTED",
-            "acl_scope_tokens": acl,
-            "permission_revision": 12,
-            "classification_level": 1,
-            "authority_rank": 1,
-            "category_ids": [f"{marker}_category"],
-            "tag_ids": ["automated-test"],
-            "product_ids": [f"{marker}_product"],
-            "applicable_versions": ["test-v1"],
-            "region_codes": ["test-region"],
-            "retrieval_text": text,
-            settings.zilliz_cloud_dense_field: vector(vector_position),
-            "index_generation_id": generation,
-            "analyzer_revision": settings.zilliz_cloud_bm25_analyzer,
-            "content_checksum": uuid.uuid5(uuid.NAMESPACE_URL, entity_id).hex * 2,
-        }
-
-    records = [
-        record(
-            "authorized",
-            "自动化测试设备保修期为三年",
-            acl=[f"{marker}_reader"],
-            vector_position=0,
-        ),
-        record(
-            "denied",
-            "自动化测试机密设备保修期为十年",
-            acl=[f"{marker}_secret"],
-            vector_position=1,
-        ),
-        record(
-            "expired",
-            "自动化测试过期设备保修期为一年",
-            acl=[f"{marker}_reader"],
-            valid_to=now - 1,
-            vector_position=2,
-        ),
-        record(
-            "wrong_generation",
-            "自动化测试旧代际设备保修期为五年",
-            acl=[f"{marker}_reader"],
-            generation=f"{marker}_old_generation",
-            vector_position=3,
-        ),
-    ]
-    return records, {
-        **ids,
-        "tenant": f"{marker}_tenant",
-        "space": f"{marker}_space",
-        "generation": f"{marker}_generation",
-        "reader": f"{marker}_reader",
-    }
+__all__ = [
+    "CREATE_APPROVAL",
+    "ZILLIZ_SAFE_WRITE_BATCH_SIZE",
+    "ZillizCollectionCapacityError",
+    "ZillizCollectionNotReady",
+    "ZillizSchemaConflict",
+    "ZillizSyntheticCleanupFailed",
+    "ZillizSyntheticEntityNotVisible",
+    "ZillizSyntheticLifecycleError",
+    "build_sdk_schema",
+    "database_creation_required",
+    "database_switch_required",
+    "provision_and_validate",
+    "request_collection_load_if_needed",
+    "run_synthetic_lifecycle",
+    "wait_for_collection_ready",
+]
 
 
 def provision_and_validate(
@@ -430,7 +110,7 @@ def provision_and_validate(
     load_action = request_collection_load_if_needed(client, settings)
     operations.append(load_action)
 
-    records, ids = _synthetic_records(settings)
+    records, ids = synthetic_records(settings)
     inserted_ids = [str(record["zilliz_pk"]) for record in records]
 
     def validate_synthetic(confirmed_ids: tuple[str, ...]) -> dict[str, object]:
@@ -467,16 +147,14 @@ def provision_and_validate(
             "security_consistency": settings.zilliz_cloud_security_consistency_level,
             "watermark_ready": search_adapter.observed_security_watermark(context) >= 12,
         }
-        if not all(
-            validation[key]
-            for key in (
-                "authorized_id_returned",
-                "denied_id_filtered",
-                "expired_id_filtered",
-                "wrong_generation_filtered",
-                "watermark_ready",
-            )
-        ):
+        required = (
+            "authorized_id_returned",
+            "denied_id_filtered",
+            "expired_id_filtered",
+            "wrong_generation_filtered",
+            "watermark_ready",
+        )
+        if not all(validation[key] for key in required):
             raise RuntimeError("ZILLIZ_SYNTHETIC_VALIDATION_FAILED")
         return validation
 
@@ -492,8 +170,8 @@ def provision_and_validate(
     operations.extend(
         (
             "wait_collection_ready",
-            "insert_synthetic_one_by_one",
-            "strong_confirm_each_insert",
+            "upsert_synthetic_batches",
+            "strong_confirm_batch",
             "search_bm25",
             "search_dense",
             "application_rrf",
@@ -526,7 +204,7 @@ def provision_and_validate(
         "possible_costs": [
             "database/collection metadata",
             "index build and storage",
-            "four synthetic inserts",
+            "four synthetic upserts",
             "two searches",
             "four synthetic deletes",
         ],

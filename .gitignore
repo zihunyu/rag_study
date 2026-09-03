@@ -16,6 +16,8 @@ htmlcov/
 node_modules/
 dist/
 coverage/
+test-results/
+playwright-report/
 
 # Local runtime data
 data/

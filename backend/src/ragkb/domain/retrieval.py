@@ -87,5 +87,20 @@ class SearchResult:
     warnings: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class RetrievalRelease:
+    tenant_id: str
+    space_id: str
+    active_generation_id: str
+    active_permission_revision: int
+    security_watermark: int
+
+    def __post_init__(self) -> None:
+        if not self.tenant_id or not self.space_id or not self.active_generation_id:
+            raise ValueError("retrieval release identifiers are required")
+        if self.active_permission_revision < 0 or self.security_watermark < 0:
+            raise ValueError("retrieval release revisions must be non-negative")
+
+
 class SecurityWatermarkNotReady(RetrievalFailClosed):
     pass

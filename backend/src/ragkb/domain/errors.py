@@ -43,6 +43,17 @@ class SchemaMismatch(RAGError):
     pass
 
 
+class ProviderAuthenticationError(RAGError):
+    pass
+
+
+class VectorBatchWriteError(ProviderUnavailable):
+    def __init__(self, code: str, *, batch_number: int, chunk_ids: tuple[str, ...]) -> None:
+        super().__init__(code)
+        self.batch_number = batch_number
+        self.chunk_ids = chunk_ids
+
+
 class RetrievalFailClosed(RAGError):
     """Retrieval or permission evaluation could not safely produce evidence."""
 
