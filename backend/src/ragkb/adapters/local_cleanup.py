@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+from typing import Protocol
+
 from ragkb.adapters.local_storage import LocalFileStorage
 from ragkb.contracts.lifecycle import CleanupExecutionResult
-from ragkb.infrastructure.upload_repository import SQLiteUploadRepository
+
+
+class LocalContentRepositoryPort(Protocol):
+    def list_local_content_lineage(self, document_id: str) -> tuple[tuple[str, str], ...]: ...
 
 
 class LocalOriginalCleanupExecutor:
     revision = "local-content-lineage-cleanup:g3-v2"
     allowed_partitions = frozenset({"original", "artifacts", "quarantine", "temp"})
 
-    def __init__(self, storage: LocalFileStorage, repository: SQLiteUploadRepository) -> None:
+    def __init__(self, storage: LocalFileStorage, repository: LocalContentRepositoryPort) -> None:
         self.storage = storage
         self.repository = repository
 

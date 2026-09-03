@@ -39,6 +39,8 @@ class QueueStateError(RuntimeError):
 
 
 class PersistentJobQueuePort(Protocol):
+    revision: str
+
     def enqueue(
         self,
         operation: str,

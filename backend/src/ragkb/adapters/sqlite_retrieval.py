@@ -5,7 +5,12 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Mapping, Sequence
 
-from ragkb.domain.retrieval import AuthorizedChunk, RetrievalRelease, SearchContext
+from ragkb.domain.retrieval import (
+    AuthorizedChunk,
+    RetrievalRelease,
+    SearchContext,
+    SecurityProjection,
+)
 from ragkb.infrastructure.sqlite import SQLiteDatabase
 
 
@@ -163,6 +168,31 @@ class SQLiteRetrievalControlPlane:
         with self.database.transaction(immediate=True) as connection:
             connection.execute(
                 "DELETE FROM retrieval_projections WHERE document_id = ?", (document_id,)
+            )
+
+    def set_version_security_projection(
+        self, document_id: str, version_id: str, projection: SecurityProjection
+    ) -> None:
+        with self.database.transaction(immediate=True) as connection:
+            connection.execute(
+                """
+                UPDATE retrieval_projections
+                SET visibility = ?, acl_scope_tokens_json = ?, classification_level = ?,
+                    lifecycle_projection = ?, valid_from_epoch = ?, valid_to_epoch = ?,
+                    permission_revision = ?, current_version = 0
+                WHERE document_id = ? AND document_version_id = ?
+                """,
+                (
+                    projection.visibility,
+                    json.dumps(list(projection.acl_scope_tokens), sort_keys=True),
+                    projection.classification_level,
+                    projection.lifecycle_projection,
+                    projection.valid_from_epoch,
+                    projection.valid_to_epoch,
+                    projection.permission_revision,
+                    document_id,
+                    version_id,
+                ),
             )
 
 

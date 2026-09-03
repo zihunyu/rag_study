@@ -18,6 +18,8 @@ def test_acceptance_requires_signature_freshness_and_passing_thresholds(tmp_path
         "embedding_revision": "embed-v1",
         "reranker_revision": "rerank-v1",
         "model_revision": "llm-v1",
+        "verifier_revision": "verifier-v1",
+        "tokenizer_revision": "tokenizer-v1",
         "prompt_revision": "prompt-v1",
         "index_generation_id": "generation-v1",
         "dataset_revision": "gold-v1",
@@ -30,6 +32,8 @@ def test_acceptance_requires_signature_freshness_and_passing_thresholds(tmp_path
         "quality_report_sha256": "a" * 64,
         "source_commit": "b" * 40,
         "ci_run_id": "ci-1",
+        "performance_scope": [1, 5, 20],
+        "budget_report_sha256": "c" * 64,
     }
     payload = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
     digest = hashlib.sha256(payload).hexdigest()

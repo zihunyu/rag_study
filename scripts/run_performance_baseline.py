@@ -22,8 +22,8 @@ def _numbers(value: str) -> tuple[int, ...]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--documents", type=_numbers, default=(10, 100))
-    parser.add_argument("--concurrency", type=_numbers, default=(1, 10, 50))
+    parser.add_argument("--documents", type=_numbers, default=(1, 5, 20))
+    parser.add_argument("--concurrency", type=_numbers, default=(1, 2))
     parser.add_argument("--output", type=Path, default=Path("artifacts/performance/local.json"))
     args = parser.parse_args()
     report = run_representative_system_paths(

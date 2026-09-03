@@ -11,6 +11,46 @@ SearchChannel = Literal["bm25", "dense"]
 
 
 @dataclass(frozen=True)
+class SecurityProjection:
+    """Immutable, review-bound authorization facts copied into every search projection."""
+
+    visibility: Literal["TENANT", "RESTRICTED"]
+    classification_level: int
+    acl_scope_tokens: tuple[str, ...]
+    lifecycle_projection: str
+    permission_revision: int
+    valid_from_epoch: int
+    valid_to_epoch: int = 0
+
+    def __post_init__(self) -> None:
+        if self.classification_level < 0 or self.classification_level > 3:
+            raise ValueError("classification level must be in 0..3")
+        if self.permission_revision < 1:
+            raise ValueError("permission revision must be positive")
+        if self.valid_from_epoch < 0 or self.valid_to_epoch < 0:
+            raise ValueError("security validity must be non-negative")
+        if self.valid_to_epoch and self.valid_to_epoch <= self.valid_from_epoch:
+            raise ValueError("security validity end must be after its start")
+        if self.visibility == "RESTRICTED" and not self.acl_scope_tokens:
+            # Empty ACL is deliberately allowed only for the unapproved fail-closed projection.
+            if self.lifecycle_projection not in {"DRAFT", "STAGED"}:
+                raise ValueError("serving restricted content requires at least one ACL scope")
+        if self.visibility == "TENANT" and self.acl_scope_tokens:
+            raise ValueError("tenant-visible content cannot carry restricted ACL scopes")
+
+    @classmethod
+    def unapproved(cls, *, permission_revision: int = 1, now: int = 0) -> SecurityProjection:
+        return cls(
+            visibility="RESTRICTED",
+            classification_level=3,
+            acl_scope_tokens=(),
+            lifecycle_projection="STAGED",
+            permission_revision=permission_revision,
+            valid_from_epoch=now,
+        )
+
+
+@dataclass(frozen=True)
 class SearchContext:
     tenant_id: str
     space_ids: tuple[str, ...]

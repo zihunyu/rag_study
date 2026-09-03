@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import secrets
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,9 +16,9 @@ from ragkb.adapters.auth import (
     OIDCJWTAuthenticator,
 )
 from ragkb.adapters.external_cleanup import (
-    EmptyRedisDocumentCleanupExecutor,
     ExternalProjectionCleanupExecutor,
     ProjectionInspectorPort,
+    RedisDocumentCleanupExecutor,
 )
 from ragkb.adapters.local_cleanup import LocalOriginalCleanupExecutor
 from ragkb.adapters.local_indexing import SQLiteLocalHybridIndex, SQLiteLocalIndexingSink
@@ -26,11 +27,18 @@ from ragkb.adapters.mineru_pool import MinerUTokenPool
 from ragkb.adapters.model_http import (
     HttpxJsonTransport,
     OpenAICompatibleBufferedGenerator,
+    OpenAICompatibleClaimVerifier,
     OpenAICompatibleEmbeddingAdapter,
     OpenAICompatibleRerankerAdapter,
 )
 from ragkb.adapters.mysql_control import MySQLControlPlaneAdapter
+from ragkb.adapters.mysql_governance import MySQLGovernanceRepository
+from ragkb.adapters.mysql_index_saga import MySQLIndexSagaLedger
+from ragkb.adapters.mysql_lifecycle import MySQLLifecycleStore
+from ragkb.adapters.mysql_rag import MySQLRAGRunRepository
+from ragkb.adapters.mysql_references import MySQLReferenceStore
 from ragkb.adapters.mysql_retrieval import MySQLRetrievalControlPlane
+from ragkb.adapters.mysql_upload import MySQLUploadRepository
 from ragkb.adapters.provider_http import MinerUHttpTransport
 from ragkb.adapters.publication_readiness import SQLitePublicationReadiness
 from ragkb.adapters.rag_cache import RedisVerifiedAnswerCache
@@ -39,6 +47,8 @@ from ragkb.adapters.rag_stubs import (
     LifecycleAwareFinalPermission,
 )
 from ragkb.adapters.redis_cache import RedisCacheRateLimitAdapter
+from ragkb.adapters.redis_queue import RedisPersistentJobQueue
+from ragkb.adapters.repository_readiness import RepositoryPublicationReadiness
 from ragkb.adapters.retrieval_projection import CompositeDocumentProjection
 from ragkb.adapters.sqlite_retrieval import (
     LocalRetrievalReleaseProvider,
@@ -49,15 +59,21 @@ from ragkb.adapters.zilliz import MilvusHybridAdapter, ZillizChunkIndexingSink, 
 from ragkb.application.acceptance import load_acceptance_evidence
 from ragkb.application.evidence import SearchBackedEvidenceProvider
 from ragkb.application.governance import GovernanceService
-from ragkb.application.lifecycle import LifecycleService
+from ragkb.application.lifecycle import InMemoryLifecycleStore, LifecycleService
 from ragkb.application.observability import LocalObservabilityService
 from ragkb.application.provider_runners import MinerUExecutionRunner
-from ragkb.application.qa import InMemoryVerifiedAnswerCache, TrustedQAService
+from ragkb.application.qa import (
+    CompositeClaimVerifier,
+    DeterministicClaimVerifier,
+    InMemoryVerifiedAnswerCache,
+    TrustedQAService,
+)
 from ragkb.application.search import HybridSearchService
 from ragkb.application.tracing import TracerPort, build_runtime_tracer
 from ragkb.application.uploads import UploadService
 from ragkb.config import EnvSettings, build_env_report, find_repository_root, load_env
 from ragkb.contracts.auth import AuthenticatorPort
+from ragkb.contracts.jobs import PersistentJobQueuePort
 from ragkb.contracts.lifecycle import CleanupExecutorPort
 from ragkb.contracts.ports import (
     ChunkerPort,
@@ -68,19 +84,21 @@ from ragkb.contracts.ports import (
     RetrievalProjectionPort,
     RetrievalReleasePort,
 )
-from ragkb.contracts.rag import BufferedGenerationPort
+from ragkb.contracts.rag import BufferedGenerationPort, ClaimVerifierPort, RAGRunRepositoryPort
 from ragkb.document_processing.chunking import (
     ChunkingConfig,
     EmbeddingSemanticBoundaryScorer,
     SemanticChunker,
     TokenAwareChunker,
+    TokenizerArtifact,
+    UnicodeApproximateTokenizer,
 )
 from ragkb.document_processing.mineru_parser import MinerUProductionParser
 from ragkb.document_processing.parsers import FallbackParser, ParserRouter
 from ragkb.document_processing.text_parsers import TextPDFParser
 from ragkb.engineering_security.file_validation import UploadFileValidator
 from ragkb.engineering_security.malware import SignatureMalwareScanner
-from ragkb.engineering_security.references import HMACReferenceSigner
+from ragkb.engineering_security.references import HMACReferenceSigner, ReferenceStorePort
 from ragkb.infrastructure.governance_repository import SQLiteGovernanceRepository
 from ragkb.infrastructure.lifecycle_repository import SQLiteLifecycleStore
 from ragkb.infrastructure.provider_checkpoints import JsonCheckpointStore
@@ -97,24 +115,25 @@ class RuntimeComponents:
     repository_root: Path
     storage: LocalFileStorage
     database: SQLiteDatabase
-    repository: SQLiteUploadRepository
-    queue: SQLitePersistentJobQueue
+    repository: SQLiteUploadRepository | MySQLUploadRepository
+    queue: PersistentJobQueuePort
     uploads: UploadService
     parser_router: ParserRouter
     search_service: HybridSearchService
     qa_service: TrustedQAService
-    rag_repository: SQLiteRAGRunRepository
+    rag_repository: RAGRunRepositoryPort
     reference_signer: HMACReferenceSigner
-    reference_store: SQLiteReferenceStore
+    reference_store: ReferenceStorePort
     authenticator: AuthenticatorPort
     lifecycle_service: LifecycleService
-    lifecycle_store: SQLiteLifecycleStore
-    governance_repository: SQLiteGovernanceRepository
+    lifecycle_store: InMemoryLifecycleStore
+    governance_repository: SQLiteGovernanceRepository | MySQLGovernanceRepository
     governance_service: GovernanceService
     observability: LocalObservabilityService
     chunker: ChunkerPort
     indexing_sink: SQLiteLocalIndexingSink | ZillizChunkIndexingSink
     model_transport: HttpxJsonTransport | None
+    provider_transports: tuple[HttpxJsonTransport, ...]
     tracer: TracerPort
     retrieval_release: RetrievalReleasePort
     tenant_id: str
@@ -150,7 +169,16 @@ def build_runtime_components(
         configured_database if configured_database.is_absolute() else root / configured_database
     )
     database = SQLiteDatabase(resolved_database)
-    governance_repository = SQLiteGovernanceRepository(database)
+    mysql_control: MySQLControlPlaneAdapter | None = (
+        MySQLControlPlaneAdapter(settings) if settings.rag_runtime_profile == "production" else None
+    )
+    governance_repository: SQLiteGovernanceRepository | MySQLGovernanceRepository = (
+        MySQLGovernanceRepository(
+            cast(MySQLControlPlaneAdapter, mysql_control), settings.oidc_tenant_id
+        )
+        if settings.rag_runtime_profile == "production"
+        else SQLiteGovernanceRepository(database)
+    )
     governance_service = GovernanceService(governance_repository)
     tracer, local_tracer = build_runtime_tracer(
         enabled=settings.otel_enabled,
@@ -158,8 +186,21 @@ def build_runtime_components(
         service_name=settings.app_name,
     )
     observability = LocalObservabilityService(governance_repository, local_tracer)
-    repository = SQLiteUploadRepository(database)
-    queue = SQLitePersistentJobQueue(database)
+    repository: SQLiteUploadRepository | MySQLUploadRepository = (
+        MySQLUploadRepository(
+            cast(MySQLControlPlaneAdapter, mysql_control),
+            settings.oidc_tenant_id,
+            settings.retrieval_active_generation_id,
+        )
+        if settings.rag_runtime_profile == "production"
+        else SQLiteUploadRepository(database)
+    )
+    redis_adapter: RedisCacheRateLimitAdapter | None = None
+    if settings.rag_runtime_profile == "production":
+        redis_adapter = RedisCacheRateLimitAdapter(settings)
+        queue: PersistentJobQueuePort = RedisPersistentJobQueue(redis_adapter)
+    else:
+        queue = SQLitePersistentJobQueue(database)
     tenant_id, space_id = repository.ensure_local_hierarchy(
         settings.auth_local_tenant,
         "general_knowledge",
@@ -182,7 +223,7 @@ def build_runtime_components(
     )
     control_plane: RetrievalProjectionPort
     if settings.rag_runtime_profile == "production":
-        control_plane = MySQLRetrievalControlPlane(MySQLControlPlaneAdapter(settings))
+        control_plane = MySQLRetrievalControlPlane(cast(MySQLControlPlaneAdapter, mysql_control))
     else:
         control_plane = SQLiteRetrievalControlPlane(database)
     model_transport: HttpxJsonTransport | None = None
@@ -190,16 +231,27 @@ def build_runtime_components(
     reranker: RerankerPort
     index: HybridIndexPort
     generator: BufferedGenerationPort
+    verifier: ClaimVerifierPort
+    provider_transports: tuple[HttpxJsonTransport, ...] = ()
     if settings.rag_runtime_profile == "production":
+        embedding_transport = HttpxJsonTransport(settings)
+        reranker_transport = HttpxJsonTransport(settings)
         model_transport = HttpxJsonTransport(settings)
+        verifier_transport = HttpxJsonTransport(settings)
+        provider_transports = (
+            embedding_transport,
+            reranker_transport,
+            model_transport,
+            verifier_transport,
+        )
         embedding = OpenAICompatibleEmbeddingAdapter(
             settings,
-            transport=model_transport,
+            transport=embedding_transport,
             external_call_approved=settings.real_provider_calls_enabled,
         )
         reranker = OpenAICompatibleRerankerAdapter(
             settings,
-            transport=model_transport,
+            transport=reranker_transport,
             external_call_approved=settings.real_provider_calls_enabled,
         )
         vector_adapter = (
@@ -218,6 +270,14 @@ def build_runtime_components(
             transport=model_transport,
             external_call_approved=settings.real_provider_calls_enabled,
         )
+        verifier = CompositeClaimVerifier(
+            DeterministicClaimVerifier(settings.llm_allowed_output_domains),
+            OpenAICompatibleClaimVerifier(
+                settings,
+                transport=verifier_transport,
+                external_call_approved=settings.real_provider_calls_enabled,
+            ),
+        )
         indexing_sink: SQLiteLocalIndexingSink | ZillizChunkIndexingSink = ZillizChunkIndexingSink(
             index,
             control_plane,
@@ -225,12 +285,14 @@ def build_runtime_components(
             settings,
             generation_id=settings.retrieval_active_generation_id,
             tracer=tracer,
+            saga=MySQLIndexSagaLedger(cast(MySQLControlPlaneAdapter, mysql_control)),
         )
     else:
         embedding = DeterministicEmbedding()
         reranker = DeterministicReranker()
         index = SQLiteLocalHybridIndex(database)
         generator = DeterministicBufferedGenerator()
+        verifier = DeterministicClaimVerifier(settings.llm_allowed_output_domains)
         indexing_sink = SQLiteLocalIndexingSink(
             database,
             cast(SQLiteRetrievalControlPlane, control_plane),
@@ -239,12 +301,19 @@ def build_runtime_components(
             embedding_batch_size=settings.embedding_batch_size,
             tracer=tracer,
         )
-    lifecycle_store = SQLiteLifecycleStore(database)
+    lifecycle_store: InMemoryLifecycleStore = (
+        MySQLLifecycleStore(cast(MySQLControlPlaneAdapter, mysql_control), tenant_id)
+        if settings.rag_runtime_profile == "production"
+        else SQLiteLifecycleStore(database)
+    )
     lifecycle_projection = (
         CompositeDocumentProjection(
             (
-                cast(DocumentProjectionPort, control_plane),
+                # External vector state moves first. MySQL release/watermark is authoritative
+                # and advances only after the vector mutation succeeds, so partial failure
+                # remains fail-closed.
                 cast(DocumentProjectionPort, index),
+                cast(DocumentProjectionPort, control_plane),
             )
         )
         if settings.rag_runtime_profile == "production"
@@ -266,14 +335,20 @@ def build_runtime_components(
                     cast(ProjectionInspectorPort, index),
                     store_name="zilliz",
                 ),
-                "redis": EmptyRedisDocumentCleanupExecutor(),
+                "redis": RedisDocumentCleanupExecutor(
+                    cast(RedisCacheRateLimitAdapter, redis_adapter)
+                ),
             }
         )
     lifecycle_service = LifecycleService(
         lifecycle_store,
         tenant_id,
         cleanup_executors=cleanup_executors,
-        publication_readiness=SQLitePublicationReadiness(database),
+        publication_readiness=(
+            RepositoryPublicationReadiness(cast(MySQLUploadRepository, repository))
+            if settings.rag_runtime_profile == "production"
+            else SQLitePublicationReadiness(database)
+        ),
         retrieval_projection=lifecycle_projection,
         allow_external_cleanup=settings.external_lifecycle_mutations_enabled,
     )
@@ -285,14 +360,28 @@ def build_runtime_components(
         max_tokens=settings.chunk_max_tokens,
         parent_max_tokens=settings.parent_chunk_max_tokens,
     )
+    tokenizer = (
+        TokenizerArtifact(
+            (
+                settings.tokenizer_artifact_path
+                if settings.tokenizer_artifact_path.is_absolute()
+                else root / settings.tokenizer_artifact_path
+            ),
+            settings.tokenizer_artifact_sha256,
+            settings.tokenizer_id,
+        )
+        if settings.rag_runtime_profile == "production"
+        else UnicodeApproximateTokenizer()
+    )
     chunker: ChunkerPort = (
         SemanticChunker(
             EmbeddingSemanticBoundaryScorer(embedding),
             threshold=settings.chunk_semantic_threshold,
             config=chunking_config,
+            tokenizer=tokenizer,
         )
         if settings.chunk_strategy == "semantic"
-        else TokenAwareChunker(chunking_config)
+        else TokenAwareChunker(chunking_config, tokenizer=tokenizer)
     )
     parser_router = ParserRouter()
     if settings.rag_runtime_profile == "production":
@@ -396,6 +485,8 @@ def build_runtime_components(
                 evidence.embedding_revision == embedding.revision
                 and evidence.reranker_revision == reranker.revision
                 and evidence.model_revision == generator.revision
+                and evidence.verifier_revision == verifier.revision
+                and evidence.tokenizer_revision == tokenizer.revision
                 and evidence.prompt_revision == settings.llm_prompt_revision
                 and evidence.index_generation_id == settings.retrieval_active_generation_id
                 and evidence.source_commit == settings.app_revision
@@ -420,9 +511,19 @@ def build_runtime_components(
         tracer=tracer,
         lifecycle_authorizer=lifecycle_store.authorizes_chunk,
     )
-    rag_repository = SQLiteRAGRunRepository(database)
-    reference_store = SQLiteReferenceStore(database)
+    if settings.rag_runtime_profile == "production":
+        rag_repository: RAGRunRepositoryPort = MySQLRAGRunRepository(
+            cast(MySQLControlPlaneAdapter, mysql_control)
+        )
+        reference_store: ReferenceStorePort = MySQLReferenceStore(
+            cast(MySQLControlPlaneAdapter, mysql_control)
+        )
+    else:
+        rag_repository = SQLiteRAGRunRepository(database)
+        reference_store = SQLiteReferenceStore(database)
     configured_secret = settings.app_secret_key
+    if settings.rag_runtime_profile == "production" and settings.reference_signing_keyring is None:
+        raise RuntimeError("PRODUCTION_REFERENCE_SIGNING_KEYRING_REQUIRED")
     reference_secret = (
         app_secret_override
         or (
@@ -432,7 +533,22 @@ def build_runtime_components(
         )
         or SecretStr(secrets.token_urlsafe(48))
     )
-    reference_signer = HMACReferenceSigner(reference_secret, reference_store)
+    reference_keys: dict[str, SecretStr]
+    if settings.reference_signing_keyring is not None:
+        try:
+            loaded_keyring = json.loads(settings.reference_signing_keyring.get_secret_value())
+        except json.JSONDecodeError as error:
+            raise RuntimeError("REFERENCE_SIGNING_KEYRING_INVALID") from error
+        if not isinstance(loaded_keyring, dict):
+            raise RuntimeError("REFERENCE_SIGNING_KEYRING_INVALID")
+        reference_keys = {str(kid): SecretStr(str(value)) for kid, value in loaded_keyring.items()}
+    else:
+        reference_keys = {settings.reference_active_kid: reference_secret}
+    reference_signer = HMACReferenceSigner(
+        reference_keys,
+        reference_store,
+        active_kid=settings.reference_active_kid,
+    )
     authenticator: AuthenticatorPort
     if settings.auth_mode == "oidc":
         authenticator = OIDCJWTAuthenticator(
@@ -452,12 +568,13 @@ def build_runtime_components(
         required_security_watermark=lambda: 0,
         prompt_revision=settings.llm_prompt_revision,
         model_revision=generator.revision,
+        verifier_revision=verifier.revision,
         final_evidence_count=settings.retrieval_final_evidence_count,
         release_provider=retrieval_release,
     )
     answer_cache = (
         RedisVerifiedAnswerCache(
-            RedisCacheRateLimitAdapter(settings),
+            cast(RedisCacheRateLimitAdapter, redis_adapter),
             ttl_seconds=settings.llm_generation_cache_ttl_seconds,
         )
         if settings.rag_runtime_profile == "production"
@@ -471,6 +588,7 @@ def build_runtime_components(
         rag_repository,
         answer_cache,
         tracer,
+        verifier=verifier,
     )
     return RuntimeComponents(
         repository_root=root,
@@ -494,6 +612,7 @@ def build_runtime_components(
         chunker=chunker,
         indexing_sink=indexing_sink,
         model_transport=model_transport,
+        provider_transports=provider_transports,
         tracer=tracer,
         retrieval_release=retrieval_release,
         tenant_id=tenant_id,

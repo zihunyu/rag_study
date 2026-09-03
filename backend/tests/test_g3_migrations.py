@@ -9,7 +9,7 @@ def test_g3_mysql_plan_covers_qa_lifecycle_tombstone_and_append_only_audit_witho
     plan = g3_migration_plan()
     sql = "\n".join(statement for _, statement in MYSQL_G3_MIGRATIONS)
 
-    assert plan["statement_count"] == 9
+    assert plan["statement_count"] == len(MYSQL_G3_MIGRATIONS) == 17
     assert plan["mutating_execution_performed"] is False
     assert plan["real_database_execution_approved"] is False
     for table in (

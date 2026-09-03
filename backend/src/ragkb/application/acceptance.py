@@ -20,6 +20,8 @@ class RealAcceptanceEvidence:
     embedding_revision: str
     reranker_revision: str
     model_revision: str
+    verifier_revision: str
+    tokenizer_revision: str
     prompt_revision: str
     index_generation_id: str
     dataset_revision: str
@@ -32,6 +34,8 @@ class RealAcceptanceEvidence:
     quality_report_sha256: str
     source_commit: str
     ci_run_id: str
+    performance_scope: tuple[int, ...]
+    budget_report_sha256: str
     payload_sha256: str
     signature: str
 
@@ -41,6 +45,8 @@ class RealAcceptanceEvidence:
             "embedding_revision": self.embedding_revision,
             "reranker_revision": self.reranker_revision,
             "model_revision": self.model_revision,
+            "verifier_revision": self.verifier_revision,
+            "tokenizer_revision": self.tokenizer_revision,
             "prompt_revision": self.prompt_revision,
             "index_generation_id": self.index_generation_id,
             "dataset_revision": self.dataset_revision,
@@ -53,6 +59,8 @@ class RealAcceptanceEvidence:
             "quality_report_sha256": self.quality_report_sha256,
             "source_commit": self.source_commit,
             "ci_run_id": self.ci_run_id,
+            "performance_scope": list(self.performance_scope),
+            "budget_report_sha256": self.budget_report_sha256,
         }
 
     def canonical_payload(self) -> bytes:
@@ -89,6 +97,8 @@ class RealAcceptanceEvidence:
             and len(self.quality_report_sha256) == 64
             and len(self.source_commit) == 40
             and self.ci_run_id
+            and self.performance_scope == (1, 5, 20)
+            and len(self.budget_report_sha256) == 64
             and hmac.compare_digest(self.payload_sha256, actual_hash)
             and hmac.compare_digest(self.signature, actual_signature)
         )
@@ -111,6 +121,8 @@ def load_acceptance_evidence(
         "embedding_revision",
         "reranker_revision",
         "model_revision",
+        "verifier_revision",
+        "tokenizer_revision",
         "prompt_revision",
         "index_generation_id",
         "dataset_revision",
@@ -123,6 +135,8 @@ def load_acceptance_evidence(
         "quality_report_sha256",
         "source_commit",
         "ci_run_id",
+        "performance_scope",
+        "budget_report_sha256",
         "payload_sha256",
         "signature",
     }
@@ -131,6 +145,7 @@ def load_acceptance_evidence(
         or not isinstance(loaded["metrics"], dict)
         or not isinstance(loaded["thresholds"], dict)
         or not isinstance(loaded["query_types"], list)
+        or not isinstance(loaded["performance_scope"], list)
     ):
         raise ValueError("ACCEPTANCE_EVIDENCE_SCHEMA_INVALID")
     evidence = RealAcceptanceEvidence(
@@ -139,6 +154,7 @@ def load_acceptance_evidence(
             "metrics": {str(key): float(value) for key, value in loaded["metrics"].items()},
             "thresholds": {str(key): float(value) for key, value in loaded["thresholds"].items()},
             "query_types": tuple(map(str, loaded["query_types"])),
+            "performance_scope": tuple(map(int, loaded["performance_scope"])),
         }
     )
     if not evidence.verified(

@@ -106,6 +106,31 @@ def test_reference_expiry_uses_persisted_record(tmp_path: Path) -> None:
         signer.resolve(parts[4], parts[6], "tenant", "user")
 
 
+def test_reference_keyring_rotates_without_invalidating_retiring_tokens(tmp_path: Path) -> None:
+    database = SQLiteDatabase(tmp_path / "references.sqlite3")
+    store = SQLiteReferenceStore(database)
+    old = HMACReferenceSigner(
+        {"v1": SecretStr("old-reference-secret-long")}, store, active_kid="v1"
+    )
+    old_url = old.source_url("run-old", "E1", "tenant", "user", "document")
+    old_parts = old_url.split("/")
+    rotated = HMACReferenceSigner(
+        {
+            "v1": SecretStr("old-reference-secret-long"),
+            "v2": SecretStr("new-reference-secret-long"),
+        },
+        store,
+        active_kid="v2",
+    )
+
+    assert rotated.resolve(old_parts[4], old_parts[6], "tenant", "user") == (
+        "run-old",
+        "E1",
+    )
+    new_url = rotated.source_url("run-new", "E1", "tenant", "user", "document")
+    assert new_url.split("/")[4].startswith("v2.")
+
+
 def test_tombstone_revokes_preview_and_full_ask_context(tmp_path: Path) -> None:
     components = _answered_components(tmp_path)
     client = TestClient(create_app(components))

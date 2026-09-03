@@ -20,7 +20,9 @@ def test_g4_local_validation_report_is_measured_context_not_real_slo_claim() -> 
     system = report["performance"]["representative_system_paths"]
     assert system["failure_count"] == 0
     assert system["slo_claimed"] is False
-    assert {item["document_count"] for item in system["scales"]} == {2, 4}
+    assert {item["document_count"] for item in system["scales"]} == {1, 5, 20}
+    assert system["performance_scope"] == [1, 5, 20]
+    assert system["statistical_confidence"] == "low"
     assert report["backup_restore"]["tombstone_replayed_first"] is True
     assert report["backup_restore"]["deleted_document_visible_after_restore"] is False
     assert report["backup_restore"]["reference_revocation_preserved"] is True

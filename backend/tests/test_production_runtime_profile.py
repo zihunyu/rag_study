@@ -5,6 +5,7 @@ from pathlib import Path
 
 from ragkb.adapters.model_http import (
     OpenAICompatibleBufferedGenerator,
+    OpenAICompatibleClaimVerifier,
     OpenAICompatibleEmbeddingAdapter,
     OpenAICompatibleRerankerAdapter,
 )
@@ -26,12 +27,21 @@ def test_production_profile_contains_no_deterministic_rag_components(tmp_path: P
                 "RAG_RUNTIME_PROFILE=production",
                 "REAL_PROVIDER_CALLS_ENABLED=true",
                 "RAG_ACCEPTANCE_SIGNING_KEY=production-acceptance-test-key",
+                "EMBEDDING_INPUT_COST_PER_MILLION_CNY=1",
+                "RERANKER_INPUT_COST_PER_MILLION_CNY=1",
+                "LLM_INPUT_COST_PER_MILLION_CNY=1",
+                "LLM_OUTPUT_COST_PER_MILLION_CNY=1",
+                "VERIFIER_INPUT_COST_PER_MILLION_CNY=1",
+                "VERIFIER_OUTPUT_COST_PER_MILLION_CNY=1",
                 "EXTERNAL_LIFECYCLE_MUTATIONS_ENABLED=true",
                 "RETRIEVAL_ACTIVE_GENERATION_ID=production-generation-1",
                 "LLM_BASE_URL=https://llm.example/v1",
                 "LLM_API_KEY=test-llm-key",
                 "LLM_MODEL=test-llm",
                 "LLM_ALLOW_HTTP=false",
+                "VERIFIER_BASE_URL=https://verifier.example/v1",
+                "VERIFIER_API_KEY=test-verifier-key",
+                "VERIFIER_MODEL=test-independent-verifier",
                 "EMBEDDING_BASE_URL=https://embedding.example/v1",
                 "EMBEDDING_API_KEY=test-embedding-key",
                 "EMBEDDING_MODEL=test-embedding",
@@ -49,6 +59,8 @@ def test_production_profile_contains_no_deterministic_rag_components(tmp_path: P
                 "EMBEDDING_DIMENSION=1024",
                 "AI_APPROVED_PROCESSING_REGIONS=cn",
                 "APP_SECRET_KEY=test-app-secret-key-long",
+                'REFERENCE_SIGNING_KEYRING={"v1":"test-reference-key-long-enough"}',
+                "REFERENCE_ACTIVE_KID=v1",
                 "AUTH_MODE=oidc",
                 "OIDC_ISSUER_URL=https://id.example",
                 "OIDC_AUDIENCE=test-audience",
@@ -56,6 +68,10 @@ def test_production_profile_contains_no_deterministic_rag_components(tmp_path: P
                 "OIDC_CLIENT_SECRET=test-client-secret",
                 "OIDC_TENANT_ID=tenant-production",
                 "OIDC_DEFAULT_SPACE_ID=space-production",
+                "TOKENIZER_ARTIFACT_PATH="
+                f"{root / 'backend/tests/fixtures/tokenizer/minimal-tokenizer.json'}",
+                "TOKENIZER_ARTIFACT_SHA256=e05d0c453e652ff400d7782318a7e21ec3535dc584e314f5112bd169b6c1177e",
+                "TOKENIZER_ID=test-wordlevel-v1",
             )
         ),
         encoding="utf-8",
@@ -71,7 +87,9 @@ def test_production_profile_contains_no_deterministic_rag_components(tmp_path: P
     assert isinstance(components.search_service.index, ZillizCloudAdapter)
     assert isinstance(components.search_service.reranker, OpenAICompatibleRerankerAdapter)
     assert isinstance(components.qa_service.generator, OpenAICompatibleBufferedGenerator)
+    assert isinstance(components.qa_service.verifier, OpenAICompatibleClaimVerifier)
     assert components.search_service.real_acceptance is False
     assert "deterministic" not in components.search_service.embedding.revision
     assert components.model_transport is not None
-    components.model_transport.close()
+    for transport in components.provider_transports:
+        transport.close()

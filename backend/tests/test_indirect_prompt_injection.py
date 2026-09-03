@@ -27,7 +27,16 @@ class _SafeModelTransport:
         del url, headers, timeout
         self.payload = payload
         return {
-            "choices": [{"message": {"content": '{"answer":"每晚 600 元","citation_ids":["E1"]}'}}]
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            '{"answer":"每晚 600 元","citation_ids":["E1"],'
+                            '"claims":[{"text":"每晚 600 元","evidence_ids":["E1"]}]}'
+                        )
+                    }
+                }
+            ]
         }
 
 

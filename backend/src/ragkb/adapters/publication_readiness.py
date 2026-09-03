@@ -61,6 +61,8 @@ class SQLitePublicationReadiness:
             error_code = "PUBLICATION_REVIEW_REQUIRED"
         elif str(review["decision"]) != "APPROVED":
             error_code = "PUBLICATION_REVIEW_NOT_APPROVED"
+        elif review["security_revision"] is None or review["security_projection_json"] is None:
+            error_code = "PUBLICATION_SECURITY_REVIEW_REQUIRED"
         elif str(review["quality_revision"]) != str(quality["parser_revision"]):
             error_code = "PUBLICATION_REVIEW_REVISION_MISMATCH"
         elif candidate is None:

@@ -27,6 +27,8 @@ def main() -> int:
     parser.add_argument("--embedding-revision", required=True)
     parser.add_argument("--reranker-revision", required=True)
     parser.add_argument("--model-revision", required=True)
+    parser.add_argument("--verifier-revision", required=True)
+    parser.add_argument("--tokenizer-revision", required=True)
     parser.add_argument("--prompt-revision", required=True)
     parser.add_argument("--index-generation-id", required=True)
     parser.add_argument("--dataset-revision", required=True)
@@ -60,6 +62,15 @@ def main() -> int:
         raise SystemExit("REAL_ACCEPTANCE_PROVIDER_INVALID")
     if args.dataset_revision != str(report.get("dataset_revision", "")):
         raise SystemExit("REAL_ACCEPTANCE_DATASET_REVISION_MISMATCH")
+    performance = report.get("performance")
+    budget_report_sha256 = str(report.get("budget_report_sha256", ""))
+    if (
+        not isinstance(performance, dict)
+        or performance.get("performance_scope") != [1, 5, 20]
+        or performance.get("slo_claimed") is not False
+        or len(budget_report_sha256) != 64
+    ):
+        raise SystemExit("REAL_ACCEPTANCE_SCOPE_OR_BUDGET_INVALID")
     git_executable = shutil.which("git")
     if git_executable is None:
         raise SystemExit("GIT_EXECUTABLE_REQUIRED")
@@ -75,6 +86,8 @@ def main() -> int:
         "embedding_revision": args.embedding_revision,
         "reranker_revision": args.reranker_revision,
         "model_revision": args.model_revision,
+        "verifier_revision": args.verifier_revision,
+        "tokenizer_revision": args.tokenizer_revision,
         "prompt_revision": args.prompt_revision,
         "index_generation_id": args.index_generation_id,
         "dataset_revision": args.dataset_revision,
@@ -87,6 +100,8 @@ def main() -> int:
         "quality_report_sha256": hashlib.sha256(report_path.read_bytes()).hexdigest(),
         "source_commit": commit,
         "ci_run_id": args.ci_run_id,
+        "performance_scope": [1, 5, 20],
+        "budget_report_sha256": budget_report_sha256,
     }
     payload = json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
     signed = {

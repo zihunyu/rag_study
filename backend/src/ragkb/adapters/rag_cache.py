@@ -6,7 +6,7 @@ from redis.exceptions import RedisError
 
 from ragkb.adapters.redis_cache import RedisCacheRateLimitAdapter
 from ragkb.application.qa import verified_answer_cache_key
-from ragkb.domain.rag import DraftAnswer, EvidencePackage
+from ragkb.domain.rag import AtomicClaim, DraftAnswer, EvidencePackage
 
 
 class RedisVerifiedAnswerCache:
@@ -25,16 +25,38 @@ class RedisVerifiedAnswerCache:
             return None
         answer = value.get("answer")
         citation_ids = value.get("citation_ids")
-        if not isinstance(answer, str) or not isinstance(citation_ids, list):
+        claims = value.get("claims")
+        if (
+            not isinstance(answer, str)
+            or not isinstance(citation_ids, list)
+            or not isinstance(claims, list)
+        ):
             return None
-        return DraftAnswer(answer, tuple(map(str, citation_ids)))
+        try:
+            parsed_claims = tuple(
+                AtomicClaim(str(item["text"]), tuple(map(str, item["evidence_ids"])))
+                for item in claims
+                if isinstance(item, dict)
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+        if len(parsed_claims) != len(claims):
+            return None
+        return DraftAnswer(answer, tuple(map(str, citation_ids)), parsed_claims)
 
     def put(self, package: EvidencePackage, draft: DraftAnswer) -> None:
         try:
             self.redis.set_json(
                 "verified-answer",
                 verified_answer_cache_key(package),
-                {"answer": draft.text, "citation_ids": list(draft.citation_ids)},
+                {
+                    "answer": draft.text,
+                    "citation_ids": list(draft.citation_ids),
+                    "claims": [
+                        {"text": claim.text, "evidence_ids": list(claim.evidence_ids)}
+                        for claim in draft.claims
+                    ],
+                },
                 self.ttl_seconds,
             )
         except RedisError:

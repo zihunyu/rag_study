@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from redis.exceptions import RedisError
+
+from ragkb.adapters.redis_cache import RedisCacheRateLimitAdapter
 from ragkb.contracts.lifecycle import CleanupExecutionResult
 from ragkb.contracts.ports import DocumentProjectionPort
 from ragkb.domain.errors import RAGError
@@ -42,10 +45,28 @@ class ExternalProjectionCleanupExecutor:
         )
 
 
-class EmptyRedisDocumentCleanupExecutor:
-    """Redis stores no unique document data; revisioned cache keys expire independently."""
+class RedisDocumentCleanupExecutor:
+    """Invalidate shared verified-answer caches after deletion and verify the postcondition."""
 
-    revision = "redis-no-unique-document-cleanup:v1"
+    revision = "redis-document-cache-cleanup:v2"
+
+    def __init__(self, redis: RedisCacheRateLimitAdapter) -> None:
+        self.redis = redis
 
     def execute(self, document_id: str) -> CleanupExecutionResult:
-        return CleanupExecutionResult(bool(document_id), bool(document_id))
+        if not document_id:
+            return CleanupExecutionResult(False, False, "REDIS_DOCUMENT_ID_REQUIRED")
+        try:
+            client = self.redis._connected()
+            pattern = self.redis._key("verified-answer", "*")
+            keys = tuple(client.scan_iter(match=pattern, count=500))
+            if keys:
+                client.delete(*keys)
+            remaining = next(iter(client.scan_iter(match=pattern, count=1)), None)
+        except RedisError:
+            return CleanupExecutionResult(False, False, "REDIS_CLEANUP_UNAVAILABLE")
+        return CleanupExecutionResult(
+            True,
+            remaining is None,
+            None if remaining is None else "REDIS_CLEANUP_POSTCONDITION_FAILED",
+        )

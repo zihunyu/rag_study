@@ -86,7 +86,15 @@ def _process_next(components, client: TestClient, version_id: str) -> None:
         client.post(
             f"/api/v1/document-versions/{version_id}/review",
             headers={"Idempotency-Key": f"approve-{version_id}"},
-            json={"decision": "APPROVED", "comment": "synthetic"},
+            json={
+                "decision": "APPROVED",
+                "comment": "synthetic",
+                "security_projection": {
+                    "visibility": "TENANT",
+                    "classification_level": 0,
+                    "acl_scope_tokens": [],
+                },
+            },
         ).status_code
         == 200
     )

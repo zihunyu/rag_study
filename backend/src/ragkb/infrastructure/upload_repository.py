@@ -598,6 +598,8 @@ class SQLiteUploadRepository:
         decision: str,
         comment: str,
         quality_revision: str,
+        security_revision: str | None,
+        security_projection: dict[str, Any] | None,
         idempotency_key: str,
         request_hash: str,
     ) -> dict[str, Any]:
@@ -622,14 +624,17 @@ class SQLiteUploadRepository:
                 "decision": decision,
                 "comment": comment,
                 "quality_revision": quality_revision,
+                "security_revision": security_revision,
+                "security_projection": security_projection,
                 "real_acceptance": False,
             }
             connection.execute(
                 """
                 INSERT INTO document_reviews(
                     review_id, version_id, reviewer_id, decision, comment,
-                    quality_revision, real_acceptance, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+                    quality_revision, security_revision, security_projection_json,
+                    real_acceptance, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
                 """,
                 (
                     review_id,
@@ -638,6 +643,10 @@ class SQLiteUploadRepository:
                     decision,
                     comment,
                     quality_revision,
+                    security_revision,
+                    json.dumps(security_projection, sort_keys=True)
+                    if security_projection is not None
+                    else None,
                     time.time(),
                 ),
             )

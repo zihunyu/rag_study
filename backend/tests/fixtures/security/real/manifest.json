@@ -1,0 +1,21 @@
+{
+  "automatic_retries": 0,
+  "business_data": false,
+  "files": {
+    "docx": {
+      "path": "backend/tests/fixtures/security/real/malicious-indirect-injection.docx",
+      "sha256": "05a77f1641d272bb79076dcad53c7f46e0201d5b0427bc26d639fb5b859dd0c1"
+    },
+    "ocr_image": {
+      "path": "backend/tests/fixtures/security/real/malicious-indirect-injection.png",
+      "sha256": "7c4d5af8c6720ac22c8ada2bbb4776ef510919f9ec80bfa073cd9219375c4ab8"
+    },
+    "pdf": {
+      "path": "backend/tests/fixtures/security/real/malicious-indirect-injection.pdf",
+      "sha256": "85e173c04987e415c6d53d01761016e00ed2fe0d51ac461e6bffd6ebf44e3096"
+    }
+  },
+  "max_provider_calls": 12,
+  "revision": "prompt-injection-real-formats:v1",
+  "synthetic": true
+}

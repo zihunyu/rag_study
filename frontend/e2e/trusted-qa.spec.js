@@ -84,7 +84,15 @@ test("upload, worker indexing, publish, ask, and citation use the real local bac
     `http://127.0.0.1:8000/api/v1/document-versions/${completed.document_version_id}/review`,
     {
       headers: { "Idempotency-Key": `e2e-review-${Date.now()}` },
-      data: { decision: "APPROVED", comment: "browser e2e" },
+      data: {
+        decision: "APPROVED",
+        comment: "browser e2e",
+        security_projection: {
+          visibility: "TENANT",
+          classification_level: 0,
+          acl_scope_tokens: [],
+        },
+      },
     },
   );
   expect(reviewed.ok(), await reviewed.text()).toBeTruthy();

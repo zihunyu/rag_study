@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import pytest
-from ragkb.infrastructure.mysql_migrations import MYSQL_MIGRATIONS, apply_mysql_migrations
+from ragkb.infrastructure.mysql_migrations import (
+    MYSQL_G3_MIGRATIONS,
+    MYSQL_MIGRATIONS,
+    apply_mysql_migrations,
+)
 
 
 class _MigrationCursor:
@@ -51,11 +55,12 @@ def test_recorded_migrations_apply_once_and_second_run_is_idempotent() -> None:
     first = apply_mysql_migrations(connection)
     second = apply_mysql_migrations(connection)
 
-    assert first["applied_count"] == len(MYSQL_MIGRATIONS) == 7
+    migrations = (*MYSQL_MIGRATIONS, *MYSQL_G3_MIGRATIONS)
+    assert first["applied_count"] == len(migrations)
     assert first["skipped_count"] == 0
     assert second["applied_count"] == 0
-    assert second["skipped_count"] == 7
-    assert connection.applied == {migration_id for migration_id, _ in MYSQL_MIGRATIONS}
+    assert second["skipped_count"] == len(migrations)
+    assert connection.applied == {migration_id for migration_id, _ in migrations}
     assert not any("DROP " in statement.upper() for statement in connection.statements)
 
 

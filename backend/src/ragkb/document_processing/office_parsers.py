@@ -45,7 +45,10 @@ class DOCXParser:
                 rows = [" | ".join(cell.text for cell in row.cells) for row in table.rows]
                 texts.extend(rows)
                 node_types.extend(NodeType.TABLE for _ in rows)
-                metadata.extend({"table_row": index + 1} for index in range(len(rows)))
+                header = rows[0] if rows else ""
+                metadata.extend(
+                    {"table_row": index + 1, "table_header": header} for index in range(len(rows))
+                )
         nodes = text_nodes(
             texts,
             locator_factory=lambda _index, offset, length: SourceLocator(
@@ -122,7 +125,13 @@ class SpreadsheetParser:
     revision = "spreadsheet-structure:g1-v2"
 
     @staticmethod
-    def _node(sheet: str, row_number: int, values: Sequence[Any]) -> CanonicalNode | None:
+    def _node(
+        sheet: str,
+        row_number: int,
+        values: Sequence[Any],
+        *,
+        table_header: str = "",
+    ) -> CanonicalNode | None:
         rendered = ["" if value is None else str(value) for value in values]
         if not any(value.strip() for value in rendered):
             return None
@@ -147,6 +156,7 @@ class SpreadsheetParser:
                     get_column_letter(index) for index in range(1, len(rendered) + 1)
                 ],
                 "values": rendered,
+                "table_header": table_header or text,
             },
         )
 
@@ -156,9 +166,23 @@ class SpreadsheetParser:
         tables: list[dict[str, Any]] = []
         for sheet in workbook.worksheets:
             row_count = 0
+            table_header = ""
             for row_number, row in enumerate(sheet.iter_rows(values_only=True), start=1):
-                node = self._node(sheet.title, row_number, list(row))
+                node = self._node(
+                    sheet.title,
+                    row_number,
+                    list(row),
+                    table_header=table_header,
+                )
                 if node is not None:
+                    if not table_header:
+                        table_header = node.original_text
+                        node = CanonicalNode(
+                            **{
+                                **node.__dict__,
+                                "metadata": {**node.metadata, "table_header": table_header},
+                            }
+                        )
                     nodes.append(node)
                     row_count += 1
             tables.append({"sheet": sheet.title, "non_empty_rows": row_count})
@@ -171,9 +195,23 @@ class SpreadsheetParser:
         tables: list[dict[str, Any]] = []
         for sheet in workbook.sheets():
             row_count = 0
+            table_header = ""
             for row_index in range(sheet.nrows):
-                node = self._node(sheet.name, row_index + 1, sheet.row_values(row_index))
+                node = self._node(
+                    sheet.name,
+                    row_index + 1,
+                    sheet.row_values(row_index),
+                    table_header=table_header,
+                )
                 if node is not None:
+                    if not table_header:
+                        table_header = node.original_text
+                        node = CanonicalNode(
+                            **{
+                                **node.__dict__,
+                                "metadata": {**node.metadata, "table_header": table_header},
+                            }
+                        )
                     nodes.append(node)
                     row_count += 1
             tables.append({"sheet": sheet.name, "non_empty_rows": row_count})
@@ -183,11 +221,21 @@ class SpreadsheetParser:
     def _csv(self, source: Path) -> tuple[list[CanonicalNode], list[dict[str, Any]]]:
         with source.open("r", encoding="utf-8-sig", newline="") as handle:
             rows = list(csv.reader(handle))
-        nodes = [
-            node
-            for row_number, values in enumerate(rows, start=1)
-            if (node := self._node("csv", row_number, values)) is not None
-        ]
+        nodes: list[CanonicalNode] = []
+        table_header = ""
+        for row_number, values in enumerate(rows, start=1):
+            node = self._node("csv", row_number, values, table_header=table_header)
+            if node is None:
+                continue
+            if not table_header:
+                table_header = node.original_text
+                node = CanonicalNode(
+                    **{
+                        **node.__dict__,
+                        "metadata": {**node.metadata, "table_header": table_header},
+                    }
+                )
+            nodes.append(node)
         return nodes, [{"sheet": "csv", "non_empty_rows": len(nodes)}]
 
     def parse(self, source: Path, document_version_id: str) -> CanonicalDocument:

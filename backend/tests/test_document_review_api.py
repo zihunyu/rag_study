@@ -67,7 +67,33 @@ def test_quality_report_and_single_document_review_are_persisted_and_idempotent(
     version_id = completed["document_version_id"]
 
     quality = client.get(f"/api/v1/document-versions/{version_id}/quality-report")
-    body = {"decision": "APPROVED", "comment": "synthetic review only"}
+    missing_security = client.post(
+        f"/api/v1/document-versions/{version_id}/review",
+        headers={"Idempotency-Key": "missing-security"},
+        json={"decision": "APPROVED", "comment": "must fail closed"},
+    )
+    empty_restricted_acl = client.post(
+        f"/api/v1/document-versions/{version_id}/review",
+        headers={"Idempotency-Key": "empty-restricted"},
+        json={
+            "decision": "APPROVED",
+            "comment": "must fail closed",
+            "security_projection": {
+                "visibility": "RESTRICTED",
+                "classification_level": 3,
+                "acl_scope_tokens": [],
+            },
+        },
+    )
+    body = {
+        "decision": "APPROVED",
+        "comment": "synthetic review only",
+        "security_projection": {
+            "visibility": "TENANT",
+            "classification_level": 0,
+            "acl_scope_tokens": [],
+        },
+    }
     first = client.post(
         f"/api/v1/document-versions/{version_id}/review",
         headers={"Idempotency-Key": "review-key"},
@@ -89,6 +115,8 @@ def test_quality_report_and_single_document_review_are_persisted_and_idempotent(
     forbidden = reader.get(f"/api/v1/document-versions/{version_id}/quality-report")
 
     assert quality.status_code == 200
+    assert missing_security.status_code == 422
+    assert empty_restricted_acl.status_code == 422
     assert quality.json()["locator_coverage"] == 1.0
     assert quality.json()["real_acceptance"] is False
     assert first.status_code == replay.status_code == 200

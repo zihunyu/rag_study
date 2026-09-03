@@ -42,7 +42,17 @@ def conditional_issues(result: EnvLoadResult) -> tuple[EnvIssue, ...]:
         if settings.app_debug:
             issues.append(EnvIssue("APP_DEBUG", "PRODUCTION_DEBUG_FORBIDDEN", "G4"))
         require("APP_SECRET_KEY", "G4")
+        require("REFERENCE_SIGNING_KEYRING", "G4")
+        require("REFERENCE_ACTIVE_KID", "G4")
         require("APP_REVISION", "G0")
+        if settings.deployment_topology != "single_instance":
+            issues.append(
+                EnvIssue(
+                    "DEPLOYMENT_TOPOLOGY",
+                    "LOCAL_STORAGE_REQUIRES_SINGLE_INSTANCE",
+                    "G0",
+                )
+            )
         if settings.app_revision and (
             len(settings.app_revision) != 40
             or any(character not in "0123456789abcdef" for character in settings.app_revision)
@@ -111,6 +121,9 @@ def conditional_issues(result: EnvLoadResult) -> tuple[EnvIssue, ...]:
         issues.append(EnvIssue("CHUNK_MAX_TOKENS", "CHUNK_MAX_BELOW_TARGET", "G1"))
     if settings.chunk_min_tokens > settings.chunk_target_tokens:
         issues.append(EnvIssue("CHUNK_MIN_TOKENS", "CHUNK_MIN_ABOVE_TARGET", "G1"))
+    if settings.app_env == "production":
+        for key in ("TOKENIZER_ARTIFACT_PATH", "TOKENIZER_ARTIFACT_SHA256", "TOKENIZER_ID"):
+            require(key, "G4")
     if settings.retrieval_rerank_top_k > (
         settings.retrieval_bm25_top_k + settings.retrieval_dense_top_k
     ):
@@ -220,6 +233,32 @@ def conditional_issues(result: EnvLoadResult) -> tuple[EnvIssue, ...]:
             require(key, "G4")
     for key in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"):
         require(key, "G3")
+    if settings.app_env == "production":
+        for key in ("VERIFIER_BASE_URL", "VERIFIER_API_KEY", "VERIFIER_MODEL"):
+            require(key, "G4")
+        for key in (
+            "EMBEDDING_INPUT_COST_PER_MILLION_CNY",
+            "RERANKER_INPUT_COST_PER_MILLION_CNY",
+            "LLM_INPUT_COST_PER_MILLION_CNY",
+            "LLM_OUTPUT_COST_PER_MILLION_CNY",
+            "VERIFIER_INPUT_COST_PER_MILLION_CNY",
+            "VERIFIER_OUTPUT_COST_PER_MILLION_CNY",
+        ):
+            require(key, "G4")
+        if (
+            min(
+                settings.embedding_input_cost_per_million_cny,
+                settings.reranker_input_cost_per_million_cny,
+                settings.llm_input_cost_per_million_cny,
+                settings.llm_output_cost_per_million_cny,
+                settings.verifier_input_cost_per_million_cny,
+                settings.verifier_output_cost_per_million_cny,
+            )
+            <= 0
+        ):
+            issues.append(EnvIssue("PROVIDER_PRICING", "REAL_COST_RATES_REQUIRED", "G4"))
+        if settings.verifier_model and settings.verifier_model == settings.llm_model:
+            issues.append(EnvIssue("VERIFIER_MODEL", "INDEPENDENT_VERIFIER_MODEL_REQUIRED", "G4"))
     require("APP_SECRET_KEY", "G3")
     if settings.app_secret_key is not None and len(settings.app_secret_key.get_secret_value()) < 16:
         issues.append(EnvIssue("APP_SECRET_KEY", "SECRET_TOO_SHORT_MIN_16", "G3"))

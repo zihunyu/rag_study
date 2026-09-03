@@ -305,6 +305,118 @@ MYSQL_G3_MIGRATIONS: tuple[tuple[str, str], ...] = (
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
         """,
     ),
+    (
+        "110_rag_run_documents_v2",
+        """
+        CREATE TABLE IF NOT EXISTS rag_run_documents_v2 (
+            run_id VARCHAR(255) PRIMARY KEY,
+            tenant_id VARCHAR(255) NOT NULL,
+            user_id VARCHAR(255) NOT NULL,
+            status VARCHAR(64) NOT NULL,
+            package_json JSON NOT NULL,
+            result_json JSON NOT NULL,
+            created_at DATETIME(6) NOT NULL,
+            KEY idx_rag_run_v2_subject (tenant_id, user_id, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+        """,
+    ),
+    (
+        "111_rag_feedback_v2",
+        """
+        CREATE TABLE IF NOT EXISTS rag_feedback_v2 (
+            feedback_id VARCHAR(255) PRIMARY KEY,
+            run_id VARCHAR(255) NOT NULL,
+            user_id VARCHAR(255) NOT NULL,
+            feedback_json JSON NOT NULL,
+            created_at DATETIME(6) NOT NULL,
+            KEY idx_rag_feedback_v2_run (run_id, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+        """,
+    ),
+    (
+        "112_reference_tokens_v2",
+        """
+        CREATE TABLE IF NOT EXISTS reference_tokens_v2 (
+            opaque_id VARCHAR(128) PRIMARY KEY,
+            token_kind VARCHAR(32) NOT NULL,
+            tenant_id VARCHAR(255) NOT NULL,
+            user_id VARCHAR(255) NOT NULL,
+            run_id VARCHAR(255) NOT NULL,
+            evidence_id VARCHAR(64),
+            document_id VARCHAR(255),
+            expires_at BIGINT UNSIGNED NOT NULL,
+            revoked BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at DATETIME(6) NOT NULL,
+            KEY idx_reference_v2_subject (tenant_id, user_id, run_id, revoked, expires_at),
+            KEY idx_reference_v2_document (document_id, revoked)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+        """,
+    ),
+    (
+        "113_lifecycle_state_v2",
+        """
+        CREATE TABLE IF NOT EXISTS lifecycle_state_v2 (
+            tenant_id VARCHAR(255) PRIMARY KEY,
+            state_json JSON NOT NULL,
+            updated_at DATETIME(6) NOT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+        """,
+    ),
+    (
+        "114_index_jobs_v2",
+        """
+        CREATE TABLE IF NOT EXISTS index_jobs_v2 (
+            index_job_id VARCHAR(255) PRIMARY KEY,
+            tenant_id VARCHAR(255) NOT NULL,
+            space_id VARCHAR(255) NOT NULL,
+            document_id VARCHAR(255) NOT NULL,
+            document_version_id VARCHAR(255) NOT NULL,
+            generation_id VARCHAR(255) NOT NULL,
+            expected_count BIGINT UNSIGNED NOT NULL,
+            expected_checksum CHAR(64) NOT NULL,
+            state VARCHAR(32) NOT NULL,
+            error_code VARCHAR(128),
+            created_at DATETIME(6) NOT NULL,
+            updated_at DATETIME(6) NOT NULL,
+            UNIQUE KEY uq_index_job_generation_version (generation_id, document_version_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+        """,
+    ),
+    (
+        "115_index_batches_v2",
+        """
+        CREATE TABLE IF NOT EXISTS index_batches_v2 (
+            index_job_id VARCHAR(255) NOT NULL,
+            batch_number INT UNSIGNED NOT NULL,
+            chunk_ids_json JSON NOT NULL,
+            batch_checksum CHAR(64) NOT NULL,
+            vector_confirmed BOOLEAN NOT NULL DEFAULT FALSE,
+            control_confirmed BOOLEAN NOT NULL DEFAULT FALSE,
+            updated_at DATETIME(6) NOT NULL,
+            PRIMARY KEY (index_job_id, batch_number)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+        """,
+    ),
+    (
+        "116_upload_state_v2",
+        """
+        CREATE TABLE IF NOT EXISTS upload_state_v2 (
+            tenant_id VARCHAR(255) PRIMARY KEY,
+            state_json JSON NOT NULL,
+            updated_at DATETIME(6) NOT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+        """,
+    ),
+    (
+        "117_governance_state_v2",
+        """
+        CREATE TABLE IF NOT EXISTS governance_state_v2 (
+            tenant_id VARCHAR(255) PRIMARY KEY,
+            state_json JSON NOT NULL,
+            updated_at DATETIME(6) NOT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+        """,
+    ),
 )
 
 
@@ -349,7 +461,8 @@ def apply_mysql_migrations(connection: ConnectionLike) -> dict[str, object]:
     try:
         cursor.execute(MYSQL_MIGRATION_TABLE_SQL)
         connection.commit()
-        for migration_id, statement in MYSQL_MIGRATIONS:
+        migrations = (*MYSQL_MIGRATIONS, *MYSQL_G3_MIGRATIONS)
+        for migration_id, statement in migrations:
             cursor.execute(
                 "SELECT migration_id FROM schema_migrations WHERE migration_id = %s",
                 (migration_id,),
@@ -372,7 +485,7 @@ def apply_mysql_migrations(connection: ConnectionLike) -> dict[str, object]:
         raise
     return {
         "revision": MYSQL_MIGRATION_REVISION,
-        "planned_count": len(MYSQL_MIGRATIONS),
+        "planned_count": len(migrations),
         "applied_count": len(applied),
         "skipped_count": len(skipped),
         "applied_ids": applied,

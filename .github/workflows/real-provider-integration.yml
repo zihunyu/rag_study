@@ -1,4 +1,4 @@
-name: Protected real-provider acceptance
+name: Protected low-cost real-provider acceptance
 
 on:
   workflow_dispatch:
@@ -10,37 +10,143 @@ jobs:
   real-rag:
     runs-on: ubuntu-latest
     environment: real-rag-acceptance
+    env:
+      APP_ENV: production
+      APP_DEBUG: "false"
+      APP_REVISION: ${{ github.sha }}
+      RAG_RUNTIME_PROFILE: production
+      DEPLOYMENT_TOPOLOGY: single_instance
+      REAL_PROVIDER_CALLS_ENABLED: "true"
+      EXTERNAL_LIFECYCLE_MUTATIONS_ENABLED: "true"
+      AI_OUTBOUND_ALLOWED: "true"
+      AI_OUTBOUND_ALLOWED_CLASSIFICATIONS: public,internal,confidential
+      AI_APPROVED_PROCESSING_REGIONS: cn
+      REAL_ACCEPTANCE_MAX_PROVIDER_CALLS: "60"
+      REAL_ACCEPTANCE_MAX_INPUT_TOKENS: "200000"
+      REAL_ACCEPTANCE_MAX_OUTPUT_TOKENS: "20000"
+      EMBEDDING_INPUT_COST_PER_MILLION_CNY: ${{ vars.EMBEDDING_INPUT_COST_PER_MILLION_CNY }}
+      RERANKER_INPUT_COST_PER_MILLION_CNY: ${{ vars.RERANKER_INPUT_COST_PER_MILLION_CNY }}
+      LLM_INPUT_COST_PER_MILLION_CNY: ${{ vars.LLM_INPUT_COST_PER_MILLION_CNY }}
+      LLM_OUTPUT_COST_PER_MILLION_CNY: ${{ vars.LLM_OUTPUT_COST_PER_MILLION_CNY }}
+      VERIFIER_INPUT_COST_PER_MILLION_CNY: ${{ vars.VERIFIER_INPUT_COST_PER_MILLION_CNY }}
+      VERIFIER_OUTPUT_COST_PER_MILLION_CNY: ${{ vars.VERIFIER_OUTPUT_COST_PER_MILLION_CNY }}
+      RAG_ACCEPTANCE_MIN_CASES: "10"
+      RAG_ACCEPTANCE_SIGNING_KEY: ${{ secrets.RAG_ACCEPTANCE_SIGNING_KEY }}
+      RAG_GOLD_SIGNING_KEY: ${{ secrets.RAG_GOLD_SIGNING_KEY }}
+      APP_SECRET_KEY: ${{ secrets.APP_SECRET_KEY }}
+      REFERENCE_ACTIVE_KID: ${{ vars.REFERENCE_ACTIVE_KID }}
+      REFERENCE_SIGNING_KEYRING: ${{ secrets.REFERENCE_SIGNING_KEYRING }}
+      AUTH_MODE: oidc
+      OIDC_ISSUER_URL: ${{ vars.OIDC_ISSUER_URL }}
+      OIDC_AUDIENCE: ${{ vars.OIDC_AUDIENCE }}
+      OIDC_CLIENT_ID: ${{ vars.OIDC_CLIENT_ID }}
+      OIDC_CLIENT_SECRET: ${{ secrets.OIDC_CLIENT_SECRET }}
+      OIDC_TENANT_ID: ${{ vars.OIDC_TENANT_ID }}
+      OIDC_DEFAULT_SPACE_ID: ${{ vars.OIDC_DEFAULT_SPACE_ID }}
+      OIDC_CLEARANCE_CLAIM: ${{ vars.OIDC_CLEARANCE_CLAIM }}
+      MYSQL_HOST: ${{ secrets.MYSQL_HOST }}
+      MYSQL_PORT: ${{ vars.MYSQL_PORT }}
+      MYSQL_DATABASE: ${{ vars.MYSQL_DATABASE }}
+      MYSQL_USER: ${{ secrets.MYSQL_USER }}
+      MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+      REDIS_HOST: ${{ secrets.REDIS_HOST }}
+      REDIS_PORT: ${{ vars.REDIS_PORT }}
+      REDIS_USER: ${{ secrets.REDIS_USER }}
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+      REDIS_KEY_PREFIX: "low-cost-${{ github.run_id }}:"
+      MINERU_BASE_URL: ${{ secrets.MINERU_BASE_URL }}
+      MINERU_TOKENS: ${{ secrets.MINERU_TOKENS }}
+      LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+      LLM_ALLOW_HTTP: "false"
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+      LLM_MODEL: ${{ vars.LLM_MODEL }}
+      VERIFIER_BASE_URL: ${{ secrets.VERIFIER_BASE_URL }}
+      VERIFIER_API_KEY: ${{ secrets.VERIFIER_API_KEY }}
+      VERIFIER_MODEL: ${{ vars.VERIFIER_MODEL }}
+      EMBEDDING_BASE_URL: ${{ secrets.EMBEDDING_BASE_URL }}
+      EMBEDDING_API_KEY: ${{ secrets.EMBEDDING_API_KEY }}
+      EMBEDDING_MODEL: ${{ vars.EMBEDDING_MODEL }}
+      EMBEDDING_DIMENSION: ${{ vars.EMBEDDING_DIMENSION }}
+      EMBEDDING_BATCH_SIZE: "10"
+      RERANKER_BASE_URL: ${{ secrets.RERANKER_BASE_URL }}
+      RERANKER_API_KEY: ${{ secrets.RERANKER_API_KEY }}
+      RERANKER_MODEL: ${{ vars.RERANKER_MODEL }}
+      VECTOR_BACKEND: zilliz
+      ZILLIZ_CLOUD_URI: ${{ secrets.ZILLIZ_CLOUD_URI }}
+      ZILLIZ_CLOUD_TOKEN: ${{ secrets.ZILLIZ_CLOUD_TOKEN }}
+      ZILLIZ_CLOUD_DATABASE: ${{ vars.ZILLIZ_CLOUD_DATABASE }}
+      ZILLIZ_CLOUD_COLLECTION: ${{ vars.ZILLIZ_CLOUD_COLLECTION }}
+      ZILLIZ_CLOUD_DIMENSION: ${{ vars.EMBEDDING_DIMENSION }}
+      ZILLIZ_CLOUD_ENABLE_BM25: "true"
+      ZILLIZ_CLOUD_SECURITY_CONSISTENCY_LEVEL: Strong
+      RETRIEVAL_ACTIVE_GENERATION_ID: low-cost-${{ github.run_id }}
+      TOKENIZER_ARTIFACT_PATH: ${{ runner.temp }}/tokenizer.json
+      TOKENIZER_ARTIFACT_SHA256: ${{ vars.TOKENIZER_ARTIFACT_SHA256 }}
+      TOKENIZER_ID: ${{ vars.TOKENIZER_ID }}
+      MODEL_HTTP_MAX_RETRIES: "0"
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
+          cache: pip
       - run: python -m pip install -r requirements.lock
       - run: python -m pip install -e . --no-deps
-      - name: Validate production configuration without printing secrets
+      - name: Materialize reviewed Gold Dataset
         env:
-          APP_ENV: production
-          RAG_RUNTIME_PROFILE: production
-          REAL_PROVIDER_CALLS_ENABLED: "true"
-          APP_DEBUG: "false"
-          APP_REVISION: ${{ github.sha }}
-          APP_SECRET_KEY: ${{ secrets.APP_SECRET_KEY }}
-          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
-          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-          LLM_MODEL: ${{ vars.LLM_MODEL }}
-          EMBEDDING_BASE_URL: ${{ secrets.EMBEDDING_BASE_URL }}
-          EMBEDDING_API_KEY: ${{ secrets.EMBEDDING_API_KEY }}
-          EMBEDDING_MODEL: ${{ vars.EMBEDDING_MODEL }}
-          RERANKER_BASE_URL: ${{ secrets.RERANKER_BASE_URL }}
-          RERANKER_API_KEY: ${{ secrets.RERANKER_API_KEY }}
-          RERANKER_MODEL: ${{ vars.RERANKER_MODEL }}
-          ZILLIZ_CLOUD_URI: ${{ secrets.ZILLIZ_CLOUD_URI }}
-          ZILLIZ_CLOUD_TOKEN: ${{ secrets.ZILLIZ_CLOUD_TOKEN }}
-          RETRIEVAL_ACTIVE_GENERATION_ID: ${{ vars.RETRIEVAL_ACTIVE_GENERATION_ID }}
+          RAG_GOLD_DATASET_B64: ${{ secrets.RAG_GOLD_DATASET_B64 }}
+        run: >-
+          python scripts/materialize_base64_secret.py
+          --env RAG_GOLD_DATASET_B64 --output "$RUNNER_TEMP/real-gold.yaml"
+      - name: Materialize pinned tokenizer
+        env:
+          TOKENIZER_ARTIFACT_B64: ${{ secrets.TOKENIZER_ARTIFACT_B64 }}
+        run: >-
+          python scripts/materialize_base64_secret.py
+          --env TOKENIZER_ARTIFACT_B64 --output "$RUNNER_TEMP/tokenizer.json"
+      - name: Validate complete production configuration
         run: python scripts/check_env.py --gate G4
-      - name: Real reranker UAT
-        run: python scripts/run_real_uat.py reranker --approved
-      - name: Real LLM UAT after reranker gate
-        run: python scripts/run_real_uat.py llm --approved
-      - name: Artifact-bound integration contracts
-        run: python -m pytest -m integration
+      - name: Validate ten-case business signature
+        run: python scripts/validate_real_gold.py --dataset "$RUNNER_TEMP/real-gold.yaml"
+      - name: Apply idempotent MySQL control-plane migrations
+        run: >-
+          python scripts/provision_mysql_g2.py
+          --approval MYSQL_DATABASE_CREATE_AND_MIGRATE_APPROVED
+      - name: Validate or provision Zilliz schema
+        run: >-
+          python scripts/provision_zilliz_g2.py
+          --approval ZILLIZ_COLLECTION_CREATE_APPROVED
+      - name: Run MySQL Redis Zilliz lifecycle drill
+        run: python scripts/run_external_lifecycle_drill.py --approved
+      - name: Run 1/5/20 low-cost acceptance
+        run: >-
+          python scripts/run_low_cost_real_acceptance.py --approved
+          --gold "$RUNNER_TEMP/real-gold.yaml"
+          --budget-ledger "$RUNNER_TEMP/provider-budget.sqlite3"
+          --output artifacts/acceptance/low-cost-real.json
+      - name: Sign commit-bound acceptance evidence
+        run: >-
+          python scripts/sign_real_acceptance.py --approved
+          --quality-report artifacts/acceptance/low-cost-real.json
+          --provider real-low-cost-rag
+          --embedding-revision openai-compatible-embedding:g2-v1
+          --reranker-revision openai-compatible-reranker:g2-v1
+          --model-revision "openai-compatible-generation:${LLM_MODEL}:grounded-qa:v1"
+          --verifier-revision "claim-verifier-chain:deterministic-claim-verifier:v1+openai-compatible-claim-verifier:${VERIFIER_MODEL}:v1"
+          --tokenizer-revision "${TOKENIZER_ID}:${TOKENIZER_ARTIFACT_SHA256:0:16}"
+          --prompt-revision grounded-qa:v1
+          --index-generation-id "${RETRIEVAL_ACTIVE_GENERATION_ID}"
+          --dataset-revision "${{ vars.REAL_GOLD_DATASET_REVISION }}"
+          --ci-run-id "${{ github.run_id }}"
+          --output artifacts/acceptance/real-rag.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: low-cost-real-acceptance-${{ github.run_id }}
+          path: |
+            artifacts/acceptance/low-cost-real.json
+            artifacts/acceptance/real-rag.json
+            artifacts/g2/mysql-provision-evidence.json
+            artifacts/g2/zilliz-provision-evidence.json
+            artifacts/acceptance/lifecycle-drill.json
+          if-no-files-found: warn

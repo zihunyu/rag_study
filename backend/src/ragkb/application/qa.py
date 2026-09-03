@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import threading
 import time
 from dataclasses import asdict
+from typing import Literal
+from urllib.parse import urlparse
 
 from ragkb.application.tracing import InMemoryTracer, TracerPort
 from ragkb.contracts.rag import (
     BufferedGenerationPort,
     CitationReferencePort,
+    ClaimVerifierPort,
     EvidenceProviderPort,
     FinalPermissionPort,
     RAGRunRepositoryPort,
@@ -22,12 +26,154 @@ from ragkb.domain.ids import new_uuid7
 from ragkb.domain.rag import (
     AnswerStatus,
     AskResult,
+    AtomicClaim,
     Citation,
+    ClaimVerdict,
     DraftAnswer,
+    Evidence,
     EvidencePackage,
     Feedback,
     QuestionDisposition,
+    VerificationResult,
 )
+
+_FACT_PATTERN = re.compile(
+    r"(?:(?:\d{1,4}(?:[-/.年]\d{1,2}){0,2}|\d+(?:\.\d+)?)|"
+    r"[零一二两三四五六七八九十百千万亿]+)\s*"
+    r"(?:%|元|年|月|日|天|小时|分钟|kg|公里|米)?",
+    re.IGNORECASE,
+)
+_URL_PATTERN = re.compile(r"https?://[^\s)\]}>]+", re.IGNORECASE)
+_CREDENTIAL_REQUEST_PATTERN = re.compile(
+    r"(?:输入|提供|发送|告知|索取).{0,12}(?:密码|验证码|口令)|"
+    r"(?:provide|send|enter|share|ask for).{0,20}(?:password|verification code|credential)",
+    re.IGNORECASE,
+)
+_NUMBER_WORDS = {
+    "zero": "0",
+    "one": "1",
+    "two": "2",
+    "three": "3",
+    "four": "4",
+    "five": "5",
+    "six": "6",
+    "seven": "7",
+    "eight": "8",
+    "nine": "9",
+    "ten": "10",
+    "零": "0",
+    "一": "1",
+    "二": "2",
+    "两": "2",
+    "三": "3",
+    "四": "4",
+    "五": "5",
+    "六": "6",
+    "七": "7",
+    "八": "8",
+    "九": "9",
+    "十": "10",
+}
+
+
+def _normalized_fact_text(value: str) -> str:
+    normalized = value.casefold()
+    normalized = re.sub(r"\byears?\b", "年", normalized)
+    normalized = re.sub(r"\bmonths?\b", "月", normalized)
+    normalized = re.sub(r"\bdays?\b", "天", normalized)
+    for word, number in _NUMBER_WORDS.items():
+        normalized = re.sub(
+            rf"\b{word}\b" if word.isascii() else re.escape(word), number, normalized
+        )
+    return re.sub(r"\s+", "", normalized)
+
+
+class DeterministicClaimVerifier:
+    """Fail-closed structural checks that run before any answer is marked verified."""
+
+    revision = "deterministic-claim-verifier:v1"
+
+    def __init__(self, allowed_output_domains: tuple[str, ...] = ()) -> None:
+        self.allowed_output_domains = frozenset(
+            domain.casefold().strip(".") for domain in allowed_output_domains if domain.strip()
+        )
+
+    def verify(
+        self,
+        question: str,
+        draft: DraftAnswer,
+        evidence: tuple[Evidence, ...],
+    ) -> VerificationResult:
+        del question
+        available = {item.evidence_id: item for item in evidence}
+        claims = draft.claims or (AtomicClaim(draft.text, draft.citation_ids),)
+        verdicts: list[ClaimVerdict] = []
+        for claim in claims:
+            cited = [available.get(evidence_id) for evidence_id in claim.evidence_ids]
+            if not cited or any(item is None for item in cited):
+                verdicts.append(
+                    ClaimVerdict(
+                        claim.text,
+                        claim.evidence_ids,
+                        "INSUFFICIENT",
+                        "CLAIM_EVIDENCE_INVALID",
+                    )
+                )
+                continue
+            cited_evidence = tuple(item for item in cited if item is not None)
+            source = "\n".join(item.text for item in cited_evidence)
+            facts = tuple(
+                match.group(0).strip().casefold() for match in _FACT_PATTERN.finditer(claim.text)
+            )
+            normalized_source = _normalized_fact_text(source)
+            missing_fact = next(
+                (fact for fact in facts if _normalized_fact_text(fact) not in normalized_source),
+                None,
+            )
+            unsupported_url = next(
+                (url for url in _URL_PATTERN.findall(claim.text) if url not in source), None
+            )
+            disallowed_url = next(
+                (
+                    url
+                    for url in _URL_PATTERN.findall(claim.text)
+                    if (urlparse(url).hostname or "").casefold().strip(".")
+                    not in self.allowed_output_domains
+                ),
+                None,
+            )
+            asks_for_credentials = bool(_CREDENTIAL_REQUEST_PATTERN.search(claim.text))
+            verdict: Literal["SUPPORTED", "CONTRADICTED", "INSUFFICIENT"]
+            if missing_fact is not None:
+                verdict, reason = "CONTRADICTED", "EXACT_FACT_NOT_IN_EVIDENCE"
+            elif unsupported_url is not None:
+                verdict, reason = "INSUFFICIENT", "UNSUPPORTED_EXTERNAL_URL"
+            elif disallowed_url is not None:
+                verdict, reason = "INSUFFICIENT", "OUTPUT_URL_DOMAIN_NOT_ALLOWED"
+            elif asks_for_credentials:
+                verdict, reason = "INSUFFICIENT", "UNSUPPORTED_CREDENTIAL_REQUEST"
+            else:
+                verdict, reason = "SUPPORTED", "STRUCTURE_AND_EXACT_FACTS_SUPPORTED"
+            verdicts.append(ClaimVerdict(claim.text, claim.evidence_ids, verdict, reason))
+        return VerificationResult(tuple(verdicts), self.revision)
+
+
+class CompositeClaimVerifier:
+    """Run deterministic policy checks before the independently configured model verifier."""
+
+    def __init__(self, structural: ClaimVerifierPort, semantic: ClaimVerifierPort) -> None:
+        self.structural = structural
+        self.semantic = semantic
+        self.revision = f"claim-verifier-chain:{structural.revision}+{semantic.revision}"
+
+    def verify(
+        self, question: str, draft: DraftAnswer, evidence: tuple[Evidence, ...]
+    ) -> VerificationResult:
+        structural = self.structural.verify(question, draft, evidence)
+        if not structural.supported:
+            return VerificationResult(structural.verdicts, self.revision)
+        semantic = self.semantic.verify(question, draft, evidence)
+        return VerificationResult(semantic.verdicts, self.revision)
 
 
 class TrustedQAService:
@@ -42,12 +188,14 @@ class TrustedQAService:
         repository: RAGRunRepositoryPort,
         cache: VerifiedAnswerCachePort | None = None,
         tracer: TracerPort | None = None,
+        verifier: ClaimVerifierPort | None = None,
     ) -> None:
         self.evidence_provider = evidence_provider
         self.generator = generator
         self.permission = permission
         self.references = references
         self.repository = repository
+        self.verifier = verifier or DeterministicClaimVerifier()
         self.cache = cache
         self.tracer = tracer or InMemoryTracer()
 
@@ -93,6 +241,7 @@ class TrustedQAService:
         user_id: str,
         *,
         subject_scope_tokens: tuple[str, ...] = (),
+        clearance_level: int = 0,
     ) -> AskResult:
         try:
             with self.tracer.span("rag.ask.evidence.build"):
@@ -101,6 +250,7 @@ class TrustedQAService:
                     tenant_id,
                     user_id,
                     subject_scope_tokens=subject_scope_tokens,
+                    clearance_level=clearance_level,
                 )
         except (RetrievalFailClosed, TransientProviderError):
             package = EvidencePackage(
@@ -115,6 +265,7 @@ class TrustedQAService:
                 model_revision=self.generator.revision,
                 permission_revision=0,
                 evidence=(),
+                verifier_revision=self.verifier.revision,
                 real_acceptance=False,
             )
             return self._save(
@@ -178,6 +329,21 @@ class TrustedQAService:
                 AnswerStatus.SYSTEM_ERROR,
                 warnings=("FINAL_PERMISSION_RECHECK_FAILED",),
             )
+        try:
+            with self.tracer.span("rag.ask.claim.verify"):
+                verification = self.verifier.verify(question, draft, cited)
+        except (TransientProviderError, InvalidProviderResponse, ValueError):
+            return self._save(
+                package,
+                AnswerStatus.SYSTEM_ERROR,
+                warnings=("CLAIM_VERIFIER_UNAVAILABLE",),
+            )
+        if not verification.supported:
+            return self._save(
+                package,
+                AnswerStatus.INSUFFICIENT_EVIDENCE,
+                warnings=tuple(item.reason_code for item in verification.verdicts),
+            )
         with self.tracer.span("rag.ask.citation.verify"):
             citations = tuple(
                 Citation(
@@ -210,6 +376,7 @@ class TrustedQAService:
         user_id: str,
         *,
         subject_scope_tokens: tuple[str, ...] = (),
+        clearance_level: int = 0,
     ) -> AskResult:
         with self.tracer.span("rag.ask", {"tenant_id": tenant_id}):
             return self._ask(
@@ -217,6 +384,7 @@ class TrustedQAService:
                 tenant_id,
                 user_id,
                 subject_scope_tokens=subject_scope_tokens,
+                clearance_level=clearance_level,
             )
 
     def feedback(

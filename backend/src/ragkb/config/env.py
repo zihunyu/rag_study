@@ -56,7 +56,16 @@ class EnvSettings(BaseModel):
     rag_acceptance_evidence_path: Path = Path("./artifacts/acceptance/real-rag.json")
     rag_acceptance_signing_key: SecretStr | None = None
     rag_acceptance_max_age_hours: int = Field(default=168, gt=0)
-    rag_acceptance_min_cases: int = Field(default=100, gt=0)
+    rag_acceptance_min_cases: int = Field(default=10, gt=0)
+    real_acceptance_max_provider_calls: int = Field(default=60, gt=0)
+    real_acceptance_max_input_tokens: int = Field(default=200_000, gt=0)
+    real_acceptance_max_output_tokens: int = Field(default=20_000, gt=0)
+    embedding_input_cost_per_million_cny: float = Field(default=0, ge=0)
+    reranker_input_cost_per_million_cny: float = Field(default=0, ge=0)
+    llm_input_cost_per_million_cny: float = Field(default=0, ge=0)
+    llm_output_cost_per_million_cny: float = Field(default=0, ge=0)
+    verifier_input_cost_per_million_cny: float = Field(default=0, ge=0)
+    verifier_output_cost_per_million_cny: float = Field(default=0, ge=0)
     rag_acceptance_required_query_types: tuple[str, ...] = (
         "identifier",
         "keyword",
@@ -76,7 +85,10 @@ class EnvSettings(BaseModel):
     app_timezone: str = "Asia/Hong_Kong"
     app_debug: bool = True
     app_secret_key: SecretStr | None = None
+    reference_active_kid: str = "local-v1"
+    reference_signing_keyring: SecretStr | None = None
     app_revision: str = ""
+    deployment_topology: Literal["single_instance", "multi_instance"] = "single_instance"
     cors_origins: tuple[str, ...] = ("http://127.0.0.1:5173",)
 
     local_storage_root: Path = Path("./data/storage")
@@ -177,6 +189,12 @@ class EnvSettings(BaseModel):
     llm_top_p: float = Field(default=1.0, gt=0, le=1)
     llm_prompt_revision: str = "grounded-qa:v1"
     llm_generation_cache_ttl_seconds: int = Field(default=3600, gt=0)
+    llm_allowed_output_domains: tuple[str, ...] = ()
+    verifier_base_url: str = ""
+    verifier_api_key: SecretStr | None = None
+    verifier_model: str = ""
+    verifier_timeout_seconds: float = Field(default=30, gt=0)
+    verifier_max_concurrency: int = Field(default=4, gt=0)
     model_http_connect_timeout_seconds: float = Field(default=10, gt=0)
     model_http_pool_timeout_seconds: float = Field(default=10, gt=0)
     model_http_max_connections: int = Field(default=100, gt=0)
@@ -215,6 +233,9 @@ class EnvSettings(BaseModel):
     chunk_max_tokens: int = Field(default=800, gt=0)
     chunk_semantic_threshold: float = Field(default=0.45, ge=-1, le=1)
     parent_chunk_max_tokens: int = Field(default=1200, gt=0)
+    tokenizer_artifact_path: Path = Path("./config/tokenizer.json")
+    tokenizer_artifact_sha256: str = ""
+    tokenizer_id: str = ""
     retrieval_bm25_top_k: int = Field(default=50, gt=0)
     retrieval_active_generation_id: str = "local-g3-generation"
     retrieval_dense_top_k: int = Field(default=50, gt=0)
@@ -271,6 +292,8 @@ class EnvSettings(BaseModel):
     oidc_discovery_timeout_seconds: float = Field(default=10, gt=0)
     oidc_jwks_cache_seconds: int = Field(default=3600, gt=0)
     oidc_allowed_algorithms: tuple[str, ...] = ("RS256", "ES256")
+    oidc_clock_skew_seconds: int = Field(default=60, ge=0, le=300)
+    oidc_clearance_claim: str = "clearance_level"
     oidc_tenant_id: str = ""
     oidc_default_space_id: str = ""
 
@@ -321,12 +344,14 @@ class EnvLoadResult:
 SECRET_KEYS = frozenset(
     {
         "APP_SECRET_KEY",
+        "REFERENCE_SIGNING_KEYRING",
         "RAG_ACCEPTANCE_SIGNING_KEY",
         "MYSQL_PASSWORD",
         "REDIS_PASSWORD",
         "ZILLIZ_CLOUD_TOKEN",
         "MINERU_TOKENS",
         "LLM_API_KEY",
+        "VERIFIER_API_KEY",
         "EMBEDDING_API_KEY",
         "RERANKER_API_KEY",
         "ASR_API_KEY",

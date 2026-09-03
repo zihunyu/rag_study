@@ -8,6 +8,7 @@ from typing import Any
 from ragkb.domain.errors import GenerationUnavailable
 from ragkb.domain.ids import new_uuid7
 from ragkb.domain.rag import (
+    AtomicClaim,
     DraftAnswer,
     Evidence,
     EvidencePackage,
@@ -36,8 +37,9 @@ class SyntheticEvidenceProvider:
         user_id: str,
         *,
         subject_scope_tokens: tuple[str, ...] = (),
+        clearance_level: int = 0,
     ) -> EvidencePackage:
-        del subject_scope_tokens
+        del subject_scope_tokens, clearance_level
         return EvidencePackage(
             rag_run_id=new_uuid7(),
             tenant_id=tenant_id or "local",
@@ -75,7 +77,11 @@ class DeterministicBufferedGenerator:
     def generate(self, question: str, evidence: tuple[Evidence, ...]) -> DraftAnswer:
         if self.fail:
             raise GenerationUnavailable("SYNTHETIC_GENERATION_FAILURE")
-        return DraftAnswer(self.answer, self.citation_ids)
+        return DraftAnswer(
+            self.answer,
+            self.citation_ids,
+            (AtomicClaim(self.answer, self.citation_ids),),
+        )
 
 
 class StaticFinalPermission:

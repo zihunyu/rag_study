@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from ragkb.domain.rag import AskResult, DraftAnswer, Evidence, EvidencePackage, Feedback
+from ragkb.domain.rag import (
+    AskResult,
+    DraftAnswer,
+    Evidence,
+    EvidencePackage,
+    Feedback,
+    VerificationResult,
+)
 
 
 class EvidenceProviderPort(Protocol):
@@ -17,6 +24,7 @@ class EvidenceProviderPort(Protocol):
         user_id: str,
         *,
         subject_scope_tokens: tuple[str, ...] = (),
+        clearance_level: int = 0,
     ) -> EvidencePackage: ...
 
 
@@ -24,6 +32,14 @@ class BufferedGenerationPort(Protocol):
     revision: str
 
     def generate(self, question: str, evidence: tuple[Evidence, ...]) -> DraftAnswer: ...
+
+
+class ClaimVerifierPort(Protocol):
+    revision: str
+
+    def verify(
+        self, question: str, draft: DraftAnswer, evidence: tuple[Evidence, ...]
+    ) -> VerificationResult: ...
 
 
 class VerifiedAnswerCachePort(Protocol):

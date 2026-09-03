@@ -83,7 +83,15 @@ def test_missing_or_non_approved_or_stale_review_blocks_publication(tmp_path: Pa
     client.post(
         f"/api/v1/document-versions/{version_id}/review",
         headers={"Idempotency-Key": "approved"},
-        json={"decision": "APPROVED", "comment": "synthetic approval"},
+        json={
+            "decision": "APPROVED",
+            "comment": "synthetic approval",
+            "security_projection": {
+                "visibility": "TENANT",
+                "classification_level": 0,
+                "acl_scope_tokens": [],
+            },
+        },
     )
     with components.database.transaction(immediate=True) as connection:
         connection.execute(
@@ -123,7 +131,15 @@ def test_blocked_real_validation_stub_cannot_be_approved_into_serving(tmp_path: 
     approved = client.post(
         f"/api/v1/document-versions/{version_id}/review",
         headers={"Idempotency-Key": "stub-approval"},
-        json={"decision": "APPROVED", "comment": "cannot override stub block"},
+        json={
+            "decision": "APPROVED",
+            "comment": "cannot override stub block",
+            "security_projection": {
+                "visibility": "TENANT",
+                "classification_level": 0,
+                "acl_scope_tokens": [],
+            },
+        },
     )
     published = client.post(
         f"/api/v1/document-versions/{version_id}:publish",

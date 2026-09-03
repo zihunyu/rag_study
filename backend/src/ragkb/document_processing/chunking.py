@@ -7,22 +7,65 @@ import math
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
+from pathlib import Path
+from typing import Protocol
 
 from ragkb.contracts.ports import EmbeddingPort
 from ragkb.domain.documents import CanonicalDocument, CanonicalNode, NodeType, SourceLocator
 from ragkb.domain.entities import Chunk
 
 _TOKEN_PATTERN = re.compile(r"[\u3400-\u9fff]|[A-Za-z0-9_]+|[^\s]", re.UNICODE)
+_BOUNDARY_CHARACTERS = frozenset("。！？!?；;：:\n")
+
+
+class TokenizerPort(Protocol):
+    revision: str
+
+    def spans(self, text: str) -> tuple[tuple[int, int], ...]: ...
+
+
+class UnicodeApproximateTokenizer:
+    revision = "unicode-cjk-tokenizer:v1"
+
+    def spans(self, text: str) -> tuple[tuple[int, int], ...]:
+        return tuple((match.start(), match.end()) for match in _TOKEN_PATTERN.finditer(text))
+
+
+class TokenizerArtifact:
+    """Pinned Hugging Face tokenizer.json with an immutable content digest."""
+
+    def __init__(self, path: Path, expected_sha256: str, tokenizer_id: str) -> None:
+        resolved = path.resolve()
+        if not resolved.is_file():
+            raise ValueError("TOKENIZER_ARTIFACT_MISSING")
+        digest = hashlib.sha256(resolved.read_bytes()).hexdigest()
+        if not expected_sha256 or digest != expected_sha256.casefold():
+            raise ValueError("TOKENIZER_ARTIFACT_SHA256_MISMATCH")
+        if not tokenizer_id.strip():
+            raise ValueError("TOKENIZER_ID_REQUIRED")
+        from tokenizers import Tokenizer
+
+        self._tokenizer = Tokenizer.from_file(str(resolved))
+        self.revision = f"{tokenizer_id}:{digest[:16]}"
+
+    def spans(self, text: str) -> tuple[tuple[int, int], ...]:
+        encoded = self._tokenizer.encode(text, add_special_tokens=False)
+        return tuple(
+            (int(start), int(end)) for start, end in encoded.offsets if int(end) > int(start)
+        )
+
+
+_DEFAULT_TOKENIZER = UnicodeApproximateTokenizer()
 
 
 def token_spans(text: str) -> tuple[tuple[int, int], ...]:
     """Return deterministic approximate token spans for Latin and CJK text."""
 
-    return tuple((match.start(), match.end()) for match in _TOKEN_PATTERN.finditer(text))
+    return _DEFAULT_TOKENIZER.spans(text)
 
 
-def count_tokens(text: str) -> int:
-    return len(token_spans(text))
+def count_tokens(text: str, tokenizer: TokenizerPort | None = None) -> int:
+    return len((tokenizer or _DEFAULT_TOKENIZER).spans(text))
 
 
 @dataclass(frozen=True)
@@ -77,21 +120,34 @@ def _locator_for_slice(node: CanonicalNode, start: int, end: int) -> SourceLocat
     )
 
 
-def _windows(text: str, config: ChunkingConfig) -> tuple[tuple[str, int, int], ...]:
-    spans = token_spans(text)
+def _windows(
+    text: str, config: ChunkingConfig, tokenizer: TokenizerPort
+) -> tuple[tuple[str, int, int], ...]:
+    spans = tokenizer.spans(text)
     if not spans:
         return ()
     size = min(config.target_tokens, config.max_tokens)
-    step = size - config.overlap_tokens
     windows: list[tuple[str, int, int]] = []
     token_start = 0
     while token_start < len(spans):
         token_end = min(len(spans), token_start + size)
+        if token_end < len(spans):
+            minimum_end = min(token_end, token_start + config.min_tokens)
+            for candidate_end in range(token_end, minimum_end, -1):
+                boundary_end = spans[candidate_end - 1][1]
+                if text[boundary_end - 1 : boundary_end] in _BOUNDARY_CHARACTERS:
+                    token_end = candidate_end
+                    break
         start = spans[token_start][0]
         end = spans[token_end - 1][1]
         piece = text[start:end].strip()
         if piece:
-            if windows and token_end == len(spans) and count_tokens(piece) < config.min_tokens:
+            if (
+                windows
+                and token_end == len(spans)
+                and count_tokens(piece, tokenizer) < config.min_tokens
+                and count_tokens(f"{windows[-1][0]}\n{piece}", tokenizer) <= config.max_tokens
+            ):
                 previous, previous_start, _ = windows.pop()
                 merged = f"{previous}\n{text[start:end].strip()}"
                 windows.append((merged, previous_start, end))
@@ -99,17 +155,22 @@ def _windows(text: str, config: ChunkingConfig) -> tuple[tuple[str, int, int], .
                 windows.append((piece, start, end))
         if token_end == len(spans):
             break
-        token_start += step
+        token_start = max(token_start + 1, token_end - config.overlap_tokens)
     return tuple(windows)
 
 
 class TokenAwareChunker:
     """Create searchable children and larger parent context chunks with stable IDs."""
 
-    tokenizer_id = "unicode-cjk-tokenizer:v1"
-
-    def __init__(self, config: ChunkingConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: ChunkingConfig | None = None,
+        *,
+        tokenizer: TokenizerPort | None = None,
+    ) -> None:
         self.config = config or ChunkingConfig()
+        self.tokenizer = tokenizer or _DEFAULT_TOKENIZER
+        self.tokenizer_id = self.tokenizer.revision
         self.revision = (
             f"token-aware:{self.config.strategy}:"
             f"{self.config.target_tokens}:{self.config.overlap_tokens}:v1"
@@ -132,7 +193,7 @@ class TokenAwareChunker:
                     continue
             section_id, section_path = self._section(node, heading, document.document_version_id)
             for piece_index, (text, start, end) in enumerate(
-                _windows(node.original_text, self.config)
+                _windows(node.original_text, self.config, self.tokenizer)
             ):
                 chunk_id = _stable_id(
                     "chunk", document.document_version_id, node.node_id, str(piece_index), text
@@ -147,10 +208,10 @@ class TokenAwareChunker:
                         ordinal=len(children),
                         original_text=text,
                         display_text=text,
-                        retrieval_text=(f"{heading}\n{text}" if heading else text),
+                        retrieval_text=self._retrieval_text(node, heading, text),
                         locator=_locator_for_slice(node, start, end),
                         content_sha256=checksum,
-                        token_count=count_tokens(text),
+                        token_count=count_tokens(text, self.tokenizer),
                         kind=node.node_type.value,
                         chunking_revision=self.revision,
                         tokenizer_id=self.tokenizer_id,
@@ -186,7 +247,7 @@ class TokenAwareChunker:
                 retrieval_text=text,
                 locator=grouped[0].locator,
                 content_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
-                token_count=count_tokens(text),
+                token_count=count_tokens(text, self.tokenizer),
                 kind="parent",
                 chunking_revision=self.revision,
                 tokenizer_id=self.tokenizer_id,
@@ -212,6 +273,17 @@ class TokenAwareChunker:
         flush_parent()
         return ChunkingResult(tuple(children), tuple(parents), self.revision)
 
+    @staticmethod
+    def _retrieval_text(node: CanonicalNode, heading: str, text: str) -> str:
+        context: list[str] = []
+        if heading:
+            context.append(heading)
+        table_header = str(node.metadata.get("table_header", "")).strip()
+        if node.node_type is NodeType.TABLE and table_header and table_header != text:
+            context.append(f"TABLE_HEADER: {table_header}")
+        context.append(text)
+        return "\n".join(context)
+
 
 class SemanticChunker(TokenAwareChunker):
     """Optional semantic boundary strategy with an injected, locally testable scorer."""
@@ -222,8 +294,9 @@ class SemanticChunker(TokenAwareChunker):
         *,
         threshold: float = 0.45,
         config: ChunkingConfig | None = None,
+        tokenizer: TokenizerPort | None = None,
     ) -> None:
-        super().__init__(config or ChunkingConfig(strategy="semantic"))
+        super().__init__(config or ChunkingConfig(strategy="semantic"), tokenizer=tokenizer)
         self.boundary_score = boundary_score
         self.threshold = threshold
 
@@ -261,7 +334,10 @@ class SemanticChunker(TokenAwareChunker):
             should_split = bool(
                 current
                 and (
-                    count_tokens("\n".join(item.original_text for item in (*current, node)))
+                    count_tokens(
+                        "\n".join(item.original_text for item in (*current, node)),
+                        self.tokenizer,
+                    )
                     > self.config.target_tokens
                     or self.boundary_score(current[-1].display_text, node.display_text)
                     < self.threshold

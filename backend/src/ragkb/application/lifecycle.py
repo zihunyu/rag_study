@@ -23,7 +23,7 @@ from ragkb.domain.lifecycle import (
     SecurityTransition,
     SecurityTransitionStatus,
 )
-from ragkb.domain.retrieval import AuthorizedChunk, SearchContext
+from ragkb.domain.retrieval import AuthorizedChunk, SearchContext, SecurityProjection
 
 CLEANUP_STORES = ("local_file", "mysql", "redis", "zilliz_projection")
 EXTERNAL_CLEANUP_STORES = frozenset({"mysql", "redis", "zilliz_projection"})
@@ -52,6 +52,9 @@ class InMemoryLifecycleStore:
         self.audit_events: list[AuditEvent] = []
         self.processed_events: set[str] = set()
         self.idempotency: dict[tuple[str, str, str], tuple[str, dict[str, Any]]] = {}
+
+    def reload(self) -> None:
+        """Refresh authoritative state; in-memory tests already hold the authoritative copy."""
 
     def snapshot_state(self) -> dict[str, Any]:
         return deepcopy(
@@ -167,6 +170,27 @@ class LifecycleService:
             lifecycle_projection=lifecycle_projection,
             permission_revision=record.acl_revision,
         )
+
+    def set_reviewed_security_projection(
+        self,
+        document_id: str,
+        version_id: str,
+        projection: SecurityProjection,
+        *,
+        trace_id: str,
+    ) -> None:
+        if self.retrieval_projection is None:
+            raise LifecycleStateConflict("RETRIEVAL_PROJECTION_UNAVAILABLE")
+        if projection.lifecycle_projection != "STAGED":
+            raise ValueError("reviewed security projection must remain staged")
+        record = self.store.documents.get(document_id)
+        if record is None or record.tombstoned:
+            raise LifecycleStateConflict("DOCUMENT_NOT_AVAILABLE")
+        self.retrieval_projection.set_version_security_projection(
+            document_id, version_id, projection
+        )
+        self._audit("document.security_projection_reviewed", document_id, trace_id)
+        self.store.persist_state(tenant_id=self.tenant_id)
 
     @contextmanager
     def _atomic(self) -> Iterator[None]:

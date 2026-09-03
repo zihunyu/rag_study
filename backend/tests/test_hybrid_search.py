@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from ragkb.adapters.retrieval_memory import InMemoryHybridIndex, InMemoryRetrievalControlPlane
 from ragkb.adapters.stubs import DeterministicEmbedding, DeterministicReranker
 from ragkb.api.app import create_app
-from ragkb.application.search import HybridSearchService, rrf_fuse
+from ragkb.application.search import HybridSearchService, classify_query, rrf_fuse
 from ragkb.domain.errors import ProviderUnavailable
 from ragkb.domain.lifecycle import LifecycleState
 from ragkb.domain.retrieval import (
@@ -132,6 +132,11 @@ def test_rrf_dedup_acl_parent_recheck_and_rerank() -> None:
     assert result.real_acceptance is False
     assert result.degraded is False
     assert rrf_fuse((bm25, dense), rrf_k=60)[0][0].chunk_id == "chunk-1"
+
+
+def test_chinese_natural_language_without_spaces_is_semantic() -> None:
+    assert classify_query("劳动合同解除条件") == "semantic"
+    assert classify_query("错误码 ERR-2048") == "identifier"
 
 
 def test_security_watermark_fails_closed() -> None:

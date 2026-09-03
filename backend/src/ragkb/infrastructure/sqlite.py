@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_metadata (
@@ -136,6 +136,11 @@ CREATE TABLE IF NOT EXISTS local_search_index (
 );
 CREATE INDEX IF NOT EXISTS idx_local_search_generation
     ON local_search_index(index_generation_id);
+CREATE VIRTUAL TABLE IF NOT EXISTS local_search_fts USING fts5(
+    chunk_id UNINDEXED,
+    retrieval_terms,
+    tokenize='unicode61 remove_diacritics 2'
+);
 CREATE TABLE IF NOT EXISTS upload_sessions (
     id TEXT PRIMARY KEY,
     tenant_id TEXT NOT NULL REFERENCES tenants(id),
@@ -201,6 +206,8 @@ CREATE TABLE IF NOT EXISTS document_reviews (
     decision TEXT NOT NULL,
     comment TEXT NOT NULL,
     quality_revision TEXT NOT NULL,
+    security_revision TEXT,
+    security_projection_json TEXT,
     real_acceptance INTEGER NOT NULL DEFAULT 0,
     created_at REAL NOT NULL
 );
@@ -499,6 +506,10 @@ UAT_V14_COLUMNS = {
 OBSERVATION_V14_COLUMNS = {"row_version": "row_version INTEGER NOT NULL DEFAULT 1"}
 DEFECT_V14_COLUMNS = {"row_version": "row_version INTEGER NOT NULL DEFAULT 1"}
 INCIDENT_V14_COLUMNS = {"row_version": "row_version INTEGER NOT NULL DEFAULT 1"}
+DOCUMENT_REVIEW_V15_COLUMNS = {
+    "security_revision": "security_revision TEXT",
+    "security_projection_json": "security_projection_json TEXT",
+}
 
 
 class SQLiteDatabase:
@@ -548,6 +559,7 @@ class SQLiteDatabase:
                 ("observation_windows", OBSERVATION_V14_COLUMNS),
                 ("governance_defects", DEFECT_V14_COLUMNS),
                 ("incidents", INCIDENT_V14_COLUMNS),
+                ("document_reviews", DOCUMENT_REVIEW_V15_COLUMNS),
             ):
                 existing = {
                     str(row["name"])

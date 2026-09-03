@@ -573,6 +573,16 @@
             ],
             "title": "Decision",
             "type": "string"
+          },
+          "security_projection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SecurityProjectionRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -611,6 +621,29 @@
           "reviewer_id": {
             "title": "Reviewer Id",
             "type": "string"
+          },
+          "security_projection": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Security Projection"
+          },
+          "security_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Security Revision"
           }
         },
         "required": [
@@ -1761,6 +1794,45 @@
           "warnings"
         ],
         "title": "SearchResponse",
+        "type": "object"
+      },
+      "SecurityProjectionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "acl_scope_tokens": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "title": "Acl Scope Tokens",
+            "type": "array"
+          },
+          "classification_level": {
+            "maximum": 3.0,
+            "minimum": 0.0,
+            "title": "Classification Level",
+            "type": "integer"
+          },
+          "valid_to_epoch": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Valid To Epoch",
+            "type": "integer"
+          },
+          "visibility": {
+            "enum": [
+              "TENANT",
+              "RESTRICTED"
+            ],
+            "title": "Visibility",
+            "type": "string"
+          }
+        },
+        "required": [
+          "visibility",
+          "classification_level"
+        ],
+        "title": "SecurityProjectionRequest",
         "type": "object"
       },
       "SpaceResponse": {

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from ragkb.contracts.ports import DocumentProjectionPort
+from ragkb.domain.retrieval import SecurityProjection
 
 
 class CompositeDocumentProjection:
@@ -34,3 +35,12 @@ class CompositeDocumentProjection:
     def delete_document_projection(self, document_id: str) -> None:
         for projection in self.projections:
             projection.delete_document_projection(document_id)
+
+    def set_version_security_projection(
+        self,
+        document_id: str,
+        version_id: str,
+        security: SecurityProjection,
+    ) -> None:
+        for projection in self.projections:
+            projection.set_version_security_projection(document_id, version_id, security)

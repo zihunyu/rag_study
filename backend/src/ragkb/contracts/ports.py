@@ -7,7 +7,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 from ragkb.domain.documents import CanonicalDocument
-from ragkb.domain.retrieval import AuthorizedChunk, IndexCandidate, RetrievalRelease, SearchContext
+from ragkb.domain.retrieval import (
+    AuthorizedChunk,
+    IndexCandidate,
+    RetrievalRelease,
+    SearchContext,
+    SecurityProjection,
+)
 
 if TYPE_CHECKING:
     from ragkb.document_processing.chunking import ChunkingResult
@@ -134,6 +140,13 @@ class DocumentProjectionPort(Protocol):
     ) -> None: ...
 
     def delete_document_projection(self, document_id: str) -> None: ...
+
+    def set_version_security_projection(
+        self,
+        document_id: str,
+        version_id: str,
+        projection: SecurityProjection,
+    ) -> None: ...
 
 
 class RetrievalProjectionPort(RetrievalControlPlanePort, DocumentProjectionPort, Protocol):

@@ -20,8 +20,10 @@ class _CountingGenerator:
         self.calls = 0
 
     def generate(self, question, evidence):
+        del question
         self.calls += 1
-        return DraftAnswer("三年", ("E1",))
+        answer = "五年" if "五年" in evidence[0].text else "三年"
+        return DraftAnswer(answer, ("E1",))
 
 
 def _evidence() -> Evidence:

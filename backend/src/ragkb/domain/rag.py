@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 
 class AnswerStatus(StrEnum):
@@ -64,6 +64,7 @@ class EvidencePackage:
     model_revision: str
     permission_revision: int
     evidence: tuple[Evidence, ...]
+    verifier_revision: str = ""
     disposition: QuestionDisposition = QuestionDisposition.ANSWERABLE
     conflict_detected: bool = False
     real_acceptance: bool = False
@@ -75,9 +76,38 @@ class EvidencePackage:
 
 
 @dataclass(frozen=True)
+class AtomicClaim:
+    text: str
+    evidence_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not self.text.strip() or not self.evidence_ids:
+            raise ValueError("claims require text and evidence IDs")
+
+
+@dataclass(frozen=True)
 class DraftAnswer:
     text: str
     citation_ids: tuple[str, ...]
+    claims: tuple[AtomicClaim, ...] = ()
+
+
+@dataclass(frozen=True)
+class ClaimVerdict:
+    claim_text: str
+    evidence_ids: tuple[str, ...]
+    verdict: Literal["SUPPORTED", "CONTRADICTED", "INSUFFICIENT"]
+    reason_code: str
+
+
+@dataclass(frozen=True)
+class VerificationResult:
+    verdicts: tuple[ClaimVerdict, ...]
+    revision: str
+
+    @property
+    def supported(self) -> bool:
+        return bool(self.verdicts) and all(item.verdict == "SUPPORTED" for item in self.verdicts)
 
 
 @dataclass(frozen=True)

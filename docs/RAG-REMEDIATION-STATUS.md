@@ -19,7 +19,7 @@
 | RAG-013 | `LLM_ALLOW_HTTP` 默认关闭；production 中开关绕过、`http://`、Local Profile 均在 G0 阻止启动 | 已完成代码关闭 |
 | RAG-014 | Query 与 document parse/chunk/embedding batch/vector write 均有嵌套 Span，OTLP 依赖已锁定并提供可配置性能脚本 | 大规模真实性能运行按用户要求暂缓 |
 | RAG-015 | PR CI 与受保护 Provider Workflow 已配置，Linux Mypy 平台错误及 Node20 Action 警告已修复 | 远端重跑和 branch protection 按用户要求暂缓 |
-| RAG-016 | 新增 Python 3.12 精确依赖锁、branch coverage 与 70% fail-under；当前实测 78% | 已完成代码关闭 |
+| RAG-016 | 新增 Python 3.12 精确依赖锁、branch coverage 与 70% fail-under；当前隔离外部适配器后的单元覆盖率实测 71.87% | 已完成代码关闭 |
 | RAG-017 | 保留原生运行，并增加 Backend/Worker/Frontend Dockerfile、Compose、DevContainer 与 dockerignore | 当前主机未安装 Docker；需在 CI/部署机完成镜像构建验证 |
 | RAG-018 | Application 仅依赖 HybridIndexPort；Local、Zilliz 和自托管 Milvus 使用独立解析后的 URI/字段/维度/Metric 配置 | 已完成代码关闭 |
 | RAG-019 | Parser 已拆分为 common、text/PDF、Office、offline、MinerU 与 router；Zilliz 拆分 schema、readiness、lifecycle probe、writer 和 search | 已完成代码关闭 |
@@ -29,3 +29,33 @@
 
 普通离线门禁不消费 Provider、不读取生产秘密。历史真实 Provider 产物绑定测试使用
 `integration` Marker，只有受保护的 `real-rag-acceptance` Environment 才会执行。
+
+## RAG-023～RAG-041 当前整改
+
+- RAG-023/024：未审核索引统一写成最高密级、空 ACL、STAGED/current=false；审核冻结不可变
+  SecurityProjection，release 提供真实 generation、permission revision 和 watermark。
+- RAG-025：Production 上传、生命周期、RAG Run、引用、治理和检索状态使用 MySQL，队列/租约/
+  缓存使用 Redis；原件仍为本地文件，因此配置门禁强制单实例。
+- RAG-026：OIDC Discovery/JWKS、签名、issuer/audience/exp/nbf、算法、时钟偏差、未知 kid
+  刷新、tenant/scope/clearance 映射已接入。
+- RAG-027：Local 使用 FTS5 与持久 USearch generation 快照；同一 generation 不再逐请求解析
+  全部 JSON 向量。
+- RAG-028：Zilliz 写入使用稳定 upsert、未知结果主键确认、MySQL index job/batch Saga 账本、
+  BUILDING→READY 对账；MySQL release 最后推进以保持失败关闭。
+- RAG-029/030：Generator 输出原子 Claims，证据使用 JSON；确定性事实/URL/凭证策略与独立
+  Verifier 全部通过后才允许 `verified=true`。
+- RAG-031/032：SemanticChunker 已接入；Production 强制内容哈希固定的正式 tokenizer，句子
+  边界优先且表格 Chunk 携带表头。
+- RAG-033～035：四类模型使用独立连接池和并发门及整体 deadline；中文分类不依赖空格；
+  分数校准融合并在 Rerank 后执行近重复删除。
+- RAG-036/037：`httpx` 已进入正式依赖；CI 拆为独立安装、静态检查、测试、质量、E2E、容器
+  和依赖审计 Job，artifact-bound 历史测试不再隐式依赖本机未跟踪目录。
+- RAG-038：真实验收固定为经业务签名的 10 条 Gold、1/5/20 Chunk、三种恶意文件、最多
+  60 次调用/20 万输入/2 万输出 Token；性能仅建立低置信度基线，不声明 SLO。
+- RAG-039/040：引用签名使用 active/retiring `kid` keyring；Production 无 keyring 拒绝启动；
+  verified-answer cache 使用 Redis。
+- RAG-041：Actions 固定 commit SHA，并增加依赖审计、CodeQL、Trivy、SBOM、Cosign 与构建
+  provenance 工作流。
+
+本机真实 Zilliz schema、批量写入、检索与清理已通过。MySQL/Redis 本机端口当前不可达；真实
+Gold、独立 Verifier 与正式 tokenizer 未配置前，受保护工作流必须在首次计费请求前失败关闭。

@@ -7,7 +7,7 @@ import hashlib
 import hmac
 import secrets
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, Protocol
 
 from pydantic import SecretStr
@@ -30,16 +30,24 @@ class HMACReferenceSigner:
 
     def __init__(
         self,
-        key: SecretStr,
+        key: SecretStr | Mapping[str, SecretStr],
         store: ReferenceStorePort,
         *,
+        active_kid: str = "local-v1",
         ttl_seconds: int = 900,
         clock: Callable[[], float] = time.time,
     ) -> None:
-        key_bytes = key.get_secret_value().encode()
-        if len(key_bytes) < 16 or ttl_seconds < 1:
+        supplied = {active_kid: key} if isinstance(key, SecretStr) else dict(key)
+        keys = {kid: secret.get_secret_value().encode() for kid, secret in supplied.items()}
+        if (
+            not active_kid
+            or active_kid not in keys
+            or any(not kid or len(value) < 16 for kid, value in keys.items())
+            or ttl_seconds < 1
+        ):
             raise ValueError("reference signing key and TTL are invalid")
-        self._key = key_bytes
+        self._keys = keys
+        self._active_kid = active_kid
         self._store = store
         self._ttl_seconds = ttl_seconds
         self._clock = clock
@@ -51,9 +59,9 @@ class HMACReferenceSigner:
     def _token(self, record: dict[str, Any]) -> str:
         opaque_id = secrets.token_urlsafe(24)
         body = opaque_id.encode()
-        signature = hmac.new(self._key, body, hashlib.sha256).digest()
+        signature = hmac.new(self._keys[self._active_kid], body, hashlib.sha256).digest()
         self._store.save(opaque_id, record)
-        return f"{opaque_id}.{self._encode(signature)}"
+        return f"{self._active_kid}.{opaque_id}.{self._encode(signature)}"
 
     def source_url(
         self,
@@ -89,11 +97,21 @@ class HMACReferenceSigner:
         user_id: str,
     ) -> dict[str, Any]:
         try:
-            opaque_id, encoded_signature = token.split(".", 1)
+            parts = token.split(".")
+            if len(parts) == 3:
+                kid, opaque_id, encoded_signature = parts
+            elif len(parts) == 2:
+                kid = self._active_kid
+                opaque_id, encoded_signature = parts
+            else:
+                raise ValueError("invalid reference token parts")
+            key = self._keys.get(kid)
+            if key is None:
+                raise ValueError("unknown reference key ID")
             body = opaque_id.encode()
             padding = "=" * (-len(encoded_signature) % 4)
             signature = base64.urlsafe_b64decode(encoded_signature + padding)
-            expected = hmac.new(self._key, body, hashlib.sha256).digest()
+            expected = hmac.new(key, body, hashlib.sha256).digest()
         except Exception as error:
             raise ReferenceTokenError("REFERENCE_TOKEN_INVALID") from error
         if not hmac.compare_digest(signature, expected):

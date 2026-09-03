@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 
+import pytest
 from ragkb.document_processing.chunking import (
     ChunkingConfig,
     SemanticChunker,
     TokenAwareChunker,
+    TokenizerArtifact,
     count_tokens,
 )
 from ragkb.domain.documents import CanonicalDocument, CanonicalNode, NodeType, SourceLocator
@@ -92,3 +95,42 @@ def test_semantic_chunker_merges_related_nodes_and_splits_on_low_similarity() ->
 
     assert any("policy alpha\npolicy beta" in item.display_text for item in result.chunks)
     assert any(item.display_text == "unrelated recipe" for item in result.chunks)
+
+
+def test_pinned_tokenizer_artifact_rejects_hash_drift_and_drives_counts() -> None:
+    root = Path(__file__).resolve().parents[2]
+    path = root / "backend/tests/fixtures/tokenizer/minimal-tokenizer.json"
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    tokenizer = TokenizerArtifact(path, digest, "test-wordlevel-v1")
+
+    assert count_tokens("test token", tokenizer) == 2
+    with pytest.raises(ValueError, match="SHA256_MISMATCH"):
+        TokenizerArtifact(path, "0" * 64, "test-wordlevel-v1")
+
+
+def test_table_chunks_repeat_the_reviewed_header_context() -> None:
+    node = CanonicalNode(
+        "table-row-2",
+        None,
+        NodeType.TABLE,
+        "北京 | 600 元",
+        "北京 | 600 元",
+        SourceLocator(sheet="policy", row=2),
+        metadata={"table_header": "地区 | 住宿上限"},
+    )
+    document = CanonicalDocument(
+        document_version_id="table-version",
+        language="zh",
+        source_format="xlsx",
+        nodes=(node,),
+        parser_revision="test-table:v1",
+        normalization_revision="test-normalization:v1",
+        content_checksum="a" * 64,
+    )
+
+    result = TokenAwareChunker(
+        ChunkingConfig(target_tokens=20, overlap_tokens=2, min_tokens=1, max_tokens=20)
+    ).chunk(document, tenant_id="tenant")
+
+    assert result.chunks
+    assert "TABLE_HEADER: 地区 | 住宿上限" in result.chunks[0].retrieval_text

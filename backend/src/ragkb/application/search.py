@@ -32,9 +32,15 @@ QueryType = Literal["identifier", "keyword", "semantic"]
 
 
 def classify_query(query: str) -> QueryType:
-    words = query.split()
+    normalized = unicodedata.normalize("NFKC", query).strip()
+    words = normalized.split()
     if re.search(r"(?i)\b(?=[a-z0-9_-]*\d)[a-z0-9]+(?:[-_/][a-z0-9]+)+\b", query):
         return "identifier"
+    if re.search(r"(?i)(?:错误码|条款|编号|订单|型号)\s*[:：#]?\s*[a-z0-9_-]*\d", normalized):
+        return "identifier"
+    cjk_count = len(re.findall(r"[\u3400-\u9fff]", normalized))
+    if cjk_count >= 4:
+        return "semantic"
     if len(words) <= 3 and not any(character in query for character in "?？怎么为何什么"):
         return "keyword"
     return "semantic"
@@ -64,6 +70,36 @@ def rrf_fuse(
             scores[chunk_id],
             tuple(sorted(seen_channels[chunk_id])),
         )
+        for chunk_id in ordered
+    )
+
+
+def score_calibrated_fuse(
+    channels: Sequence[Sequence[IndexCandidate]],
+    *,
+    rrf_k: int,
+    channel_weights: dict[SearchChannel, float],
+) -> tuple[tuple[IndexCandidate, float, tuple[SearchChannel, ...]], ...]:
+    """Blend per-channel normalized confidence with rank stability."""
+
+    scores: dict[str, float] = defaultdict(float)
+    candidates: dict[str, IndexCandidate] = {}
+    seen_channels: dict[str, set[SearchChannel]] = defaultdict(set)
+    for channel in channels:
+        if not channel:
+            continue
+        raw = [candidate.score for candidate in channel]
+        low, high = min(raw), max(raw)
+        for rank, candidate in enumerate(channel, start=1):
+            confidence = 1.0 if high == low else (candidate.score - low) / (high - low)
+            rank_confidence = rrf_k / (rrf_k + rank)
+            weight = channel_weights.get(candidate.channel, 1.0)
+            scores[candidate.chunk_id] += weight * (0.75 * confidence + 0.25 * rank_confidence)
+            candidates.setdefault(candidate.chunk_id, candidate)
+            seen_channels[candidate.chunk_id].add(candidate.channel)
+    ordered = sorted(scores, key=lambda chunk_id: (-scores[chunk_id], chunk_id))
+    return tuple(
+        (candidates[chunk_id], scores[chunk_id], tuple(sorted(seen_channels[chunk_id])))
         for chunk_id in ordered
     )
 
@@ -205,7 +241,7 @@ class HybridSearchService:
             bm25, dense, warnings = self._retrieve(normalized, context)
         query_type = classify_query(normalized)
         with self.tracer.span("rag.retrieval.fusion", {"query_type": query_type}):
-            fused = rrf_fuse(
+            fused = score_calibrated_fuse(
                 (bm25, dense),
                 rrf_k=self.rrf_k,
                 channel_weights={
@@ -219,23 +255,44 @@ class HybridSearchService:
             )
         candidate_ids = [candidate.chunk_id for candidate, _, _ in fused]
         authorized = self.control_plane.authorize_chunks(candidate_ids, context)
-        deduplicated: list[tuple[AuthorizedChunk, float, tuple[SearchChannel, ...]]] = []
+        authorized_candidates: list[tuple[AuthorizedChunk, float, tuple[SearchChannel, ...]]] = []
         seen_checksums: set[str] = set()
-        selected_texts: list[str] = []
-        document_counts: Counter[str] = Counter()
-        section_counts: Counter[str] = Counter()
         for candidate, score, channels in fused:
             chunk = authorized.get(candidate.chunk_id)
-            section_key = (
-                str(chunk.locator.get("section_path", chunk.document_id))
-                if chunk is not None
-                else ""
-            )
             if (
                 chunk is None
                 or not self._currently_authorized(chunk, context)
                 or chunk.content_checksum in seen_checksums
-                or document_counts[chunk.document_id] >= self.max_chunks_per_document
+            ):
+                continue
+            seen_checksums.add(chunk.content_checksum)
+            authorized_candidates.append((chunk, score, channels))
+            if len(authorized_candidates) >= self.rerank_top_k:
+                break
+        if authorized_candidates:
+            try:
+                with self.tracer.span("rag.retrieval.rerank"):
+                    order = self.reranker.rerank(
+                        normalized,
+                        [chunk.retrieval_text for chunk, _, _ in authorized_candidates],
+                    )
+            except TransientProviderError:
+                order = tuple(range(len(authorized_candidates)))
+                warnings.append("RERANKER_UNAVAILABLE")
+        else:
+            order = ()
+        requested = min(limit or self.final_evidence_count, self.final_evidence_count)
+        hits: list[SearchHit] = []
+        selected_texts: list[str] = []
+        document_counts: Counter[str] = Counter()
+        section_counts: Counter[str] = Counter()
+        for position in order:
+            if position < 0 or position >= len(authorized_candidates):
+                raise ValueError("reranker returned an invalid candidate index")
+            chunk, score, channels = authorized_candidates[position]
+            section_key = str(chunk.locator.get("section_path", chunk.document_id))
+            if (
+                document_counts[chunk.document_id] >= self.max_chunks_per_document
                 or section_counts[section_key] >= self.max_chunks_per_section
                 or any(
                     near_duplicate(
@@ -247,30 +304,9 @@ class HybridSearchService:
                 )
             ):
                 continue
-            seen_checksums.add(chunk.content_checksum)
             selected_texts.append(chunk.retrieval_text)
             document_counts[chunk.document_id] += 1
             section_counts[section_key] += 1
-            deduplicated.append((chunk, score, channels))
-            if len(deduplicated) >= self.rerank_top_k:
-                break
-        if deduplicated:
-            try:
-                with self.tracer.span("rag.retrieval.rerank"):
-                    order = self.reranker.rerank(
-                        normalized, [chunk.retrieval_text for chunk, _, _ in deduplicated]
-                    )
-            except TransientProviderError:
-                order = tuple(range(len(deduplicated)))
-                warnings.append("RERANKER_UNAVAILABLE")
-        else:
-            order = ()
-        requested = min(limit or self.final_evidence_count, self.final_evidence_count)
-        hits: list[SearchHit] = []
-        for position in order:
-            if position < 0 or position >= len(deduplicated):
-                raise ValueError("reranker returned an invalid candidate index")
-            chunk, score, channels = deduplicated[position]
             parent = (
                 self.control_plane.authorize_parent(chunk.parent_chunk_id, context)
                 if chunk.parent_chunk_id

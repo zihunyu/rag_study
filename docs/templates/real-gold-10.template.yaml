@@ -1,0 +1,11 @@
+# Copy this file outside the repository, replace every placeholder, obtain business review,
+# then calculate the HMAC signature with the protected RAG_GOLD_SIGNING_KEY.
+schema_version: 2
+dataset_id: replace-with-business-dataset-id
+revision: replace-with-immutable-revision
+status: PENDING_BUSINESS_REVIEW
+reviewer_id: ""
+reviewed_at: ""
+signature: ""
+corpus: [] # Exactly 20 reviewed chunks, ordered for 1/5/20 scale prefixes.
+cases: []

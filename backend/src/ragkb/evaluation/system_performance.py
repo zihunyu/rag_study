@@ -47,7 +47,7 @@ def _summary(latencies: list[float]) -> dict[str, float | int]:
 def run_representative_system_paths(
     root: Path,
     *,
-    document_scales: Sequence[int] = (2, 4),
+    document_scales: Sequence[int] = (1, 5, 20),
     concurrency_values: Sequence[int] = (1, 2),
 ) -> dict[str, object]:
     del root
@@ -112,7 +112,15 @@ def run_representative_system_paths(
                 client.post(
                     f"/api/v1/document-versions/{version_id}/review",
                     headers={"Idempotency-Key": f"perf-review-{scale}-{index}"},
-                    json={"decision": "APPROVED", "comment": "synthetic performance"},
+                    json={
+                        "decision": "APPROVED",
+                        "comment": "synthetic performance",
+                        "security_projection": {
+                            "visibility": "TENANT",
+                            "classification_level": 0,
+                            "acl_scope_tokens": [],
+                        },
+                    },
                 )
                 published, elapsed = _timed_post(
                     client,
@@ -200,5 +208,7 @@ def run_representative_system_paths(
         "failure_count": total_failure,
         "overall_latency": _summary(all_latencies),
         "slo_claimed": False,
+        "statistical_confidence": "low",
+        "performance_scope": list(document_scales),
         "real_external_call_performed": False,
     }

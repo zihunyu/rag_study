@@ -28,7 +28,7 @@ from ragkb.adapters.vector_indexing import (
 )
 from ragkb.config import EnvSettings
 from ragkb.domain.errors import ProviderAuthenticationError, ProviderUnavailable, SchemaMismatch
-from ragkb.domain.retrieval import IndexCandidate, SearchContext
+from ragkb.domain.retrieval import IndexCandidate, SearchContext, SecurityProjection
 
 __all__ = [
     "ZILLIZ_BASE_FIELDS",
@@ -339,6 +339,44 @@ class MilvusHybridAdapter:
             self._connected().delete(
                 collection_name=vector_collection_name(self._settings),
                 filter=f"document_id == {_quoted(document_id)}",
+                timeout=vector_timeout(self._settings),
+            )
+        except MilvusException as error:
+            raise self._provider_error(error) from error
+
+    def set_version_security_projection(
+        self, document_id: str, version_id: str, projection: SecurityProjection
+    ) -> None:
+        client = self._connected()
+        try:
+            rows = client.query(
+                collection_name=vector_collection_name(self._settings),
+                filter=(
+                    f"document_id == {_quoted(document_id)} and "
+                    f"document_version_id == {_quoted(version_id)}"
+                ),
+                output_fields=["zilliz_pk"],
+                consistency_level=vector_security_consistency(self._settings),
+            )
+            if not rows:
+                raise KeyError("SECURITY_PROJECTION_TARGET_NOT_INDEXED")
+            client.upsert(
+                collection_name=vector_collection_name(self._settings),
+                data=[
+                    {
+                        "zilliz_pk": str(row["zilliz_pk"]),
+                        "visibility": projection.visibility,
+                        "acl_scope_tokens": list(projection.acl_scope_tokens),
+                        "classification_level": projection.classification_level,
+                        "lifecycle_projection": projection.lifecycle_projection,
+                        "valid_from_epoch": projection.valid_from_epoch,
+                        "valid_to_epoch": projection.valid_to_epoch,
+                        "permission_revision": projection.permission_revision,
+                        "current_version": False,
+                    }
+                    for row in rows
+                ],
+                partial_update=True,
                 timeout=vector_timeout(self._settings),
             )
         except MilvusException as error:

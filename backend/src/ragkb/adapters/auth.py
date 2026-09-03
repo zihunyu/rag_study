@@ -40,6 +40,7 @@ class LocalSingleUserAuthenticator:
                 "role:admin",
             ),
             auth_mode="local_single_user",
+            clearance_level=3,
         )
 
 
@@ -83,6 +84,15 @@ class OIDCJWTAuthenticator:
         groups = tuple(sorted(set(map(str, claims.get("groups", [])))))
         tenant_id = str(claims["tenant_id"])
         user_id = str(claims["sub"])
+        clearance_value = claims.get(self.settings.oidc_clearance_claim)
+        if clearance_value is None:
+            raise AuthenticationError("AUTH_CLEARANCE_CLAIM_REQUIRED")
+        try:
+            clearance_level = int(clearance_value)
+        except (TypeError, ValueError) as error:
+            raise AuthenticationError("AUTH_CLEARANCE_CLAIM_INVALID") from error
+        if clearance_level < 0 or clearance_level > 3:
+            raise AuthenticationError("AUTH_CLEARANCE_CLAIM_INVALID")
         return RequestPrincipal(
             tenant_id=tenant_id,
             user_id=user_id,
@@ -94,6 +104,7 @@ class OIDCJWTAuthenticator:
                 *(f"group:{group}" for group in groups),
             ),
             auth_mode="oidc",
+            clearance_level=clearance_level,
         )
 
 
@@ -167,6 +178,7 @@ class OIDCDiscoveryJWTDecoder:
             algorithms=list(self.settings.oidc_allowed_algorithms),
             audience=audience,
             issuer=issuer,
+            leeway=self.settings.oidc_clock_skew_seconds,
             options={"require": ["exp", "iss", "aud", "sub"]},
         )
         if not isinstance(claims, Mapping):

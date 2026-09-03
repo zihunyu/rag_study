@@ -9,6 +9,7 @@ from ragkb.application.tracing import InMemoryTracer, TracerPort
 from ragkb.contracts.jobs import PersistentJobQueuePort
 from ragkb.contracts.ports import ChunkerPort, ContentStoragePort, ParserRouterPort, ParsingDeferred
 from ragkb.contracts.uploads import UploadRepositoryPort
+from ragkb.domain.retrieval import SecurityProjection
 from ragkb.domain.state_machines import JobState
 from ragkb.domain.validation import DocumentQualityReport
 
@@ -22,6 +23,7 @@ class LocalIndexingSinkPort(Protocol):
         tenant_id: str,
         space_id: str,
         permission_revision: int = 1,
+        security_projection: SecurityProjection | None = None,
     ) -> None: ...
 
 
@@ -104,7 +106,11 @@ class LocalIngestionWorker:
                         document_id=str(job.payload["document_id"]),
                         tenant_id=str(job.payload["tenant_id"]),
                         space_id=str(job.payload["space_id"]),
+                        security_projection=SecurityProjection.unapproved(permission_revision=1),
                     )
+                    mark_index_ready = getattr(self.repository, "mark_index_ready", None)
+                    if callable(mark_index_ready):
+                        mark_index_ready(version_id)
             self.repository.save_quality_report(DocumentQualityReport.from_document(document))
             completed = self.queue.complete(job.id, self.worker_id)
             if completed.state is JobState.CANCELLED:

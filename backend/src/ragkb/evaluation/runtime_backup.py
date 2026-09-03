@@ -76,7 +76,15 @@ def run_runtime_backup_restore_probe() -> dict[str, object]:
         client.post(
             f"/api/v1/document-versions/{version_id}/review",
             headers={"Idempotency-Key": "backup-review"},
-            json={"decision": "APPROVED", "comment": "temporary backup probe"},
+            json={
+                "decision": "APPROVED",
+                "comment": "temporary backup probe",
+                "security_projection": {
+                    "visibility": "TENANT",
+                    "classification_level": 0,
+                    "acl_scope_tokens": [],
+                },
+            },
         )
         client.post(
             f"/api/v1/document-versions/{version_id}:publish",

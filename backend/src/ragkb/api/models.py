@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class StrictModel(BaseModel):
@@ -94,9 +94,35 @@ class DocumentQualityResponse(StrictModel):
     real_acceptance: bool
 
 
+class SecurityProjectionRequest(StrictModel):
+    visibility: Literal["TENANT", "RESTRICTED"]
+    classification_level: int = Field(ge=0, le=3)
+    acl_scope_tokens: list[str] = Field(default_factory=list, max_length=100)
+    valid_to_epoch: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def validate_acl(self) -> SecurityProjectionRequest:
+        normalized = [item.strip() for item in self.acl_scope_tokens if item.strip()]
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("ACL scope tokens must be unique and non-empty")
+        if self.visibility == "RESTRICTED" and not normalized:
+            raise ValueError("restricted visibility requires ACL scope tokens")
+        if self.visibility == "TENANT" and normalized:
+            raise ValueError("tenant visibility cannot carry ACL scope tokens")
+        self.acl_scope_tokens = normalized
+        return self
+
+
 class DocumentReviewRequest(StrictModel):
     decision: Literal["APPROVED", "NEEDS_REWORK", "REJECTED"]
     comment: str = Field(default="", max_length=2000)
+    security_projection: SecurityProjectionRequest | None = None
+
+    @model_validator(mode="after")
+    def approved_requires_security(self) -> DocumentReviewRequest:
+        if self.decision == "APPROVED" and self.security_projection is None:
+            raise ValueError("approved reviews require a security projection")
+        return self
 
 
 class DocumentReviewResponse(StrictModel):
@@ -106,6 +132,8 @@ class DocumentReviewResponse(StrictModel):
     decision: str
     comment: str
     quality_revision: str
+    security_revision: str | None = None
+    security_projection: dict[str, Any] | None = None
     real_acceptance: bool
 
 

@@ -76,7 +76,7 @@ from ragkb.contracts.jobs import QueueConflictError, QueueJob, QueueLeaseError, 
 from ragkb.domain.auth import RequestPrincipal
 from ragkb.domain.lifecycle import LifecycleRecord
 from ragkb.domain.rag import AskResult
-from ragkb.domain.retrieval import SearchContext, SecurityWatermarkNotReady
+from ragkb.domain.retrieval import SearchContext, SecurityProjection, SecurityWatermarkNotReady
 from ragkb.domain.state_machines import JobState
 from ragkb.domain.uploads import (
     IdempotencyConflictError,
@@ -282,12 +282,12 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
         docs_url="/docs",
         debug=runtime.settings.app_debug,
     )
-    if runtime.model_transport is not None:
-        app.add_event_handler("shutdown", runtime.model_transport.close)
+    for provider_transport in runtime.provider_transports:
+        app.router.add_event_handler("shutdown", provider_transport.close)
     oidc_decoder = getattr(runtime.authenticator, "verified_decoder", None)
     close_oidc_decoder = getattr(oidc_decoder, "close", None)
     if callable(close_oidc_decoder):
-        app.add_event_handler("shutdown", close_oidc_decoder)
+        app.router.add_event_handler("shutdown", close_oidc_decoder)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(runtime.settings.cors_origins),
@@ -390,7 +390,23 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
 
     @app.get("/health/ready", response_model=HealthResponse, tags=["health"])
     async def ready() -> HealthResponse:
-        runtime.database.initialize()
+        if runtime.settings.rag_runtime_profile == "production":
+            runtime.repository.list_spaces()
+            runtime.queue.get("__readiness_probe__")
+            release = runtime.retrieval_release.current_release(runtime.tenant_id, runtime.space_id)
+            probe_context = SearchContext(
+                runtime.tenant_id,
+                (runtime.space_id,),
+                (),
+                0,
+                int(time.time()),
+                release.active_generation_id,
+                release.active_permission_revision,
+                release.security_watermark,
+            )
+            runtime.search_service.index.observed_security_watermark(probe_context)
+        else:
+            runtime.database.initialize()
         return HealthResponse(
             status="ready", runtime="g3_native_python", real_service_acceptance=False
         )
@@ -537,6 +553,12 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
             idempotency_key=idempotency_key,
         )
         runtime.lifecycle_store.reload()
+        if result["document_id"] not in runtime.lifecycle_store.documents:
+            runtime.lifecycle_service.register_document(
+                str(result["document_id"]),
+                str(result["document_version_id"]),
+                trace_id=_request_id(request),
+            )
         return CompleteUploadResponse.model_validate(result)
 
     @app.post(
@@ -659,16 +681,53 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
         version = runtime.repository.get_version(version_id)
         _ensure_document_readable(runtime, str(version["document_id"]), principal)
         quality = runtime.repository.get_quality_report(version_id)
-        payload = {**body.model_dump(), "reviewer_id": principal.user_id}
+        now = int(time.time())
+        security = None
+        security_body = body.security_projection
+        if body.decision == "APPROVED" and security_body is not None:
+            record = runtime.lifecycle_store.documents.get(str(version["document_id"]))
+            if record is None:
+                raise LifecycleStateConflict("DOCUMENT_NOT_REGISTERED")
+            security = SecurityProjection(
+                visibility=security_body.visibility,
+                classification_level=security_body.classification_level,
+                acl_scope_tokens=tuple(security_body.acl_scope_tokens),
+                lifecycle_projection="STAGED",
+                permission_revision=record.acl_revision,
+                valid_from_epoch=now,
+                valid_to_epoch=security_body.valid_to_epoch,
+            )
+        payload = {**body.model_dump(mode="json"), "reviewer_id": principal.user_id}
         result = runtime.repository.save_document_review(
             version_id=version_id,
             reviewer_id=principal.user_id,
             decision=body.decision,
             comment=body.comment,
             quality_revision=str(quality["parser_revision"]),
+            security_revision="reviewed-security:v1" if security is not None else None,
+            security_projection=(
+                {
+                    "visibility": security.visibility,
+                    "classification_level": security.classification_level,
+                    "acl_scope_tokens": list(security.acl_scope_tokens),
+                    "lifecycle_projection": security.lifecycle_projection,
+                    "permission_revision": security.permission_revision,
+                    "valid_from_epoch": security.valid_from_epoch,
+                    "valid_to_epoch": security.valid_to_epoch,
+                }
+                if security is not None
+                else None
+            ),
             idempotency_key=idempotency_key,
             request_hash=runtime.uploads.request_hash(payload),
         )
+        if security is not None:
+            runtime.lifecycle_service.set_reviewed_security_projection(
+                str(version["document_id"]),
+                version_id,
+                security,
+                trace_id=_request_id(request),
+            )
         return DocumentReviewResponse.model_validate(result)
 
     @app.get(
@@ -780,7 +839,7 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
             tenant_id=principal.tenant_id,
             space_ids=(runtime.space_id,),
             subject_scope_tokens=principal.scope_tokens,
-            clearance_level=3,
+            clearance_level=principal.clearance_level,
             as_of_epoch=int(time.time()),
             active_generation_id=release.active_generation_id,
             active_permission_revision=release.active_permission_revision,
@@ -828,6 +887,7 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
             principal.tenant_id,
             principal.user_id,
             subject_scope_tokens=principal.scope_tokens,
+            clearance_level=principal.clearance_level,
         )
         return _ask_response(result)
 
@@ -850,6 +910,7 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
                 principal.tenant_id,
                 principal.user_id,
                 subject_scope_tokens=principal.scope_tokens,
+                clearance_level=principal.clearance_level,
             )
             verification = "verified" if result.verified else "verification_failed"
             yield f"event: progress\ndata: {json.dumps({'stage': verification})}\n\n"
@@ -956,6 +1017,9 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
             event_id=idempotency_key,
             trace_id=_request_id(request),
         )
+        set_current_version = getattr(runtime.repository, "set_document_current_version", None)
+        if callable(set_current_version):
+            set_current_version(document_id, version_id)
         return _lifecycle_response(record)
 
     @app.post(
@@ -981,6 +1045,9 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
             event_id=idempotency_key,
             trace_id=_request_id(request),
         )
+        set_current_version = getattr(runtime.repository, "set_document_current_version", None)
+        if callable(set_current_version):
+            set_current_version(document_id, body.version_id)
         return _lifecycle_response(record)
 
     @app.put(

@@ -26,6 +26,7 @@ class SearchBackedEvidenceProvider:
         prompt_revision: str,
         model_revision: str,
         final_evidence_count: int,
+        verifier_revision: str = "",
         release_provider: RetrievalReleasePort | None = None,
         clock: Callable[[], float] = time.time,
     ) -> None:
@@ -37,6 +38,7 @@ class SearchBackedEvidenceProvider:
         self.prompt_revision = prompt_revision
         self.model_revision = model_revision
         self.final_evidence_count = final_evidence_count
+        self.verifier_revision = verifier_revision
         self.release_provider = release_provider
         self.clock = clock
 
@@ -47,6 +49,7 @@ class SearchBackedEvidenceProvider:
         user_id: str,
         *,
         subject_scope_tokens: tuple[str, ...] = (),
+        clearance_level: int = 0,
     ) -> EvidencePackage:
         query_time = int(self.clock())
         release = (
@@ -71,7 +74,7 @@ class SearchBackedEvidenceProvider:
             tenant_id=tenant_id,
             space_ids=(self.space_id,),
             subject_scope_tokens=subject_scope_tokens,
-            clearance_level=3,
+            clearance_level=clearance_level,
             as_of_epoch=query_time,
             active_generation_id=active_generation_id,
             active_permission_revision=permission_revision,
@@ -111,5 +114,6 @@ class SearchBackedEvidenceProvider:
             model_revision=self.model_revision,
             permission_revision=permission_revision,
             evidence=evidence,
+            verifier_revision=self.verifier_revision,
             real_acceptance=result.real_acceptance,
         )

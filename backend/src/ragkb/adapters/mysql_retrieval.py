@@ -8,7 +8,12 @@ from typing import Any
 
 from ragkb.adapters.mysql_control import MySQLControlPlaneAdapter
 from ragkb.domain.errors import ProviderUnavailable, SchemaMismatch
-from ragkb.domain.retrieval import AuthorizedChunk, RetrievalRelease, SearchContext
+from ragkb.domain.retrieval import (
+    AuthorizedChunk,
+    RetrievalRelease,
+    SearchContext,
+    SecurityProjection,
+)
 
 
 class MySQLRetrievalControlPlane:
@@ -230,6 +235,41 @@ class MySQLRetrievalControlPlane:
             cursor.execute(
                 "DELETE FROM retrieval_chunk_projections WHERE document_id=%s", (document_id,)
             )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def set_version_security_projection(
+        self, document_id: str, version_id: str, projection: SecurityProjection
+    ) -> None:
+        connection = self.control.connect()
+        try:
+            cursor = connection.cursor()
+            cursor.execute(
+                """
+                UPDATE retrieval_chunk_projections
+                SET visibility=%s, acl_scope_tokens_json=%s, classification_level=%s,
+                    lifecycle_projection=%s, valid_from_epoch=%s, valid_to_epoch=%s,
+                    permission_revision=%s, current_version=FALSE, updated_at=NOW(6)
+                WHERE document_id=%s AND document_version_id=%s
+                """,
+                (
+                    projection.visibility,
+                    json.dumps(list(projection.acl_scope_tokens), sort_keys=True),
+                    projection.classification_level,
+                    projection.lifecycle_projection,
+                    projection.valid_from_epoch,
+                    projection.valid_to_epoch,
+                    projection.permission_revision,
+                    document_id,
+                    version_id,
+                ),
+            )
+            if cursor.rowcount < 1:
+                raise KeyError("SECURITY_PROJECTION_TARGET_NOT_INDEXED")
             connection.commit()
         except Exception:
             connection.rollback()

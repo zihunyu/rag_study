@@ -47,6 +47,7 @@ def _claims(tenant_id: str, roles: list[str]):
         "exp": int(time.time()) + 600,
         "sub": "oidc-user",
         "tenant_id": tenant_id,
+        "clearance_level": 2,
         "roles": roles,
         "groups": ["engineering"],
     }
@@ -174,4 +175,66 @@ def test_production_oidc_decoder_discovers_and_caches_jwks(tmp_path: Path) -> No
     assert decoder(token, settings.oidc_issuer_url, settings.oidc_audience)["sub"] == "oidc-user"
     assert decoder(token, settings.oidc_issuer_url, settings.oidc_audience)["sub"] == "oidc-user"
     assert len(requests) == 2
+    within_skew = jwt.encode(
+        {**_claims("tenant-1", ["reader"]), "nbf": int(time.time()) + 30},
+        private_key,
+        algorithm="RS256",
+        headers={"kid": "key-1"},
+    )
+    assert decoder(within_skew, settings.oidc_issuer_url, settings.oidc_audience)["sub"]
+    beyond_skew = jwt.encode(
+        {**_claims("tenant-1", ["reader"]), "nbf": int(time.time()) + 120},
+        private_key,
+        algorithm="RS256",
+        headers={"kid": "key-1"},
+    )
+    with pytest.raises(jwt.ImmatureSignatureError):
+        decoder(beyond_skew, settings.oidc_issuer_url, settings.oidc_audience)
+    decoder.close()
+
+
+def test_oidc_unknown_kid_refreshes_jwks_for_key_rotation(tmp_path: Path) -> None:
+    settings = _oidc_settings(tmp_path)
+    first_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    second_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    first_jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(first_key.public_key()))
+    second_jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(second_key.public_key()))
+    first_jwk.update({"kid": "key-1", "alg": "RS256", "use": "sig"})
+    second_jwk.update({"kid": "key-2", "alg": "RS256", "use": "sig"})
+    current_keys = [[first_jwk]]
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        if request.url.path.endswith("openid-configuration"):
+            return httpx.Response(
+                200,
+                json={
+                    "issuer": settings.oidc_issuer_url,
+                    "jwks_uri": "https://issuer.example/.well-known/jwks.json",
+                },
+                request=request,
+            )
+        return httpx.Response(200, json={"keys": current_keys[0]}, request=request)
+
+    decoder = OIDCDiscoveryJWTDecoder(settings)
+    decoder._client.close()
+    decoder._client = httpx.Client(transport=httpx.MockTransport(handler))
+    first_token = jwt.encode(
+        _claims("tenant-1", ["reader"]),
+        first_key,
+        algorithm="RS256",
+        headers={"kid": "key-1"},
+    )
+    assert decoder(first_token, settings.oidc_issuer_url, settings.oidc_audience)["sub"]
+    current_keys[0] = [second_jwk]
+    second_token = jwt.encode(
+        _claims("tenant-1", ["reader"]),
+        second_key,
+        algorithm="RS256",
+        headers={"kid": "key-2"},
+    )
+
+    assert decoder(second_token, settings.oidc_issuer_url, settings.oidc_audience)["sub"]
+    assert len(requests) == 4
     decoder.close()

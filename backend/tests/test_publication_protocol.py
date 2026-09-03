@@ -85,7 +85,15 @@ def _approve(client: TestClient, version_id: str, key: str) -> None:
     response = client.post(
         f"/api/v1/document-versions/{version_id}/review",
         headers={"Idempotency-Key": f"approve-{key}"},
-        json={"decision": "APPROVED", "comment": "synthetic local review"},
+        json={
+            "decision": "APPROVED",
+            "comment": "synthetic local review",
+            "security_projection": {
+                "visibility": "TENANT",
+                "classification_level": 0,
+                "acl_scope_tokens": [],
+            },
+        },
     )
     assert response.status_code == 200
 
