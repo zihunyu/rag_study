@@ -71,12 +71,12 @@ test("upload, worker indexing, publish, ask, and citation use the real local bac
   await page.getByPlaceholder("Version ID").fill(completed.document_version_id);
 
   const workerOutput = execFileSync(
-    process.env.RAGKB_E2E_PYTHON,
-    ["../run_worker.py", "--once"],
+    process.env.RAGKB_E2E_WORKER,
+    ["--once"],
     {
-    cwd: process.cwd(),
-    env: process.env,
-    stdio: "pipe",
+      cwd: process.cwd(),
+      env: process.env,
+      stdio: "pipe",
     },
   ).toString();
   expect(workerOutput).toContain('"failed": false');
