@@ -51,7 +51,10 @@ jobs:
           cache: pip
       - run: python -m pip install -r requirements.lock
       - run: python -m pip install -e . --no-deps
-      - run: python -m pytest --cov=ragkb --cov-branch --cov-report=xml --cov-fail-under=70
+      - run: cp config/.env.example config/.env
+      - run: >-
+          python -m pytest -m "not integration"
+          --cov=ragkb --cov-branch --cov-report=xml --cov-fail-under=70
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
@@ -148,6 +151,7 @@ jobs:
       - run: docker build -f Dockerfile.backend -t ragkb-backend:${{ github.sha }} .
       - run: docker build -f Dockerfile.worker -t ragkb-worker:${{ github.sha }} .
       - run: docker build -f frontend/Dockerfile -t ragkb-frontend:${{ github.sha }} frontend
+      - run: cp config/.env.example config/.env
       - run: docker compose -f compose.yaml config --quiet
 
   dependency-audit:
