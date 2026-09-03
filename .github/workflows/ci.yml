@@ -24,6 +24,7 @@ jobs:
       - run: python -m venv /tmp/ragkb-smoke
       - run: /tmp/ragkb-smoke/bin/python -m pip install .
       - run: /tmp/ragkb-smoke/bin/python -c "import ragkb.runtime_components"
+      - run: cp config/.env.example config/.env
       - run: /tmp/ragkb-smoke/bin/ragkb-backend --check
 
   lint-type:
@@ -162,7 +163,9 @@ jobs:
       - run: python -m pip_audit -r requirements.lock
       - run: npm audit --audit-level=high
         working-directory: frontend
-      - run: python scripts/generate_assurance.py
+      - run: >-
+          python scripts/generate_assurance.py
+          --output artifacts/implementation/assurance.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: supply-chain-assurance

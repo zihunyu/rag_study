@@ -80,7 +80,6 @@ jobs:
       ZILLIZ_CLOUD_ENABLE_BM25: "true"
       ZILLIZ_CLOUD_SECURITY_CONSISTENCY_LEVEL: Strong
       RETRIEVAL_ACTIVE_GENERATION_ID: low-cost-${{ github.run_id }}
-      TOKENIZER_ARTIFACT_PATH: ${{ runner.temp }}/tokenizer.json
       TOKENIZER_ARTIFACT_SHA256: ${{ vars.TOKENIZER_ARTIFACT_SHA256 }}
       TOKENIZER_ID: ${{ vars.TOKENIZER_ID }}
       MODEL_HTTP_MAX_RETRIES: "0"
@@ -92,6 +91,8 @@ jobs:
           cache: pip
       - run: python -m pip install -r requirements.lock
       - run: python -m pip install -e . --no-deps
+      - name: Bind ephemeral tokenizer path
+        run: echo "TOKENIZER_ARTIFACT_PATH=$RUNNER_TEMP/tokenizer.json" >> "$GITHUB_ENV"
       - name: Materialize reviewed Gold Dataset
         env:
           RAG_GOLD_DATASET_B64: ${{ secrets.RAG_GOLD_DATASET_B64 }}
@@ -103,7 +104,7 @@ jobs:
           TOKENIZER_ARTIFACT_B64: ${{ secrets.TOKENIZER_ARTIFACT_B64 }}
         run: >-
           python scripts/materialize_base64_secret.py
-          --env TOKENIZER_ARTIFACT_B64 --output "$RUNNER_TEMP/tokenizer.json"
+          --env TOKENIZER_ARTIFACT_B64 --output "$TOKENIZER_ARTIFACT_PATH"
       - name: Validate complete production configuration
         run: python scripts/check_env.py --gate G4
       - name: Validate ten-case business signature
