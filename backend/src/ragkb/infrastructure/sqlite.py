@@ -124,6 +124,18 @@ CREATE TABLE IF NOT EXISTS chunks (
     tokenizer_id TEXT NOT NULL DEFAULT 'whitespace-estimate:g1-v1',
     status TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS local_search_index (
+    chunk_id TEXT PRIMARY KEY,
+    document_version_id TEXT NOT NULL,
+    parent_chunk_id TEXT,
+    retrieval_text TEXT NOT NULL,
+    vector_json TEXT NOT NULL,
+    index_generation_id TEXT NOT NULL,
+    security_watermark INTEGER NOT NULL DEFAULT 0,
+    updated_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_local_search_generation
+    ON local_search_index(index_generation_id);
 CREATE TABLE IF NOT EXISTS upload_sessions (
     id TEXT PRIMARY KEY,
     tenant_id TEXT NOT NULL REFERENCES tenants(id),

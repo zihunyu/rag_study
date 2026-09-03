@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import shutil
 import subprocess
@@ -9,9 +10,22 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+RUN_INTEGRATION = False
+INTEGRATION_CHECKS = frozenset(
+    {
+        "real_format_validation",
+        "embedding_v3_plan",
+        "real_uat_plan",
+        "real_uat_runner_plan",
+        "real_uat_failure_review",
+    }
+)
 
 
 def _run(name: str, command: list[str], working_directory: Path = ROOT) -> dict[str, object]:
+    if not RUN_INTEGRATION and (name in INTEGRATION_CHECKS or name.startswith("uat_")):
+        print(f"===== {name} =====\nSKIPPED: requires immutable real-provider artifacts")
+        return {"name": name, "status": "SKIPPED"}
     completed = subprocess.run(  # noqa: S603
         command,
         cwd=working_directory,
@@ -32,6 +46,11 @@ def _run(name: str, command: list[str], working_directory: Path = ROOT) -> dict[
 
 
 def main() -> int:
+    global RUN_INTEGRATION
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--integration", action="store_true")
+    args = parser.parse_args()
+    RUN_INTEGRATION = args.integration
     checks: list[dict[str, object]] = []
     if sys.version_info[:2] != (3, 12):
         checks.append({"name": "python_version", "status": "FAILED"})
@@ -46,7 +65,18 @@ def main() -> int:
             ),
             _run("ruff", [sys.executable, "-m", "ruff", "check", "."]),
             _run("ruff_format", [sys.executable, "-m", "ruff", "format", "--check", "."]),
-            _run("pytest", [sys.executable, "-m", "pytest"]),
+            _run(
+                "pytest_coverage",
+                [
+                    sys.executable,
+                    "-m",
+                    "pytest",
+                    "--cov=ragkb",
+                    "--cov-branch",
+                    "--cov-report=term-missing:skip-covered",
+                    "--cov-fail-under=70",
+                ],
+            ),
             _run(
                 "spikes",
                 [
@@ -76,6 +106,7 @@ def main() -> int:
                 ],
             ),
             _run("g3_eval", [sys.executable, "scripts/check_g3_eval.py"]),
+            _run("rag_quality", [sys.executable, "scripts/check_rag_quality.py"]),
             _run(
                 "g4_format_inputs",
                 [
@@ -238,7 +269,7 @@ def main() -> int:
     summary = {
         "checks": checks,
         "failed": [item["name"] for item in checks if item["status"] == "FAILED"],
-        "skipped": [],
+        "skipped": [item["name"] for item in checks if item["status"] == "SKIPPED"],
     }
     output = ROOT / "artifacts/implementation/quality-summary.json"
     output.parent.mkdir(parents=True, exist_ok=True)

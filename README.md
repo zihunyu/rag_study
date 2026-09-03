@@ -1,87 +1,129 @@
 # 企业级 RAG 知识库
 
-项目使用原生 Python 进程和 npm，不使用 Docker、Compose 或 Testcontainers。
+这个仓库提供一条可审计的 RAG 链路：上传、解析、Token/结构化分片、Embedding、
+BM25 + Dense 检索、查询类型感知融合、Rerank、基于证据生成、引用校验和最终权限复核。
 
-## 配置
+系统有两个明确分离的运行模式：
 
-- 实际配置：`config/.env`，被 Git 忽略，禁止提交或复制到日志/聊天；
-- 唯一模板：`config/.env.example`，包含全部类型化配置和逐项说明；
-- 优先级：进程环境变量 > `config/.env` > 程序类型默认值；
-- 检查命令只输出变量名、来源、是否配置和错误码，绝不输出值。
+- `RAG_RUNTIME_PROFILE=local`：本地 SQLite 持久索引会真实计算 BM25 和余弦相似度；
+  Embedding、Reranker 与答案生成保持确定性，因此结果始终是 `real_acceptance=false`。
+- `RAG_RUNTIME_PROFILE=production`：装配真实 OpenAI-compatible Embedding/Reranker/LLM
+  及 Zilliz 或 Milvus。生产模式禁止明文 HTTP，也禁止任何 `Deterministic*`/`Fake*` 组件。
 
-```powershell
-& '.\.venv\Scripts\python.exe' scripts/check_env.py --gate G2
-```
+`real_acceptance=true` 不能由一个布尔配置打开。只有真实评测生成的验收证据文件，其 Provider、
+模型、Prompt、索引代际、数据集版本和内容哈希均与当前运行时一致时，系统才会返回该标记。
 
-中间件只保留 MySQL 和 Redis。任务队列固定为 Python 本地 SQLite 持久队列。
-向量数据库固定为 Zilliz Cloud 中国区，通过 `pymilvus.MilvusClient` 使用
-`ZILLIZ_CLOUD_URI` 与 `ZILLIZ_CLOUD_TOKEN` 连接。
+## 前置条件
 
-MinerU 使用 `MINERU_TOKENS` 英文逗号分隔 Token 池，支持 round-robin、单 Token
-并发上限、连续失败、429 冷却和自动故障切换。任何状态、日志和异常均不得包含 Token。
+- Python 3.12
+- Node.js 22（仅前端）
+- 本地模式不需要云服务
+- 生产模式需要 MySQL、Redis、Zilliz/Milvus 及已批准的模型 Provider
 
-LLM 可按部署需要使用 HTTP 或 HTTPS。`LLM_ALLOW_HTTP=true` 时允许两种协议；设为
-`false` 时必须使用 HTTPS，或同时提供受信任内网/VPN 传输服务与审核证据。其他外部
-AI 服务仍遵循 HTTPS 或受批准私有传输规则。当前 `ASR_ENABLED=false`，ASR/audio 由用户
-暂缓，三项 ASR 配置留空且不阻断非 ASR G4；未来重新启用时恢复校验。
+## 本地快速开始
 
-## G2 检索边界
-
-- `/api/v1/search` 独立于问答生成；当前没有 `/ask`；
-- 本地链路使用确定性 Embedding/Reranker、SQLite 控制面测试适配器与内存 Hybrid Index，
-  输出 `real_acceptance=false`；
-- MySQL/Redis、Zilliz Cloud 与 OpenAI-compatible 模型均有供应商适配和 Mock 契约，默认
-  不连接、不写云资源、不发起计费调用；
-- Zilliz 只读检查确认 database/Collection 尚不存在。精确创建计划可通过下列命令生成，
-  但不会执行：
+先复制配置模板：
 
 ```powershell
-& '.\.venv\Scripts\python.exe' scripts/plan_zilliz_collection.py
-& '.\.venv\Scripts\python.exe' scripts/plan_model_probes.py
+# Windows PowerShell
+Copy-Item config/.env.example config/.env
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.lock
+python -m pip install -e . --no-deps
+python scripts/check_env.py --gate G0
 ```
 
-云端创建仍要求 `ZILLIZ_COLLECTION_CREATE_APPROVAL_REQUIRED`；模型单次真实探测仍要求
-`BILLABLE_MODEL_CALL_APPROVAL_REQUIRED`。
-
-## G3 可信问答与生命周期
-
-- `/api/v1/ask` 使用 EvidencePackage、六业务状态、确定性 Mock 和服务端缓冲输出；不调用真实 LLM；
-- `/api/v1/ask:stream` 在 verified 前只发送阶段进度，最终 result 才包含答案；
-- 引用使用短时 HMAC 签名 URL，不在 URL 暴露内部文档、版本或 Chunk ID；
-- 发布/回滚、ACL security transition、撤权、删除 tombstone、恢复不复活和追加式审计均为本地契约实现；
-- MySQL G3 DDL 只有 plan，尚未获批在真实数据库执行；真实云端破坏性演练未执行；
-- G3 评测集为固定 seed/revision 的六状态合成 Harness，始终 `real_acceptance=false`。
-
-## 环境与启动
-
-```powershell
-& 'C:\Users\jcy\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' scripts/bootstrap.py
-& '.\.venv\Scripts\python.exe' run_backend.py
-& '.\.venv\Scripts\python.exe' run_worker.py
-cd frontend
-npm ci
-npm run dev
+```bash
+# Linux / macOS
+cp config/.env.example config/.env
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.lock
+python -m pip install -e . --no-deps
+python scripts/check_env.py --gate G0
 ```
 
-质量检查：
+分别启动三个进程：
 
-```powershell
-& '.\.venv\Scripts\python.exe' scripts/run_quality.py
+```text
+python run_backend.py
+python run_worker.py
+cd frontend && npm ci && npm run dev
 ```
 
-运行数据默认位于 `./data/storage` 并被 Git 忽略。G1/G2 的契约、解析器、适配器、
-合成 Fixture 与 Harness 结果始终带 `real_acceptance=false`；当前 G4 门禁只计算文本 PDF、
-扫描/图片、DOCX、PPTX、表格五类各 10 份。audio 为 `deferred_by_user`，历史契约保留但
-不计入当前 ready，也不得宣称音频支持。
+打开 `http://127.0.0.1:5173`。本地数据保存在 `data/storage`，已被 Git 忽略。
 
-## 实现完成后的本地治理工具
+## 生产 RAG 模式
 
-- `python scripts/local_stack.py plan|start|status|stop`：原生 Python/npm 进程，无 Docker；
-  stop 仅终止 PID/create-time/executable/command/cwd/owner-token 全部匹配的本项目子进程；
-- `python scripts/plan_operations.py`：迁移、对账、备份、恢复和回滚 plan-only；
-- `python scripts/generate_assurance.py --output ...`：离线 SBOM/许可证/依赖证据；
-- `python scripts/generate_final_validation_plan.py`：最终统一真实验证计划，缺证据保持 BLOCKED。
+生产环境至少需要设置：
 
-管理端包含 diagnostics/alerts、Pilot Go/No-Go、synthetic canary/rollout/rollback、UAT、
-7 天 observation、incident/defect/signoff 和 final acceptance dashboard。所有当前结果均为
-`simulated=true`、`real_acceptance=false`，未进入真实 G5/G6 验收。
+```text
+APP_ENV=production
+APP_DEBUG=false
+RAG_RUNTIME_PROFILE=production
+REAL_PROVIDER_CALLS_ENABLED=true
+RETRIEVAL_ACTIVE_GENERATION_ID=<已对账的不可变代际>
+VECTOR_BACKEND=zilliz                 # 或 milvus
+LLM_ALLOW_HTTP=false
+```
+
+同时配置模型、向量库、身份、数据区域和密钥。`production + http://` 会在 G0 配置门禁中直接
+失败。密钥只能放在 `config/.env`、部署 Secret Store 或进程环境中，禁止写入日志和仓库。
+
+向量后端：
+
+- `zilliz` 使用 `ZILLIZ_CLOUD_*`；
+- `milvus` 使用通用的 `VECTOR_URI/TOKEN/DATABASE/COLLECTION`；
+- `local` 使用 SQLite 持久 BM25 + Dense，仅供开发和离线验收。
+
+模型 HTTP 连接在应用生命周期内复用，具有独立 connect/read/write/pool timeout、并发上限、
+429/502/503/504 重试、指数退避、`Retry-After` 支持和熔断。生成 Prompt 把检索内容明确标为
+不可信数据，最终答案还必须通过引用和权限二次校验。
+
+## 分片与检索
+
+`CHUNK_STRATEGY` 支持 `token`、`structure` 和 `semantic`。默认结构化分片保留标题/章节路径，
+搜索使用小 Chunk，回答可附带授权后的 Parent Chunk。大小、Overlap、上下限和 Parent 上限均在
+`config/.env` 配置。
+
+检索会并发执行 BM25 与 Embedding/Dense 路径，并按查询类型调整权重：型号、错误码等精确查询
+提高 BM25 权重，自然语言查询保持默认 Hybrid。送入模型前还会执行 Unicode/标点归一化、
+近重复过滤及单文档证据数量限制。
+
+## 质量与测试
+
+```text
+python scripts/check_rag_quality.py
+python scripts/run_quality.py
+cd frontend && npm run check
+cd frontend && npx playwright install chromium && npm run test:e2e
+```
+
+质量门禁覆盖 Ruff、Mypy、分支覆盖率、后端测试、前端组件/API/E2E、安全扫描和冻结 Gold
+Dataset 的 Recall@K、Precision@K、Hit Rate、MRR、nDCG、答案 F1、引用精确率/召回率与
+No-answer Accuracy。阈值位于 `config/rag-quality-thresholds.json`。
+
+普通 PR 只运行离线测试；真实 Provider 调用位于受保护、手动触发的 GitHub Environment，避免
+PR 意外产生费用或接触生产密钥。
+
+## 容器运行
+
+保留原生开发方式，同时提供 Backend、Worker、Frontend 镜像：
+
+```text
+docker compose up --build
+```
+
+Compose 使用同一个持久卷共享本地存储；Zilliz/Milvus 和模型 Provider 仍是外部服务。
+
+## 可观测性与安全边界
+
+搜索和问答记录 `rag.ask`、evidence build、BM25、Dense、Embedding、fusion、rerank、LLM 与
+citation verify 的嵌套 Span。默认在诊断接口中汇总；安装 `.[observability]` 后可由部署层桥接
+OpenTelemetry SDK/OTLP。
+
+权限过滤在检索与生成前执行，生成后再次复核。删除、撤权或索引代际变化会自然使答案缓存
+失效。外部真实调用仍需部署负责人显式开启，所有状态和异常只能暴露稳定错误码。
+
+贡献流程、架构决策和发布记录分别见 `CONTRIBUTING.md`、`docs/adr` 与 `CHANGELOG.md`。

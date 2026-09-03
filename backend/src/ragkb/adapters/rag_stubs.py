@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from ragkb.domain.errors import GenerationUnavailable
 from ragkb.domain.ids import new_uuid7
 from ragkb.domain.rag import (
     DraftAnswer,
@@ -73,7 +74,7 @@ class DeterministicBufferedGenerator:
 
     def generate(self, question: str, evidence: tuple[Evidence, ...]) -> DraftAnswer:
         if self.fail:
-            raise RuntimeError("synthetic generation failure")
+            raise GenerationUnavailable("SYNTHETIC_GENERATION_FAILURE")
         return DraftAnswer(self.answer, self.citation_ids)
 
 

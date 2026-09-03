@@ -50,7 +50,7 @@ def test_confirmation_root_cli_joins_by_index_and_bundle_hash(tmp_path: Path) ->
     )
     output = tmp_path / "output.json"
     script = Path(__file__).resolve().parents[2] / "scripts/prepare_uat_retest_sources_v5.py"
-    subprocess.run(
+    subprocess.run(  # noqa: S603 - fixed repository script under test
         [
             sys.executable,
             str(script),

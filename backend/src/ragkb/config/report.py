@@ -42,6 +42,22 @@ def conditional_issues(result: EnvLoadResult) -> tuple[EnvIssue, ...]:
         if settings.app_debug:
             issues.append(EnvIssue("APP_DEBUG", "PRODUCTION_DEBUG_FORBIDDEN", "G4"))
         require("APP_SECRET_KEY", "G4")
+        if settings.rag_runtime_profile != "production":
+            issues.append(EnvIssue("RAG_RUNTIME_PROFILE", "PRODUCTION_PROFILE_REQUIRED", "G0"))
+        if not settings.real_provider_calls_enabled:
+            issues.append(
+                EnvIssue("REAL_PROVIDER_CALLS_ENABLED", "PRODUCTION_PROVIDERS_NOT_ENABLED", "G0")
+            )
+        if settings.retrieval_active_generation_id.startswith("local-"):
+            issues.append(
+                EnvIssue("RETRIEVAL_ACTIVE_GENERATION_ID", "PRODUCTION_GENERATION_REQUIRED", "G0")
+            )
+        if settings.vector_backend == "local":
+            issues.append(EnvIssue("VECTOR_BACKEND", "PRODUCTION_VECTOR_BACKEND_REQUIRED", "G0"))
+        if settings.llm_allow_http:
+            issues.append(EnvIssue("LLM_ALLOW_HTTP", "PRODUCTION_HTTP_OVERRIDE_FORBIDDEN", "G0"))
+        if urlparse(settings.llm_base_url).scheme.casefold() == "http":
+            issues.append(EnvIssue("LLM_BASE_URL", "PRODUCTION_HTTPS_REQUIRED", "G0"))
     if settings.queue_heartbeat_seconds >= settings.queue_lease_seconds:
         issues.append(EnvIssue("QUEUE_HEARTBEAT_SECONDS", "QUEUE_HEARTBEAT_NOT_BELOW_LEASE", "G1"))
     if settings.embedding_dimension != settings.zilliz_cloud_dimension:
@@ -71,6 +87,10 @@ def conditional_issues(result: EnvLoadResult) -> tuple[EnvIssue, ...]:
         )
     if settings.chunk_overlap_tokens >= settings.chunk_target_tokens:
         issues.append(EnvIssue("CHUNK_OVERLAP_TOKENS", "CHUNK_OVERLAP_NOT_BELOW_TARGET", "G1"))
+    if settings.chunk_target_tokens > settings.chunk_max_tokens:
+        issues.append(EnvIssue("CHUNK_MAX_TOKENS", "CHUNK_MAX_BELOW_TARGET", "G1"))
+    if settings.chunk_min_tokens > settings.chunk_target_tokens:
+        issues.append(EnvIssue("CHUNK_MIN_TOKENS", "CHUNK_MIN_ABOVE_TARGET", "G1"))
     if settings.retrieval_rerank_top_k > (
         settings.retrieval_bm25_top_k + settings.retrieval_dense_top_k
     ):
@@ -98,13 +118,16 @@ def conditional_issues(result: EnvLoadResult) -> tuple[EnvIssue, ...]:
         except ValueError:
             issues.append(EnvIssue(key, "STORAGE_PATH_OUTSIDE_ROOT", "G0"))
 
-    zilliz_host = (urlparse(settings.zilliz_cloud_uri).hostname or "").casefold()
-    if not settings.zilliz_cloud_uri.startswith("https://") or not zilliz_host.endswith(
-        ".zilliz.com.cn"
-    ):
-        issues.append(EnvIssue("ZILLIZ_CLOUD_URI", "ZILLIZ_CHINA_HTTPS_REQUIRED", "G2"))
-    require("ZILLIZ_CLOUD_URI", "G2")
-    require("ZILLIZ_CLOUD_TOKEN", "G2")
+    if settings.vector_backend == "zilliz":
+        zilliz_host = (urlparse(settings.zilliz_cloud_uri).hostname or "").casefold()
+        if not settings.zilliz_cloud_uri.startswith("https://") or not zilliz_host.endswith(
+            ".zilliz.com.cn"
+        ):
+            issues.append(EnvIssue("ZILLIZ_CLOUD_URI", "ZILLIZ_CHINA_HTTPS_REQUIRED", "G2"))
+        require("ZILLIZ_CLOUD_URI", "G2")
+        require("ZILLIZ_CLOUD_TOKEN", "G2")
+    elif settings.vector_backend == "milvus":
+        require("VECTOR_URI", "G2")
     require("ZILLIZ_CLOUD_DIMENSION", "G2")
     require("EMBEDDING_DIMENSION", "G2")
     if not settings.zilliz_cloud_enable_bm25:

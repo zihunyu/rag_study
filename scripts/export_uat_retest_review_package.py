@@ -42,9 +42,7 @@ def main() -> int:
     records = {str(record["candidate_id"]): record for record in plan["selected_bundles"]}
     blocked = json.loads(PREFLIGHT.read_text(encoding="utf-8"))
     blocked_by_hash = {
-        str(item.get("selected_case_sha256")): item
-        for item in blocked
-        if isinstance(item, Mapping)
+        str(item.get("selected_case_sha256")): item for item in blocked if isinstance(item, Mapping)
     }
     entries: dict[str, bytes] = {}
     summary = []
@@ -81,10 +79,11 @@ def main() -> int:
             }
         )
     entries["README.md"] = (
-        "# Parsed content review package\n\n"
-        "Each case contains the original UAT question, parsed evidence documents, locators, "
-        "and the local render-proof preflight result. Historical model answers are deliberately excluded.\n"
-    ).encode()
+        b"# Parsed content review package\n\n"
+        b"Each case contains the original UAT question, parsed evidence documents, locators, "
+        b"and the local render-proof preflight result. Historical model answers are "
+        b"deliberately excluded.\n"
+    )
     entries["manifest.json"] = _payload(
         {
             "revision": "uat-parsed-content-review-package:v1",
@@ -100,7 +99,11 @@ def main() -> int:
     with zipfile.ZipFile(OUTPUT, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for name, content in sorted(entries.items()):
             archive.writestr(name, content)
-    print(json.dumps({"output": str(OUTPUT), "case_count": len(selected_ids), "provider_call_count": 0}))
+    print(
+        json.dumps(
+            {"output": str(OUTPUT), "case_count": len(selected_ids), "provider_call_count": 0}
+        )
+    )
     return 0
 
 

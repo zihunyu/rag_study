@@ -26,6 +26,12 @@ class BufferedGenerationPort(Protocol):
     def generate(self, question: str, evidence: tuple[Evidence, ...]) -> DraftAnswer: ...
 
 
+class VerifiedAnswerCachePort(Protocol):
+    def get(self, package: EvidencePackage) -> DraftAnswer | None: ...
+
+    def put(self, package: EvidencePackage, draft: DraftAnswer) -> None: ...
+
+
 class FinalPermissionPort(Protocol):
     def recheck(
         self,

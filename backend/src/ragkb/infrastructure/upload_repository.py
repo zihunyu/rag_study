@@ -798,6 +798,68 @@ class SQLiteUploadRepository:
                 ),
             )
 
+    def save_chunking_result(self, document: Any, result: Any) -> None:
+        """Replace node-per-chunk placeholders with the configured chunking output."""
+
+        all_chunks = (*result.parent_chunks, *result.chunks)
+        if not all_chunks:
+            raise ValueError("CHUNKING_RESULT_EMPTY")
+        with self.database.transaction(immediate=True) as connection:
+            connection.execute(
+                "DELETE FROM chunks WHERE version_id = ?", (document.document_version_id,)
+            )
+            connection.execute(
+                "DELETE FROM sections WHERE version_id = ?", (document.document_version_id,)
+            )
+            section_chunks: dict[str, list[Any]] = {}
+            for chunk in all_chunks:
+                section_chunks.setdefault(chunk.section_id, []).append(chunk)
+            for ordinal, (section_id, chunks) in enumerate(section_chunks.items()):
+                first = chunks[0]
+                connection.execute(
+                    """
+                    INSERT INTO sections(
+                        id, tenant_id, version_id, parent_id, ordinal, title, path, locator_json
+                    ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?)
+                    """,
+                    (
+                        section_id,
+                        first.tenant_id,
+                        first.version_id,
+                        ordinal,
+                        str(first.metadata.get("heading", "Document")) or "Document",
+                        str(first.metadata.get("section_path", "/")),
+                        json.dumps(first.locator.to_dict(), sort_keys=True),
+                    ),
+                )
+            for chunk in all_chunks:
+                connection.execute(
+                    """
+                    INSERT INTO chunks(
+                        id, tenant_id, version_id, section_id, parent_chunk_id, ordinal,
+                        original_text, display_text, retrieval_text, locator_json,
+                        content_sha256, token_count, kind, chunking_revision, tokenizer_id, status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'STAGED')
+                    """,
+                    (
+                        chunk.id,
+                        chunk.tenant_id,
+                        chunk.version_id,
+                        chunk.section_id,
+                        chunk.parent_chunk_id,
+                        chunk.ordinal,
+                        chunk.original_text,
+                        chunk.display_text,
+                        chunk.retrieval_text,
+                        json.dumps(chunk.locator.to_dict(), sort_keys=True),
+                        chunk.content_sha256,
+                        chunk.token_count,
+                        chunk.kind,
+                        chunk.chunking_revision,
+                        chunk.tokenizer_id,
+                    ),
+                )
+
     def mark_version_quarantined(self, version_id: str, parser_revision: str) -> None:
         with self.database.transaction(immediate=True) as connection:
             cursor = connection.execute(

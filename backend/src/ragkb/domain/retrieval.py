@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from ragkb.domain.errors import RetrievalFailClosed
+
 SearchChannel = Literal["bm25", "dense"]
 
 
@@ -85,5 +87,5 @@ class SearchResult:
     warnings: tuple[str, ...] = ()
 
 
-class SecurityWatermarkNotReady(RuntimeError):
+class SecurityWatermarkNotReady(RetrievalFailClosed):
     pass

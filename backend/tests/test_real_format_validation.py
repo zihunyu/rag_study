@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from ragkb.evaluation.real_format_validation import build_real_format_validation
+
+pytestmark = pytest.mark.integration
 
 
 def test_real_format_validation_totals_and_new_embedding_attempt_are_exact() -> None:

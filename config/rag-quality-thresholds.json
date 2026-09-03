@@ -1,0 +1,11 @@
+{
+  "recall_at_k": 0.90,
+  "precision_at_k": 0.80,
+  "hit_rate": 0.90,
+  "mrr": 0.85,
+  "ndcg_at_k": 0.85,
+  "answer_token_f1": 0.85,
+  "citation_precision": 0.95,
+  "citation_recall": 0.95,
+  "no_answer_accuracy": 0.95
+}

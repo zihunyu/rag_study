@@ -28,7 +28,9 @@ def test_g3_frontend_exposes_qa_admin_feedback_and_retrieval_debug_contracts() -
         assert endpoint in script + api
     assert '"vue"' in package and '"vite"' in package
     assert '"dev": "vite --host 127.0.0.1"' in package
-    assert '"test": "node --test src/api.test.mjs"' in package
+    assert '"test:api": "node --test src/api.test.mjs"' in package
+    assert '"test:unit": "vitest run src/App.test.js"' in package
+    assert '"test:e2e": "playwright test"' in package
     assert "cleanup/local_file:run" in script
     assert "versions/upload-sessions" in script
     assert "If-Match" in script and "PROCESSING 不可发布" in script

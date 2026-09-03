@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from ragkb.application.tracing import InMemoryTracer
 from ragkb.contracts.governance import GovernanceRepositoryPort
 
 
 class LocalObservabilityService:
     revision = "local-observability:g5-v1"
 
-    def __init__(self, repository: GovernanceRepositoryPort) -> None:
+    def __init__(
+        self, repository: GovernanceRepositoryPort, tracer: InMemoryTracer | None = None
+    ) -> None:
         self.repository = repository
+        self.tracer = tracer or InMemoryTracer()
 
     def request_completed(self, trace_id: str, method: str, path: str, status_code: int) -> None:
         self.repository.record_event(
@@ -25,6 +29,7 @@ class LocalObservabilityService:
             "revision": self.revision,
             "simulated": True,
             "real_acceptance": False,
+            "rag_tracing": self.tracer.summary(),
         }
 
     def alerts(self) -> list[dict[str, object]]:

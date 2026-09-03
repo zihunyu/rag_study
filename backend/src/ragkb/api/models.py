@@ -250,6 +250,7 @@ class DiagnosticsResponse(StrictModel):
     prometheus_export_performed: bool
     simulated: bool
     real_acceptance: bool
+    rag_tracing: dict[str, Any]
 
 
 class EvidenceIndexRequest(StrictModel):

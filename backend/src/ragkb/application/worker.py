@@ -3,12 +3,25 @@
 from __future__ import annotations
 
 import json
+from typing import Any, Protocol
 
 from ragkb.contracts.jobs import PersistentJobQueuePort
-from ragkb.contracts.ports import ContentStoragePort, ParserRouterPort, ParsingDeferred
+from ragkb.contracts.ports import ChunkerPort, ContentStoragePort, ParserRouterPort, ParsingDeferred
 from ragkb.contracts.uploads import UploadRepositoryPort
 from ragkb.domain.state_machines import JobState
 from ragkb.domain.validation import DocumentQualityReport
+
+
+class LocalIndexingSinkPort(Protocol):
+    def index(
+        self,
+        result: Any,
+        *,
+        document_id: str,
+        tenant_id: str,
+        space_id: str,
+        permission_revision: int = 1,
+    ) -> None: ...
 
 
 class LocalIngestionWorker:
@@ -22,6 +35,8 @@ class LocalIngestionWorker:
         parser_router: ParserRouterPort,
         worker_id: str,
         lease_seconds: float = 600,
+        chunker: ChunkerPort | None = None,
+        indexing_sink: LocalIndexingSinkPort | None = None,
     ) -> None:
         self.queue = queue
         self.repository = repository
@@ -29,6 +44,8 @@ class LocalIngestionWorker:
         self.parser_router = parser_router
         self.worker_id = worker_id
         self.lease_seconds = lease_seconds
+        self.chunker = chunker
+        self.indexing_sink = indexing_sink
 
     def run_once(self) -> bool:
         job = self.queue.lease(self.worker_id, lease_seconds=self.lease_seconds)
@@ -43,6 +60,11 @@ class LocalIngestionWorker:
         source = self.storage.path_for("original", str(version["original_key"]))
         try:
             document = self.parser_router.parse(source_format, source, version_id)
+            chunking = (
+                self.chunker.chunk(document, tenant_id=str(job.payload["tenant_id"]))
+                if self.chunker is not None
+                else None
+            )
             heartbeat = self.queue.heartbeat(
                 job.id, self.worker_id, lease_seconds=self.lease_seconds
             )
@@ -68,6 +90,17 @@ class LocalIngestionWorker:
                 ),
             )
             self.repository.save_canonical_document(document)
+            if chunking is not None:
+                save_chunking = getattr(self.repository, "save_chunking_result", None)
+                if callable(save_chunking):
+                    save_chunking(document, chunking)
+                if self.indexing_sink is not None:
+                    self.indexing_sink.index(
+                        chunking,
+                        document_id=str(job.payload["document_id"]),
+                        tenant_id=str(job.payload["tenant_id"]),
+                        space_id=str(job.payload["space_id"]),
+                    )
             self.repository.save_quality_report(DocumentQualityReport.from_document(document))
             completed = self.queue.complete(job.id, self.worker_id)
             if completed.state is JobState.CANCELLED:

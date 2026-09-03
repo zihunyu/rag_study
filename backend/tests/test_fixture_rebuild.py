@@ -8,8 +8,18 @@ def test_dry_run_marks_only_generated_fixture_with_missing_glyph() -> None:
     flagged = b"flagged-payload"
     plan = fixture_rebuild_plan(
         [
-            {"fixture_id": "fixture-a", "text": "A", "payload": clean, "supported_codepoints": [0x41]},
-            {"fixture_id": "fixture-b", "text": "AB", "payload": flagged, "supported_codepoints": [0x41]},
+            {
+                "fixture_id": "fixture-a",
+                "text": "A",
+                "payload": clean,
+                "supported_codepoints": [0x41],
+            },
+            {
+                "fixture_id": "fixture-b",
+                "text": "AB",
+                "payload": flagged,
+                "supported_codepoints": [0x41],
+            },
         ]
     )
     assert plan["dry_run"] is True

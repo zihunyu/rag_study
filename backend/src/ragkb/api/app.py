@@ -11,6 +11,7 @@ from fastapi import Body, FastAPI, Header, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse, StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
 from ragkb.adapters.auth import AuthenticationError, AuthorizationError
 from ragkb.api.models import (
@@ -279,6 +280,8 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
         docs_url="/docs",
         debug=runtime.settings.app_debug,
     )
+    if runtime.model_transport is not None:
+        app.add_event_handler("shutdown", runtime.model_transport.close)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(runtime.settings.cors_origins),
@@ -771,14 +774,16 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
             subject_scope_tokens=principal.scope_tokens,
             clearance_level=3,
             as_of_epoch=int(time.time()),
-            active_generation_id="local-g2-empty",
+            active_generation_id=runtime.settings.retrieval_active_generation_id,
             active_permission_revision=max(
                 (record.acl_revision for record in runtime.lifecycle_store.documents.values()),
                 default=0,
             ),
             required_security_watermark=0,
         )
-        result = runtime.search_service.search(body.query, context, limit=body.limit)
+        result = await run_in_threadpool(
+            runtime.search_service.search, body.query, context, limit=body.limit
+        )
         return SearchResponse(
             request_id=_request_id(request),
             observed_security_watermark=result.observed_security_watermark,
@@ -811,7 +816,8 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
         principal = _principal(request)
         _require_role(principal, "reader", "knowledge_maintainer", "admin")
         _require_local_tenant(runtime, principal)
-        result = runtime.qa_service.ask(
+        result = await run_in_threadpool(
+            runtime.qa_service.ask,
             body.question,
             principal.tenant_id,
             principal.user_id,

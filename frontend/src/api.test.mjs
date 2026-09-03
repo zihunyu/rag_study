@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { askStream, sourceUrl } from "./api.js";
+import { askStream, request, sourceUrl } from "./api.js";
 
 function sseResponse(frames) {
   const encoder = new TextEncoder();
@@ -43,4 +43,38 @@ test("unverified SSE payload cannot expose buffered answer", async () => {
   const result = await askStream("question", () => {}, fakeFetch);
   assert.equal(result.answer, null);
   assert.deepEqual(result.citations, []);
+});
+
+test("fragmented CRLF SSE frames are reassembled", async () => {
+  const fakeFetch = async () =>
+    sseResponse([
+      'event: progress\r\ndata: {"stage":"ver',
+      'ified"}\r\n\r\nevent: result\r\ndata: {"answer":"ok",',
+      '"citations":[],"verified":true}\r\n\r\n',
+    ]);
+
+  const result = await askStream("question", () => {}, fakeFetch);
+
+  assert.equal(result.answer, "ok");
+});
+
+test("closed SSE connection without result is explicit", async () => {
+  const fakeFetch = async () =>
+    sseResponse(['event: progress\ndata: {"stage":"verified"}\n\n']);
+
+  await assert.rejects(() => askStream("question", () => {}, fakeFetch), {
+    message: "SSE_RESULT_MISSING",
+  });
+});
+
+test("non-success API response exposes only stable server code", async () => {
+  const fakeFetch = async () =>
+    new Response(JSON.stringify({ code: "PERMISSION_DENIED", detail: "secret" }), {
+      status: 403,
+      headers: { "Content-Type": "application/json" },
+    });
+
+  await assert.rejects(() => request("/search", {}, fakeFetch), {
+    message: "PERMISSION_DENIED",
+  });
 });

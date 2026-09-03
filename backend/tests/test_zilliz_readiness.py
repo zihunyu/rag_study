@@ -50,8 +50,8 @@ class _ReadinessClient:
         self.batch_sizes.append(len(data))
         if self.fail_insert_at == self.insert_calls:
             raise AttributeError("simulated MutationResult batch compatibility failure")
-        self.stored.add(str(data[0]["zilliz_pk"]))
-        return {"insert_count": 1}
+        self.stored.update(str(item["zilliz_pk"]) for item in data)
+        return {"insert_count": len(data)}
 
     def get(self, **kwargs):
         self.events.append("get")
@@ -74,7 +74,7 @@ def _settings():
     return loaded.settings
 
 
-def test_four_records_insert_one_by_one_only_after_ready_and_cleanup_all() -> None:
+def test_four_records_insert_in_one_batch_only_after_ready_and_cleanup_all() -> None:
     settings = _settings()
     expected = [
         str(index["index_name"])
@@ -99,8 +99,8 @@ def test_four_records_insert_one_by_one_only_after_ready_and_cleanup_all() -> No
     assert result["cleaned_count"] == 4
     assert result["remaining_count"] == 0
     assert result["readiness"]["poll_count"] == 2
-    assert client.insert_calls == 4
-    assert client.batch_sizes == [1, 1, 1, 1]
+    assert client.insert_calls == 1
+    assert client.batch_sizes == [4]
     assert client.deleted_ids == [f"synthetic-{index}" for index in range(4)]
     assert client.stored == set()
     assert client.events[-1] == "get"
@@ -131,13 +131,13 @@ def test_readiness_timeout_returns_explicit_error_and_never_inserts() -> None:
     assert "insert" not in client.events
 
 
-def test_second_record_failure_stops_and_cleans_only_first_confirmed_id() -> None:
+def test_batch_failure_has_no_confirmed_ids_or_cleanup_claim() -> None:
     settings = _settings()
     expected = [
         str(index["index_name"])
         for index in build_zilliz_collection_plan(settings)["schema"]["indexes"]
     ]
-    client = _ReadinessClient(["Loaded"], [expected], fail_insert_at=2)
+    client = _ReadinessClient(["Loaded"], [expected], fail_insert_at=1)
 
     with pytest.raises(ZillizSyntheticLifecycleError) as failed:
         run_synthetic_lifecycle(
@@ -152,14 +152,14 @@ def test_second_record_failure_stops_and_cleans_only_first_confirmed_id() -> Non
             monotonic=lambda: 0,
         )
 
-    assert failed.value.stage == "insert_synthetic_2"
+    assert failed.value.stage == "insert_synthetic_batches"
     assert failed.value.error_type == "AttributeError"
-    assert failed.value.confirmed_count == 1
-    assert failed.value.cleaned_count == 1
+    assert failed.value.confirmed_count == 0
+    assert failed.value.cleaned_count == 0
     assert failed.value.remaining_count == 0
-    assert client.insert_calls == 2
-    assert client.batch_sizes == [1, 1]
-    assert client.deleted_ids == ["first"]
+    assert client.insert_calls == 1
+    assert client.batch_sizes == [2]
+    assert client.deleted_ids == []
     assert client.stored == set()
 
 

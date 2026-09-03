@@ -253,6 +253,7 @@ class UploadService:
             "process_document",
             {
                 "tenant_id": session.tenant_id,
+                "space_id": session.space_id,
                 "document_id": document_id,
                 "document_version_id": version_id,
                 "source_format": session.detected_format,

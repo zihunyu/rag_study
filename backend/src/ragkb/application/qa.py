@@ -2,20 +2,28 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import threading
 import time
+from dataclasses import asdict
 
+from ragkb.application.tracing import InMemoryTracer, TracerPort
 from ragkb.contracts.rag import (
     BufferedGenerationPort,
     CitationReferencePort,
     EvidenceProviderPort,
     FinalPermissionPort,
     RAGRunRepositoryPort,
+    VerifiedAnswerCachePort,
 )
+from ragkb.domain.errors import InvalidProviderResponse, RetrievalFailClosed, TransientProviderError
 from ragkb.domain.ids import new_uuid7
 from ragkb.domain.rag import (
     AnswerStatus,
     AskResult,
     Citation,
+    DraftAnswer,
     EvidencePackage,
     Feedback,
     QuestionDisposition,
@@ -32,12 +40,16 @@ class TrustedQAService:
         permission: FinalPermissionPort,
         references: CitationReferencePort,
         repository: RAGRunRepositoryPort,
+        cache: VerifiedAnswerCachePort | None = None,
+        tracer: TracerPort | None = None,
     ) -> None:
         self.evidence_provider = evidence_provider
         self.generator = generator
         self.permission = permission
         self.references = references
         self.repository = repository
+        self.cache = cache
+        self.tracer = tracer or InMemoryTracer()
 
     def _save(
         self,
@@ -57,7 +69,7 @@ class TrustedQAService:
             evidence=package.evidence,
             warnings=warnings,
             verified=verified,
-            real_acceptance=False,
+            real_acceptance=package.real_acceptance and verified,
         )
         self.repository.save_run(package, result)
         return result
@@ -74,7 +86,7 @@ class TrustedQAService:
             at_epoch=int(time.time()),
         )
 
-    def ask(
+    def _ask(
         self,
         question: str,
         tenant_id: str,
@@ -83,13 +95,14 @@ class TrustedQAService:
         subject_scope_tokens: tuple[str, ...] = (),
     ) -> AskResult:
         try:
-            package = self.evidence_provider.build_package(
-                question,
-                tenant_id,
-                user_id,
-                subject_scope_tokens=subject_scope_tokens,
-            )
-        except Exception:
+            with self.tracer.span("rag.ask.evidence.build"):
+                package = self.evidence_provider.build_package(
+                    question,
+                    tenant_id,
+                    user_id,
+                    subject_scope_tokens=subject_scope_tokens,
+                )
+        except (RetrievalFailClosed, TransientProviderError):
             package = EvidencePackage(
                 rag_run_id=new_uuid7(),
                 tenant_id=tenant_id,
@@ -135,9 +148,12 @@ class TrustedQAService:
                 AnswerStatus.SYSTEM_ERROR,
                 warnings=("PRE_GENERATION_PERMISSION_RECHECK_FAILED",),
             )
+        draft = self.cache.get(package) if self.cache is not None else None
         try:
-            draft = self.generator.generate(question, package.evidence)
-        except Exception:
+            if draft is None:
+                with self.tracer.span("rag.ask.llm.generate"):
+                    draft = self.generator.generate(question, package.evidence)
+        except (TransientProviderError, InvalidProviderResponse):
             return self._save(
                 package,
                 AnswerStatus.SYSTEM_ERROR,
@@ -162,20 +178,23 @@ class TrustedQAService:
                 AnswerStatus.SYSTEM_ERROR,
                 warnings=("FINAL_PERMISSION_RECHECK_FAILED",),
             )
-        citations = tuple(
-            Citation(
-                evidence_id=evidence.evidence_id,
-                source_url=self.references.source_url(
-                    package.rag_run_id,
-                    evidence.evidence_id,
-                    package.tenant_id,
-                    user_id,
-                    evidence.document_id,
-                ),
-                locator=evidence.locator,
+        with self.tracer.span("rag.ask.citation.verify"):
+            citations = tuple(
+                Citation(
+                    evidence_id=evidence.evidence_id,
+                    source_url=self.references.source_url(
+                        package.rag_run_id,
+                        evidence.evidence_id,
+                        package.tenant_id,
+                        user_id,
+                        evidence.document_id,
+                    ),
+                    locator=evidence.locator,
+                )
+                for evidence in cited
             )
-            for evidence in cited
-        )
+        if self.cache is not None:
+            self.cache.put(package, draft)
         return self._save(
             package,
             AnswerStatus.ANSWERED,
@@ -183,6 +202,22 @@ class TrustedQAService:
             citations=citations,
             verified=True,
         )
+
+    def ask(
+        self,
+        question: str,
+        tenant_id: str,
+        user_id: str,
+        *,
+        subject_scope_tokens: tuple[str, ...] = (),
+    ) -> AskResult:
+        with self.tracer.span("rag.ask", {"tenant_id": tenant_id}):
+            return self._ask(
+                question,
+                tenant_id,
+                user_id,
+                subject_scope_tokens=subject_scope_tokens,
+            )
 
     def feedback(
         self,
@@ -213,3 +248,39 @@ class TrustedQAService:
         )
         self.repository.save_feedback(feedback)
         return feedback
+
+
+class InMemoryVerifiedAnswerCache:
+    """Caches only verified drafts and naturally invalidates on evidence or revision changes."""
+
+    def __init__(self, *, max_entries: int = 1024) -> None:
+        self.max_entries = max_entries
+        self._values: dict[str, DraftAnswer] = {}
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _key(package: EvidencePackage) -> str:
+        payload = {
+            "tenant_id": package.tenant_id,
+            "user_id": package.user_id,
+            "permission_revision": package.permission_revision,
+            "query": " ".join(package.query.casefold().split()),
+            "index_generation_id": package.index_generation_id,
+            "retrieval_revision": package.retrieval_revision,
+            "prompt_revision": package.prompt_revision,
+            "model_revision": package.model_revision,
+            "evidence": [asdict(item) for item in package.evidence],
+        }
+        serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+    def get(self, package: EvidencePackage) -> DraftAnswer | None:
+        with self._lock:
+            return self._values.get(self._key(package))
+
+    def put(self, package: EvidencePackage, draft: DraftAnswer) -> None:
+        key = self._key(package)
+        with self._lock:
+            if len(self._values) >= self.max_entries:
+                self._values.pop(next(iter(self._values)))
+            self._values[key] = draft

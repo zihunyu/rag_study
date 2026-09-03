@@ -13,7 +13,15 @@ def test_generated_manifest_enumeration_is_content_free(tmp_path: Path) -> None:
     source.write_bytes(b"\x00\x01\x02")
     metadata = {"samples": [{"file": "generated.bin", "expected_locators": [{"page": 1}]}]}
     (tmp_path / "metadata.yaml").write_text(yaml.safe_dump(metadata), encoding="utf-8")
-    manifest = {"collection_plan": [{"format": "generated", "metadata_path": "metadata.yaml", "sample_directory": "fixtures"}]}
+    manifest = {
+        "collection_plan": [
+            {
+                "format": "generated",
+                "metadata_path": "metadata.yaml",
+                "sample_directory": "fixtures",
+            }
+        ]
+    }
     manifest_path = tmp_path / "manifest.yaml"
     manifest_path.write_text(yaml.safe_dump(manifest), encoding="utf-8")
     report = scan_fixture_manifest(tmp_path, manifest_path)

@@ -44,6 +44,31 @@ def test_zilliz_adapter_uses_uri_token_database_without_exposing_token(tmp_path:
     assert adapter.safe_status()["mutating_call_performed"] is False
 
 
+def test_same_port_supports_self_hosted_milvus_generic_endpoint(tmp_path: Path) -> None:
+    loaded = load_env(
+        Path(__file__).resolve().parents[2],
+        env_path=tmp_path / "missing",
+        environ={
+            "VECTOR_BACKEND": "milvus",
+            "VECTOR_URI": "https://milvus.internal:19530",
+            "VECTOR_TOKEN": "milvus-secret",
+            "VECTOR_DATABASE": "knowledge",
+        },
+    )
+    assert loaded.settings is not None
+    captured = {}
+    adapter = ZillizCloudAdapter(
+        loaded.settings, client_factory=lambda **kwargs: captured.update(kwargs) or object()
+    )
+
+    adapter.connect()
+
+    assert captured["uri"] == "https://milvus.internal:19530"
+    assert captured["db_name"] == "knowledge"
+    assert adapter.safe_status()["vector_backend"] == "milvus"
+    assert "milvus-secret" not in str(adapter.safe_status())
+
+
 def _context() -> SearchContext:
     return SearchContext(
         tenant_id="tenant-1",
@@ -195,7 +220,7 @@ def test_production_projection_writer_never_uses_multi_entity_batch(tmp_path: Pa
 
         def insert(self, **kwargs):
             self.batch_sizes.append(len(kwargs["data"]))
-            return {"insert_count": 1}
+            return {"insert_count": len(kwargs["data"])}
 
     client = _WriterClient()
     writer = ZillizSafeProjectionWriter(client, loaded.settings)
@@ -203,5 +228,34 @@ def test_production_projection_writer_never_uses_multi_entity_batch(tmp_path: Pa
     inserted = writer.insert_records(({"zilliz_pk": "one"}, {"zilliz_pk": "two"}))
 
     assert inserted == ("one", "two")
-    assert writer.safe_batch_size == 1
-    assert client.batch_sizes == [1, 1]
+    assert writer.safe_batch_size == 256
+    assert client.batch_sizes == [2]
+
+
+def test_projection_writer_honors_batch_size_and_retries_timeout(tmp_path: Path) -> None:
+    loaded = load_env(
+        Path(__file__).resolve().parents[2], env_path=tmp_path / "missing", environ={}
+    )
+    assert loaded.settings is not None
+    settings = loaded.settings.model_copy(
+        update={"zilliz_write_batch_size": 2, "zilliz_write_max_retries": 1}
+    )
+
+    class _RetryClient:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.batch_sizes: list[int] = []
+
+        def insert(self, **kwargs):
+            self.calls += 1
+            self.batch_sizes.append(len(kwargs["data"]))
+            if self.calls == 1:
+                raise TimeoutError
+            return {"insert_count": len(kwargs["data"])}
+
+    client = _RetryClient()
+    writer = ZillizSafeProjectionWriter(client, settings, sleep=lambda _: None)
+    records = tuple({"zilliz_pk": str(index)} for index in range(5))
+
+    assert writer.insert_records(records) == ("0", "1", "2", "3", "4")
+    assert client.batch_sizes == [2, 2, 2, 1]

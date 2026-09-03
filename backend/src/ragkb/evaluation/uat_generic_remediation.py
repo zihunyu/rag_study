@@ -424,9 +424,9 @@ def build_audit_manifest(
                 "evidence_span_sha256": item["evidence_span_sha256"],
                 "entity_id": item["entity_id"],
                 "field_key": item["field_key"],
-            "source_integrity_sha256": item["source_integrity_sha256"],
-            "rendered_text_verified": integrity["rendered_text_verified"],
-            "render_proof_sha256": canonical_sha256(item["render_proof"]),
+                "source_integrity_sha256": item["source_integrity_sha256"],
+                "rendered_text_verified": integrity["rendered_text_verified"],
+                "render_proof_sha256": canonical_sha256(item["render_proof"]),
             }
         )
     return {

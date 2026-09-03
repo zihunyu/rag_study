@@ -8,11 +8,11 @@ import json
 from collections.abc import Mapping
 from pathlib import Path
 
+from docx import Document
 from openpyxl import load_workbook
 from openpyxl.utils.cell import range_boundaries
-from pypdf import PdfReader
 from pptx import Presentation
-from docx import Document
+from pypdf import PdfReader
 
 
 class RenderProofError(ValueError):
@@ -83,7 +83,9 @@ def independent_render_proof(
             if child in paragraphs:
                 parts.append(paragraphs[child].text)
             elif child in tables:
-                parts.extend(" | ".join(cell.text for cell in row.cells) for row in tables[child].rows)
+                parts.extend(
+                    " | ".join(cell.text for cell in row.cells) for row in tables[child].rows
+                )
         rendered_text = "\n".join(parts)
     else:
         raise RenderProofError("UAT_RENDER_PROOF_UNAVAILABLE")

@@ -8,6 +8,7 @@ import statistics
 import sys
 import tempfile
 import time
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -43,13 +44,24 @@ def _summary(latencies: list[float]) -> dict[str, float | int]:
     }
 
 
-def run_representative_system_paths(root: Path) -> dict[str, object]:
+def run_representative_system_paths(
+    root: Path,
+    *,
+    document_scales: Sequence[int] = (2, 4),
+    concurrency_values: Sequence[int] = (1, 2),
+) -> dict[str, object]:
     del root
     scale_results: list[dict[str, object]] = []
     total_success = 0
     total_failure = 0
     all_latencies: list[float] = []
-    for scale in (2, 4):
+    if (
+        not document_scales
+        or not concurrency_values
+        or min(*document_scales, *concurrency_values) < 1
+    ):
+        raise ValueError("performance scales and concurrency must be positive")
+    for scale in document_scales:
         with tempfile.TemporaryDirectory(prefix=f"ragkb-g4-perf-{scale}-") as temporary:
             temp = Path(temporary)
             components = build_runtime_components(
@@ -65,6 +77,8 @@ def run_representative_system_paths(root: Path) -> dict[str, object]:
                 components.storage,
                 ParserRouter(),
                 f"perf-worker-{scale}",
+                chunker=components.chunker,
+                indexing_sink=components.indexing_sink,
             )
             for index in range(scale):
                 content = f"synthetic document {index} at scale {scale}".encode()
@@ -112,7 +126,7 @@ def run_representative_system_paths(root: Path) -> dict[str, object]:
                     total_failure += 1
 
             request_results: list[tuple[int, float, int]] = []
-            for concurrency in (1, 2):
+            for concurrency in concurrency_values:
                 for top_k in (1, 5):
 
                     def representative_request(
@@ -164,7 +178,7 @@ def run_representative_system_paths(root: Path) -> dict[str, object]:
             scale_results.append(
                 {
                     "document_count": scale,
-                    "concurrency_values": [1, 2],
+                    "concurrency_values": list(concurrency_values),
                     "top_k_values": [1, 5],
                     "representative_request_count": len(request_results),
                     "observed_answer_lengths": [item[2] for item in request_results],

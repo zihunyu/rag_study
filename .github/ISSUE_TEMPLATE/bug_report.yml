@@ -1,0 +1,30 @@
+name: Bug report
+description: 报告可复现的缺陷（禁止粘贴密钥或敏感文档）
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: textarea
+    id: behavior
+    attributes:
+      label: 实际行为
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期行为
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 最小复现
+    validations:
+      required: true
+  - type: dropdown
+    id: profile
+    attributes:
+      label: Runtime Profile
+      options: [local, production]
+    validations:
+      required: true

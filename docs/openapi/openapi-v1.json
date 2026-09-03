@@ -420,6 +420,11 @@
             "title": "Queue By State",
             "type": "object"
           },
+          "rag_tracing": {
+            "additionalProperties": true,
+            "title": "Rag Tracing",
+            "type": "object"
+          },
           "real_acceptance": {
             "title": "Real Acceptance",
             "type": "boolean"
@@ -442,7 +447,8 @@
           "otel_export_performed",
           "prometheus_export_performed",
           "simulated",
-          "real_acceptance"
+          "real_acceptance",
+          "rag_tracing"
         ],
         "title": "DiagnosticsResponse",
         "type": "object"

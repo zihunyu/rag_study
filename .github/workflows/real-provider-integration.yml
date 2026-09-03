@@ -1,0 +1,45 @@
+name: Protected real-provider acceptance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-rag:
+    runs-on: ubuntu-latest
+    environment: real-rag-acceptance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.lock
+      - run: python -m pip install -e . --no-deps
+      - name: Validate production configuration without printing secrets
+        env:
+          APP_ENV: production
+          RAG_RUNTIME_PROFILE: production
+          REAL_PROVIDER_CALLS_ENABLED: "true"
+          APP_DEBUG: "false"
+          APP_SECRET_KEY: ${{ secrets.APP_SECRET_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_MODEL: ${{ vars.LLM_MODEL }}
+          EMBEDDING_BASE_URL: ${{ secrets.EMBEDDING_BASE_URL }}
+          EMBEDDING_API_KEY: ${{ secrets.EMBEDDING_API_KEY }}
+          EMBEDDING_MODEL: ${{ vars.EMBEDDING_MODEL }}
+          RERANKER_BASE_URL: ${{ secrets.RERANKER_BASE_URL }}
+          RERANKER_API_KEY: ${{ secrets.RERANKER_API_KEY }}
+          RERANKER_MODEL: ${{ vars.RERANKER_MODEL }}
+          ZILLIZ_CLOUD_URI: ${{ secrets.ZILLIZ_CLOUD_URI }}
+          ZILLIZ_CLOUD_TOKEN: ${{ secrets.ZILLIZ_CLOUD_TOKEN }}
+          RETRIEVAL_ACTIVE_GENERATION_ID: ${{ vars.RETRIEVAL_ACTIVE_GENERATION_ID }}
+        run: python scripts/check_env.py --gate G4
+      - name: Real reranker UAT
+        run: python scripts/run_real_uat.py reranker --approved
+      - name: Real LLM UAT after reranker gate
+        run: python scripts/run_real_uat.py llm --approved
+      - name: Artifact-bound integration contracts
+        run: python -m pytest -m integration

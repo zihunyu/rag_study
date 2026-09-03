@@ -10,6 +10,7 @@ from ragkb.adapters.rag_stubs import (
     SyntheticEvidenceProvider,
 )
 from ragkb.application.qa import TrustedQAService
+from ragkb.domain.errors import RetrievalFailClosed
 from ragkb.domain.rag import AnswerStatus, Evidence, QuestionDisposition
 from ragkb.engineering_security.references import HMACReferenceSigner, ReferenceTokenError
 from ragkb.infrastructure.rag_repository import SQLiteRAGRunRepository
@@ -191,8 +192,16 @@ def test_retrieval_or_permission_provider_failure_is_system_error_without_leak(
     tmp_path: Path,
 ) -> None:
     class _FailingProvider(SyntheticEvidenceProvider):
-        def build_package(self, question: str, tenant_id: str, user_id: str):
-            raise RuntimeError("unauthorized resource exists")
+        def build_package(
+            self,
+            question: str,
+            tenant_id: str,
+            user_id: str,
+            *,
+            subject_scope_tokens: tuple[str, ...] = (),
+        ):
+            del question, tenant_id, user_id, subject_scope_tokens
+            raise RetrievalFailClosed("RETRIEVAL_FAILED")
 
     service, _, _ = _service(tmp_path, _FailingProvider())
 

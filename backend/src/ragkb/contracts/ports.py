@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from ragkb.domain.documents import CanonicalDocument
 from ragkb.domain.retrieval import AuthorizedChunk, IndexCandidate, SearchContext
+
+if TYPE_CHECKING:
+    from ragkb.document_processing.chunking import ChunkingResult
 
 
 class StorageIntegrityError(RuntimeError):
@@ -55,6 +58,12 @@ class ParserRouterPort(Protocol):
     def parse(
         self, source_format: str, source: Path, document_version_id: str
     ) -> CanonicalDocument: ...
+
+
+class ChunkerPort(Protocol):
+    revision: str
+
+    def chunk(self, document: CanonicalDocument, *, tenant_id: str) -> ChunkingResult: ...
 
 
 class EmbeddingPort(Protocol):

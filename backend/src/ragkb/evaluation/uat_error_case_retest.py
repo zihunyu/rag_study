@@ -107,8 +107,8 @@ def prepare_retest_cases(
                         "locator": envelope["locator"],
                         "entity_id": envelope["entity_id"],
                         "field_key": envelope["field_key"],
-                    "rendered_text": raw_evidence.get("rendered_text"),
-                    "render_proof": raw_evidence.get("render_proof"),
+                        "rendered_text": raw_evidence.get("rendered_text"),
+                        "render_proof": raw_evidence.get("render_proof"),
                     }
                 ],
             }

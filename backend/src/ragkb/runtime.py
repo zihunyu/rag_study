@@ -109,6 +109,8 @@ def run_worker(argv: Sequence[str] | None = None) -> int:
         components.parser_router,
         args.worker_id,
         lease_seconds=components.settings.queue_lease_seconds,
+        chunker=components.chunker,
+        indexing_sink=components.indexing_sink,
     )
     if args.once:
         iteration = run_worker_iteration(worker)

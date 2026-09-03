@@ -1,0 +1,8 @@
+{
+  "name": "enterprise-rag-kb",
+  "dockerComposeFile": "../compose.yaml",
+  "service": "backend",
+  "workspaceFolder": "/workspace",
+  "shutdownAction": "stopCompose",
+  "mounts": ["source=${localWorkspaceFolder},target=/workspace,type=bind"]
+}

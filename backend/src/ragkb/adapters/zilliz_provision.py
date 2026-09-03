@@ -9,6 +9,7 @@ from typing import Any
 
 from pymilvus import DataType, Function, FunctionType, MilvusClient
 
+from ragkb.adapters.vector_indexing import ZillizSafeProjectionWriter
 from ragkb.adapters.zilliz import ZillizCloudAdapter, required_zilliz_fields
 from ragkb.application.search import rrf_fuse
 from ragkb.config import EnvSettings
@@ -16,7 +17,7 @@ from ragkb.domain.retrieval import SearchContext
 from ragkb.infrastructure.zilliz_plan import build_zilliz_collection_plan
 
 CREATE_APPROVAL = "ZILLIZ_COLLECTION_CREATE_APPROVED"
-ZILLIZ_SAFE_WRITE_BATCH_SIZE = 1
+ZILLIZ_SAFE_WRITE_BATCH_SIZE = 256
 
 
 class ZillizSchemaConflict(RuntimeError):
@@ -210,27 +211,22 @@ def run_synthetic_lifecycle(
     readiness: dict[str, object] | None = None
     try:
         readiness = wait_for_collection_ready(client, settings, **readiness_options)
-        for index, record in enumerate(records, start=1):
-            primary_key = str(record["zilliz_pk"])
-            stage = f"insert_synthetic_{index}"
-            client.insert(
-                collection_name=settings.zilliz_cloud_collection,
-                data=[record],
-                timeout=settings.zilliz_cloud_timeout_seconds,
+        stage = "insert_synthetic_batches"
+        inserted_ids = ZillizSafeProjectionWriter(client, settings).insert_records(records)
+        stage = "confirm_synthetic_batch"
+        visible = client.get(
+            collection_name=settings.zilliz_cloud_collection,
+            ids=list(inserted_ids),
+            output_fields=["zilliz_pk"],
+            timeout=settings.zilliz_cloud_timeout_seconds,
+            consistency_level=settings.zilliz_cloud_security_consistency_level,
+        )
+        visible_ids = {str(item.get("zilliz_pk", "")) for item in visible}
+        if not set(inserted_ids).issubset(visible_ids):
+            raise ZillizSyntheticEntityNotVisible(
+                "ZILLIZ_SYNTHETIC_ENTITY_NOT_VISIBLE_AFTER_INSERT"
             )
-            stage = f"confirm_synthetic_{index}"
-            visible = client.get(
-                collection_name=settings.zilliz_cloud_collection,
-                ids=[primary_key],
-                output_fields=["zilliz_pk"],
-                timeout=settings.zilliz_cloud_timeout_seconds,
-                consistency_level=settings.zilliz_cloud_security_consistency_level,
-            )
-            if not any(str(item.get("zilliz_pk", "")) == primary_key for item in visible):
-                raise ZillizSyntheticEntityNotVisible(
-                    "ZILLIZ_SYNTHETIC_ENTITY_NOT_VISIBLE_AFTER_INSERT"
-                )
-            confirmed_ids.append(primary_key)
+        confirmed_ids.extend(inserted_ids)
         stage = "validate_search"
         validation = validate(tuple(confirmed_ids))
     except Exception as error:

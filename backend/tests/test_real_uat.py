@@ -16,6 +16,8 @@ from ragkb.evaluation.real_uat import build_uat_bundles
 from ragkb.infrastructure.provider_checkpoints import JsonCheckpointStore
 from ragkb.infrastructure.uat_artifacts import LocalUatArtifactStore
 
+pytestmark = pytest.mark.integration
+
 
 class _Reranker:
     real_network = False

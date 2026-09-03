@@ -23,8 +23,8 @@ def test_env_example_is_the_only_complete_template() -> None:
     }
 
     assert template_keys == known_env_keys()
-    assert len(template_keys) == 124
-    assert config_entries == {".env", ".env.example"}
+    assert len(template_keys) == len(known_env_keys())
+    assert config_entries == {".env", ".env.example", "rag-quality-thresholds.json"}
     assert (root / "config/.env").is_file()
     assert "config/.env" in (root / ".gitignore").read_text(encoding="utf-8")
     template = load_env(root, env_path=root / "config/.env.example", environ={})
@@ -191,6 +191,30 @@ def test_llm_allow_http_false_accepts_https(tmp_path: Path) -> None:
     )
 
 
+def test_production_rejects_http_and_local_runtime_at_g0(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    _write(
+        env_file,
+        {
+            "APP_ENV": "production",
+            "APP_DEBUG": "false",
+            "RAG_RUNTIME_PROFILE": "local",
+            "LLM_BASE_URL": "http://llm.internal/v1",
+            "LLM_ALLOW_HTTP": "true",
+        },
+    )
+
+    report = build_env_report(
+        load_env(Path(__file__).resolve().parents[2], env_path=env_file, environ={}), "G0"
+    )
+
+    assert {
+        "RAG_RUNTIME_PROFILE:PRODUCTION_PROFILE_REQUIRED",
+        "LLM_ALLOW_HTTP:PRODUCTION_HTTP_OVERRIDE_FORBIDDEN",
+        "LLM_BASE_URL:PRODUCTION_HTTPS_REQUIRED",
+    }.issubset(set(report["gate_blockers"]))
+
+
 def test_asr_disabled_is_nonblocking_and_reenabled_scope_requires_three_keys(
     tmp_path: Path,
 ) -> None:
@@ -239,7 +263,7 @@ def test_actual_config_parses_without_exposing_values() -> None:
     report = build_env_report(loaded, "G0")
 
     assert loaded.settings is not None
-    assert report["summary"]["known_key_count"] == 124
+    assert report["summary"]["known_key_count"] == len(known_env_keys())
     assert report["safe_output_contract"].startswith("variable names and status only")
     variables = {item["name"]: item for item in report["variables"]}
     assert variables["APP_SECRET_KEY"]["configured"] is True

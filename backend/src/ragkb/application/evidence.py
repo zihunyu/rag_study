@@ -91,5 +91,5 @@ class SearchBackedEvidenceProvider:
             model_revision=self.model_revision,
             permission_revision=permission_revision,
             evidence=evidence,
-            real_acceptance=False,
+            real_acceptance=result.real_acceptance,
         )

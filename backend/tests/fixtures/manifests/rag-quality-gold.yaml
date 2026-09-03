@@ -1,0 +1,35 @@
+schema_version: 1
+dataset_id: local-business-gold-starter
+revision: rag-quality-v1
+owner: knowledge-quality-team
+cases:
+  - case_id: exact-model-1
+    question: "ThinkPad P16 Gen 3 21FA 的保修期"
+    expected_answer: "ThinkPad P16 Gen 3 21FA 的保修期为三年。"
+    relevant_document_ids: [policy-products]
+    relevant_chunk_ids: [product-21fa]
+    answerable: true
+    tenant_id: tenant-1
+    security_scope: [group:reader]
+    query_type: identifier
+    difficulty: easy
+  - case_id: semantic-travel-1
+    question: "一线城市出差每晚最多能报销多少住宿费？"
+    expected_answer: "一线城市住宿标准为每晚 600 元。"
+    relevant_document_ids: [policy-travel]
+    relevant_chunk_ids: [travel-hotel-tier1]
+    answerable: true
+    tenant_id: tenant-1
+    security_scope: [group:reader]
+    query_type: semantic
+    difficulty: medium
+  - case_id: no-answer-1
+    question: "火星办公室的停车补贴是多少？"
+    expected_answer: ""
+    relevant_document_ids: []
+    relevant_chunk_ids: []
+    answerable: false
+    tenant_id: tenant-1
+    security_scope: [group:reader]
+    query_type: unanswerable
+    difficulty: easy

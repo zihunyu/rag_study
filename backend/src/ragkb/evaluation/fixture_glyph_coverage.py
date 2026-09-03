@@ -17,9 +17,7 @@ def glyph_coverage(text: str, supported_codepoints: Sequence[int]) -> dict[str, 
     }
 
 
-def select_font_fallback(
-    text: str, candidates: Mapping[str, Sequence[int]]
-) -> str:
+def select_font_fallback(text: str, candidates: Mapping[str, Sequence[int]]) -> str:
     for name in sorted(candidates):
         if glyph_coverage(text, candidates[name])["covered"] is True:
             return name

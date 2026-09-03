@@ -1,0 +1,14 @@
+revision: rag-quality-corpus-v1
+chunks:
+  - chunk_id: product-21fa
+    document_version_id: policy-products-v1
+    text: "ThinkPad P16 Gen 3 21FA 的保修期为三年。"
+  - chunk_id: product-21fb
+    document_version_id: policy-products-v1
+    text: "ThinkPad P16 Gen 3 21FB 的保修期为一年。"
+  - chunk_id: travel-hotel-tier1
+    document_version_id: policy-travel-v1
+    text: "一线城市出差住宿标准为每晚 600 元。"
+  - chunk_id: travel-flight
+    document_version_id: policy-travel-v1
+    text: "国内出差机票应优先选择经济舱。"

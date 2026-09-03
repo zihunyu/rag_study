@@ -10,6 +10,7 @@ from ragkb.adapters.retrieval_memory import InMemoryHybridIndex, InMemoryRetriev
 from ragkb.adapters.stubs import DeterministicEmbedding, DeterministicReranker
 from ragkb.api.app import create_app
 from ragkb.application.search import HybridSearchService, rrf_fuse
+from ragkb.domain.errors import ProviderUnavailable
 from ragkb.domain.lifecycle import LifecycleState
 from ragkb.domain.retrieval import (
     AuthorizedChunk,
@@ -263,13 +264,13 @@ def test_dense_and_reranker_failures_degrade_to_rrf_bm25_without_bypassing_acl()
         dimension = 8
 
         def embed(self, texts):
-            raise RuntimeError("embedding unavailable")
+            raise ProviderUnavailable("embedding unavailable")
 
     class _FailingReranker:
         revision = "failing-reranker"
 
         def rerank(self, query, documents):
-            raise RuntimeError("reranker unavailable")
+            raise ProviderUnavailable("reranker unavailable")
 
     candidate = _candidate("chunk-1", "bm25", 1)
     chunk = _chunk(

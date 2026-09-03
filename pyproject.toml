@@ -30,11 +30,17 @@ dev = [
   "httpx>=0.28,<1",
   "mypy>=1.13,<2",
   "pytest>=8.3,<9",
+  "pytest-cov>=7.1,<8",
   "ruff>=0.8,<1",
   "types-jsonschema>=4.23,<5",
   "types-openpyxl>=3.1,<4",
   "types-PyYAML>=6.0,<7",
   "types-xlrd>=2.0,<3",
+]
+observability = [
+  "opentelemetry-api>=1.39,<2",
+  "opentelemetry-sdk>=1.39,<2",
+  "opentelemetry-exporter-otlp-proto-http>=1.39,<2",
 ]
 
 [project.scripts]
@@ -53,9 +59,21 @@ where = ["backend/src"]
 ragkb = ["contracts/schemas/*.json"]
 
 [tool.pytest.ini_options]
-addopts = "-ra --strict-markers"
+addopts = "-ra --strict-markers -m 'not integration'"
 pythonpath = ["backend/src"]
 testpaths = ["backend/tests"]
+markers = [
+  "integration: requires immutable real-provider artifacts or protected external services",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["ragkb"]
+
+[tool.coverage.report]
+fail_under = 70
+show_missing = true
+skip_covered = true
 
 [tool.ruff]
 target-version = "py312"

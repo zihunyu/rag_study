@@ -8,8 +8,23 @@ from typing import Any
 
 from pymilvus import FunctionType, MilvusClient
 
+from ragkb.adapters.vector_indexing import (
+    ZillizChunkIndexingSink,
+    ZillizSafeProjectionWriter,
+    vector_collection_name,
+)
 from ragkb.config import EnvSettings
 from ragkb.domain.retrieval import IndexCandidate, SearchContext
+
+__all__ = [
+    "ZILLIZ_BASE_FIELDS",
+    "ZILLIZ_REQUIRED_FIELDS",
+    "ZillizChunkIndexingSink",
+    "ZillizCloudAdapter",
+    "ZillizSafeProjectionWriter",
+    "build_zilliz_filter",
+    "required_zilliz_fields",
+]
 
 ZILLIZ_BASE_FIELDS = frozenset(
     {
@@ -74,29 +89,6 @@ def build_zilliz_filter(context: SearchContext) -> str:
     )
 
 
-class ZillizSafeProjectionWriter:
-    """Compatibility writer fixed to one entity per SDK insert call."""
-
-    revision = "zilliz-safe-writer:g2-v1"
-    safe_batch_size = 1
-
-    def __init__(self, client: Any, settings: EnvSettings) -> None:
-        self._client = client
-        self._settings = settings
-
-    def insert_records(self, records: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
-        inserted: list[str] = []
-        for record in records:
-            primary_key = str(record["zilliz_pk"])
-            self._client.insert(
-                collection_name=self._settings.zilliz_cloud_collection,
-                data=[dict(record)],
-                timeout=self._settings.zilliz_cloud_timeout_seconds,
-            )
-            inserted.append(primary_key)
-        return tuple(inserted)
-
-
 class ZillizCloudAdapter:
     revision = "zilliz-cloud-pymilvus:g2-v1"
 
@@ -114,12 +106,15 @@ class ZillizCloudAdapter:
         self._watermark_provider = watermark_provider
 
     def connect(self) -> Any:
-        token = self._settings.zilliz_cloud_token
+        generic = self._settings.vector_backend == "milvus"
+        token = self._settings.vector_token if generic else self._settings.zilliz_cloud_token
         self._real_connection_attempted = True
         self._client = self._client_factory(
-            uri=self._settings.zilliz_cloud_uri,
+            uri=self._settings.vector_uri if generic else self._settings.zilliz_cloud_uri,
             token=token.get_secret_value() if token is not None else "",
-            db_name=self._settings.zilliz_cloud_database,
+            db_name=(
+                self._settings.vector_database if generic else self._settings.zilliz_cloud_database
+            ),
             timeout=self._settings.zilliz_cloud_timeout_seconds,
         )
         return self._client
@@ -131,14 +126,17 @@ class ZillizCloudAdapter:
         client = self._connected()
         required_fields = required_zilliz_fields(self._settings)
         databases = client.list_databases(timeout=self._settings.zilliz_cloud_timeout_seconds)
-        database_list_contains_name = self._settings.zilliz_cloud_database in set(
-            map(str, databases)
+        database_name = (
+            self._settings.vector_database
+            if self._settings.vector_backend == "milvus"
+            else self._settings.zilliz_cloud_database
         )
+        database_list_contains_name = database_name in set(map(str, databases))
         collections = client.list_collections(timeout=self._settings.zilliz_cloud_timeout_seconds)
         session_usable = isinstance(collections, Sequence)
         collection_exists = bool(
             client.has_collection(
-                collection_name=self._settings.zilliz_cloud_collection,
+                collection_name=vector_collection_name(self._settings),
                 timeout=self._settings.zilliz_cloud_timeout_seconds,
             )
         )
@@ -158,7 +156,7 @@ class ZillizCloudAdapter:
                 "mutating_call_performed": False,
             }
         description = client.describe_collection(
-            collection_name=self._settings.zilliz_cloud_collection,
+            collection_name=vector_collection_name(self._settings),
             timeout=self._settings.zilliz_cloud_timeout_seconds,
         )
         fields = description.get("fields", []) if isinstance(description, Mapping) else []
@@ -240,7 +238,7 @@ class ZillizCloudAdapter:
         self, query: str, context: SearchContext, limit: int
     ) -> Sequence[IndexCandidate]:
         results = self._connected().search(
-            collection_name=self._settings.zilliz_cloud_collection,
+            collection_name=vector_collection_name(self._settings),
             data=[query],
             anns_field=self._settings.zilliz_cloud_sparse_field,
             filter=build_zilliz_filter(context),
@@ -254,7 +252,7 @@ class ZillizCloudAdapter:
         self, vector: Sequence[float], context: SearchContext, limit: int
     ) -> Sequence[IndexCandidate]:
         results = self._connected().search(
-            collection_name=self._settings.zilliz_cloud_collection,
+            collection_name=vector_collection_name(self._settings),
             data=[list(vector)],
             anns_field=self._settings.zilliz_cloud_dense_field,
             filter=build_zilliz_filter(context),
@@ -268,8 +266,13 @@ class ZillizCloudAdapter:
     def safe_status(self) -> dict[str, object]:
         return {
             "adapter": self.revision,
-            "database_configured": bool(self._settings.zilliz_cloud_database),
-            "collection_configured": bool(self._settings.zilliz_cloud_collection),
+            "vector_backend": self._settings.vector_backend,
+            "database_configured": bool(
+                self._settings.vector_database
+                if self._settings.vector_backend == "milvus"
+                else self._settings.zilliz_cloud_database
+            ),
+            "collection_configured": bool(vector_collection_name(self._settings)),
             "bm25_enabled": self._settings.zilliz_cloud_enable_bm25,
             "security_consistency": self._settings.zilliz_cloud_security_consistency_level,
             "token_in_status": False,

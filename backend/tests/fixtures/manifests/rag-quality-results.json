@@ -1,0 +1,24 @@
+{
+  "dataset_revision": "rag-quality-v1",
+  "provider": "local-real-retrieval-deterministic-generation",
+  "results": [
+    {
+      "case_id": "exact-model-1",
+      "retrieved_chunk_ids": ["product-21fa"],
+      "actual_answer": "ThinkPad P16 Gen 3 21FA 的保修期为三年。",
+      "actual_citation_chunk_ids": ["product-21fa"]
+    },
+    {
+      "case_id": "semantic-travel-1",
+      "retrieved_chunk_ids": ["travel-hotel-tier1"],
+      "actual_answer": "一线城市住宿标准为每晚 600 元。",
+      "actual_citation_chunk_ids": ["travel-hotel-tier1"]
+    },
+    {
+      "case_id": "no-answer-1",
+      "retrieved_chunk_ids": [],
+      "actual_answer": "",
+      "actual_citation_chunk_ids": []
+    }
+  ]
+}

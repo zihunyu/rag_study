@@ -52,6 +52,9 @@ class EnvSettings(BaseModel):
 
     app_name: str = "Enterprise RAG Knowledge Base"
     app_env: Literal["development", "testing", "production"] = "development"
+    rag_runtime_profile: Literal["local", "production"] = "local"
+    rag_acceptance_evidence_path: Path = Path("./artifacts/acceptance/real-rag.json")
+    real_provider_calls_enabled: bool = False
     app_host: str = "127.0.0.1"
     app_port: int = Field(default=8000, ge=1, le=65535)
     frontend_host: str = "127.0.0.1"
@@ -106,6 +109,14 @@ class EnvSettings(BaseModel):
     zilliz_cloud_bm25_analyzer: str = "chinese"
     zilliz_cloud_dense_field: str = "dense_vector"
     zilliz_cloud_sparse_field: str = "sparse_vector"
+    zilliz_write_batch_size: int = Field(default=256, gt=0)
+    zilliz_write_max_bytes: int = Field(default=4 * 1024 * 1024, gt=0)
+    zilliz_write_max_retries: int = Field(default=3, ge=0)
+    vector_backend: Literal["local", "zilliz", "milvus"] = "zilliz"
+    vector_uri: str = ""
+    vector_token: SecretStr | None = None
+    vector_database: str = "default"
+    vector_collection: str = "rag_chunks"
 
     queue_database_path: Path = Path("./data/storage/queue/jobs.sqlite3")
     queue_poll_interval_seconds: float = Field(default=1, gt=0)
@@ -128,12 +139,23 @@ class EnvSettings(BaseModel):
     mineru_failover_enabled: bool = True
 
     llm_base_url: str = ""
-    llm_allow_http: bool = True
+    llm_allow_http: bool = False
     llm_api_key: SecretStr | None = None
     llm_model: str = ""
     llm_timeout_seconds: float = Field(default=120, gt=0)
     llm_max_concurrency: int = Field(default=8, gt=0)
     llm_max_output_tokens: int = Field(default=2048, gt=0)
+    llm_temperature: float = Field(default=0.0, ge=0, le=2)
+    llm_top_p: float = Field(default=1.0, gt=0, le=1)
+    llm_prompt_revision: str = "grounded-qa:v1"
+    model_http_connect_timeout_seconds: float = Field(default=10, gt=0)
+    model_http_pool_timeout_seconds: float = Field(default=10, gt=0)
+    model_http_max_connections: int = Field(default=100, gt=0)
+    model_http_max_keepalive_connections: int = Field(default=20, gt=0)
+    model_http_max_retries: int = Field(default=3, ge=0)
+    model_http_backoff_seconds: float = Field(default=0.25, ge=0)
+    model_http_circuit_failure_threshold: int = Field(default=5, gt=0)
+    model_http_circuit_cooldown_seconds: float = Field(default=30, gt=0)
 
     embedding_base_url: str = ""
     embedding_api_key: SecretStr | None = None
@@ -156,14 +178,23 @@ class EnvSettings(BaseModel):
     asr_language: str = "auto"
     asr_timeout_seconds: float = Field(default=600, gt=0)
 
+    chunk_strategy: Literal["token", "structure", "semantic"] = "structure"
     chunk_target_tokens: int = Field(default=600, gt=0)
     chunk_overlap_tokens: int = Field(default=80, ge=0)
+    chunk_min_tokens: int = Field(default=20, gt=0)
+    chunk_max_tokens: int = Field(default=800, gt=0)
     parent_chunk_max_tokens: int = Field(default=1200, gt=0)
     retrieval_bm25_top_k: int = Field(default=50, gt=0)
+    retrieval_active_generation_id: str = "local-g3-generation"
     retrieval_dense_top_k: int = Field(default=50, gt=0)
     retrieval_rrf_k: int = Field(default=60, gt=0)
+    retrieval_bm25_weight: float = Field(default=1.0, gt=0)
+    retrieval_dense_weight: float = Field(default=1.0, gt=0)
+    retrieval_identifier_bm25_weight: float = Field(default=2.0, gt=0)
     retrieval_rerank_top_k: int = Field(default=40, gt=0)
     retrieval_final_evidence_count: int = Field(default=8, gt=0)
+    retrieval_near_duplicate_threshold: float = Field(default=0.92, ge=0, le=1)
+    retrieval_max_chunks_per_document: int = Field(default=3, gt=0)
 
     upload_max_file_size_mb: int = Field(default=200, gt=0)
     upload_max_pages: int = Field(default=600, gt=0)
@@ -259,6 +290,7 @@ SECRET_KEYS = frozenset(
         "EMBEDDING_API_KEY",
         "RERANKER_API_KEY",
         "ASR_API_KEY",
+        "VECTOR_TOKEN",
         "OIDC_CLIENT_SECRET",
     }
 )
