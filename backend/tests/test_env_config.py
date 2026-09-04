@@ -74,6 +74,24 @@ def test_type_errors_are_reported_by_key_and_code_only(tmp_path: Path) -> None:
     assert any(item["key"] == "APP_PORT" for item in report["issues"])
 
 
+def test_cross_resource_limits_fail_configuration_before_runtime(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    _write(
+        env_file,
+        {
+            "UPLOAD_MAX_ARCHIVE_UNCOMPRESSED_BYTES": "100",
+            "UPLOAD_MAX_ARCHIVE_ENTRY_UNCOMPRESSED_BYTES": "101",
+            "QUEUE_RETRY_DELAY_SECONDS": "10",
+            "WORKER_RETRY_MAX_DELAY_SECONDS": "5",
+        },
+    )
+
+    loaded = load_env(Path(__file__).resolve().parents[2], env_path=env_file, environ={})
+
+    assert loaded.settings is None
+    assert any(issue.code.startswith("ENV_TYPE_VALUE_ERROR") for issue in loaded.issues)
+
+
 def test_condition_validation_for_queue_dimension_zilliz_and_https(tmp_path: Path) -> None:
     env_file = tmp_path / ".env"
     _write(

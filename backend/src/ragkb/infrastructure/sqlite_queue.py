@@ -14,7 +14,7 @@ from ragkb.infrastructure.sqlite import SQLiteDatabase
 
 
 class SQLitePersistentJobQueue:
-    revision = "sqlite-persistent-queue:g1-v1"
+    revision = "sqlite-persistent-queue:dlq:g1-v2"
 
     def __init__(self, database: SQLiteDatabase) -> None:
         self.database = database
@@ -52,6 +52,28 @@ class SQLitePersistentJobQueue:
         if row is None:
             raise KeyError(job_id)
         return self._from_row(row)
+
+    @staticmethod
+    def _dead_letter_in(
+        connection: sqlite3.Connection,
+        job_id: str,
+        error_code: str,
+        attempt: int,
+        payload_json: str,
+        failed_at: float,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO job_dead_letters(job_id, error_code, attempt, payload_json, failed_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(job_id) DO UPDATE SET
+                error_code=excluded.error_code,
+                attempt=excluded.attempt,
+                payload_json=excluded.payload_json,
+                failed_at=excluded.failed_at
+            """,
+            (job_id, error_code, attempt, payload_json, failed_at),
+        )
 
     def enqueue(
         self,
@@ -127,6 +149,15 @@ class SQLitePersistentJobQueue:
                 """,
                 (target.value, next_retry, now, row["id"]),
             )
+            if target is JobState.FAILED_FINAL:
+                self._dead_letter_in(
+                    connection,
+                    str(row["id"]),
+                    str(row["error_code"] or "LEASE_ATTEMPTS_EXHAUSTED"),
+                    int(row["attempt"]),
+                    str(row["payload_json"]),
+                    now,
+                )
         return len(rows)
 
     def recover_expired(self, *, now: float | None = None) -> int:
@@ -153,7 +184,7 @@ class SQLitePersistentJobQueue:
                 """
                 SELECT * FROM job_queue
                 WHERE state = ? AND available_at <= ? AND cancel_requested = 0
-                ORDER BY created_at, id LIMIT 1
+                ORDER BY (attempt > 0), available_at, created_at, id LIMIT 1
                 """,
                 (JobState.QUEUED.value, timestamp),
             ).fetchone()
@@ -252,6 +283,15 @@ class SQLitePersistentJobQueue:
                 """,
                 (state.value, error_code, next_retry, timestamp, job_id),
             )
+            if state is JobState.FAILED_FINAL:
+                self._dead_letter_in(
+                    connection,
+                    job.id,
+                    error_code,
+                    job.attempt,
+                    json.dumps(job.payload, sort_keys=True, separators=(",", ":")),
+                    timestamp,
+                )
             return self._get_in(connection, job_id)
 
     def request_cancel(self, job_id: str) -> QueueJob:
@@ -304,9 +344,32 @@ class SQLitePersistentJobQueue:
                 """,
                 (JobState.QUEUED.value, timestamp, timestamp, job_id),
             )
+            connection.execute("DELETE FROM job_dead_letters WHERE job_id = ?", (job_id,))
             return self._get_in(connection, job_id)
 
     def get(self, job_id: str) -> QueueJob | None:
         with self.database.connect() as connection:
             row = connection.execute("SELECT * FROM job_queue WHERE id = ?", (job_id,)).fetchone()
             return self._from_row(row) if row is not None else None
+
+    def dead_letters(self, *, limit: int = 100) -> tuple[dict[str, Any], ...]:
+        if limit < 1:
+            raise ValueError("dead-letter limit must be positive")
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT job_id, error_code, attempt, payload_json, failed_at
+                FROM job_dead_letters ORDER BY failed_at DESC LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return tuple(
+            {
+                "job_id": str(row["job_id"]),
+                "error_code": str(row["error_code"]),
+                "attempt": int(row["attempt"]),
+                "payload": json.loads(str(row["payload_json"])),
+                "failed_at": float(row["failed_at"]),
+            }
+            for row in rows
+        )

@@ -11,6 +11,7 @@ from ragkb.api.app import create_app
 from ragkb.application.worker import LocalIngestionWorker
 from ragkb.document_processing.parsers import ParserRouter
 from ragkb.domain.documents import CanonicalDocument
+from ragkb.domain.errors import ProviderUnavailable
 from ragkb.runtime import run_worker_iteration
 from ragkb.runtime_components import RuntimeComponents, build_runtime_components
 
@@ -100,9 +101,15 @@ def test_bad_task_is_safely_recorded_and_next_good_task_still_runs(tmp_path: Pat
         == "VALIDATED"
     )
     safe_error = error_stream.getvalue()
-    assert "WORKER_TASK_FAILED" in safe_error
+    assert "INGEST_UNEXPECTED" in safe_error
+    assert str(bad["job_id"]) in safe_error
+    assert str(bad["document_id"]) in safe_error
+    assert '"attempt": 1' in safe_error
+    assert '"exception_type": "RuntimeError"' in safe_error
+    assert '"trace_id": "ingest:' in safe_error
     assert "sensitive bad document" not in safe_error
     assert "bad body" not in safe_error
+    assert components.queue.dead_letters()[0]["job_id"] == str(bad["job_id"])
 
 
 def test_running_cancel_is_acknowledged_before_artifact_or_chunk_write(tmp_path: Path) -> None:
@@ -234,6 +241,111 @@ def test_worker_once_returns_nonzero_and_emits_only_safe_error(
 
     assert runtime.run_worker(["--once"]) == 1
     captured = capsys.readouterr()
-    assert "WORKER_TASK_FAILED" in captured.err
+    assert "WORKER_CONTROL_PATH_FAILED" in captured.err
     assert "secret document body" not in captured.err
     assert '"failed": true' in captured.out
+
+
+def test_transient_failure_uses_exponential_jittered_delay_without_reraising(
+    tmp_path: Path,
+) -> None:
+    components = _components(tmp_path)
+    job = _enqueue_text(
+        components,
+        filename="transient.txt",
+        content=b"temporary provider outage",
+        key="transient",
+    )
+
+    class _TransientParser:
+        revision = "transient-parser:test"
+
+        def parse(self, *args, **kwargs):
+            del args, kwargs
+            raise ProviderUnavailable("UPSTREAM_UNAVAILABLE")
+
+    worker = LocalIngestionWorker(
+        components.queue,
+        components.repository,
+        components.storage,
+        _TransientParser(),
+        "transient-worker",
+        retry_base_seconds=2,
+        retry_max_seconds=10,
+        retry_jitter_seconds=1,
+        jitter=lambda _low, _high: 0.5,
+    )
+    stream = io.StringIO()
+
+    iteration = run_worker_iteration(worker, error_stream=stream)
+
+    assert iteration.failed is True
+    assert iteration.sleep_seconds == 2.5
+    assert worker.last_failure is not None and worker.last_failure.retryable is True
+    assert components.queue.get(str(job["job_id"])).state.value == "RETRY_WAIT"  # type: ignore[union-attr]
+    assert '"retry_delay_seconds": 2.5' in stream.getvalue()
+    assert "temporary provider outage" not in stream.getvalue()
+
+
+def test_dependency_circuit_pauses_lease_acquisition_after_threshold(tmp_path: Path) -> None:
+    del tmp_path
+
+    class _UnavailableQueue:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def lease(self, *args, **kwargs):
+            del args, kwargs
+            self.calls += 1
+            raise ConnectionError("redis unavailable")
+
+    queue = _UnavailableQueue()
+    now = [100.0]
+    worker = LocalIngestionWorker(
+        queue,  # type: ignore[arg-type]
+        object(),  # type: ignore[arg-type]
+        object(),  # type: ignore[arg-type]
+        object(),  # type: ignore[arg-type]
+        "circuit-worker",
+        retry_base_seconds=2,
+        retry_max_seconds=10,
+        retry_jitter_seconds=0,
+        dependency_failure_threshold=2,
+        dependency_cooldown_seconds=30,
+        clock=lambda: now[0],
+        jitter=lambda _low, _high: 0,
+    )
+
+    first = run_worker_iteration(worker, error_stream=io.StringIO())
+    second = run_worker_iteration(worker, error_stream=io.StringIO())
+    paused = run_worker_iteration(worker, error_stream=io.StringIO())
+
+    assert first.sleep_seconds == 2
+    assert second.sleep_seconds == 30
+    assert paused.processed is False and paused.failed is False
+    assert paused.sleep_seconds == 30
+    assert queue.calls == 2
+
+
+def test_worker_main_loop_sleeps_after_a_failed_iteration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ragkb import runtime
+
+    components = _components(tmp_path)
+    calls = 0
+    sleeps: list[float] = []
+
+    def iteration(_worker):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return runtime.WorkerIteration(processed=True, failed=True, sleep_seconds=7.5)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(runtime, "build_runtime_components", lambda: components)
+    monkeypatch.setattr(runtime, "run_worker_iteration", iteration)
+    monkeypatch.setattr(runtime.time, "sleep", sleeps.append)
+
+    assert runtime.run_worker([]) == 0
+    assert sleeps == [7.5]

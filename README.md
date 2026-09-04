@@ -151,6 +151,18 @@ Embedding。默认结构化分片保留标题/章节路径，表格行重复携�
 总容量，`UPLOAD_MAX_CONCURRENT_STREAMS` 通过等待队列提供背压。Frontend 使用 2 MiB 分块
 增量 SHA-256，不再调用整文件 `file.arrayBuffer()`。Nginx 同时限制 `client_max_body_size 200m`。
 
+DOCX/XLSX/PPTX 的 ZIP 容器在独立子进程中校验，除压缩比和条目数外还限制累计解压字节、
+单条目解压字节、嵌套深度、CPU 时间和墙钟时间。相关配置为
+`UPLOAD_MAX_ARCHIVE_UNCOMPRESSED_BYTES`、`UPLOAD_MAX_ARCHIVE_ENTRY_UNCOMPRESSED_BYTES`、
+`UPLOAD_MAX_ARCHIVE_NESTING_DEPTH` 和 `UPLOAD_ARCHIVE_VALIDATION_TIMEOUT_SECONDS`。
+
+## Worker 故障控制
+
+暂时性依赖错误使用有上限的指数退避和随机抖动，并受 `WORKER_TRANSIENT_MAX_ATTEMPTS` 限制；
+连续依赖失败达到阈值后 Worker 在冷却期停止获取租约。永久错误和未知错误不自动重试，最终失败
+写入 SQLite/Redis DLQ。主循环在任何失败后休眠，正常新任务优先于已到期的重试任务。结构化
+日志只记录 `job_id`、`document_id`、attempt、异常类型、trace ID、重试状态和延迟，不记录正文。
+
 ## 质量与测试
 
 ```text

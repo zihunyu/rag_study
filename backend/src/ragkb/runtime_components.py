@@ -211,7 +211,13 @@ def build_runtime_components(
             settings.oidc_default_space_id if settings.rag_runtime_profile == "production" else None
         ),
     )
-    validator = UploadFileValidator(max_size_bytes=settings.upload_max_file_size_mb * 1024 * 1024)
+    validator = UploadFileValidator(
+        max_size_bytes=settings.upload_max_file_size_mb * 1024 * 1024,
+        max_archive_uncompressed_bytes=settings.upload_max_archive_uncompressed_bytes,
+        max_archive_entry_uncompressed_bytes=(settings.upload_max_archive_entry_uncompressed_bytes),
+        max_archive_nesting_depth=settings.upload_max_archive_nesting_depth,
+        archive_validation_timeout_seconds=settings.upload_archive_validation_timeout_seconds,
+    )
     uploads = UploadService(
         repository,
         queue,

@@ -326,6 +326,7 @@ class UploadService:
                 "document_id": document_id,
                 "document_version_id": version_id,
                 "source_format": session.detected_format,
+                "trace_id": f"ingest:{version_id}",
                 "real_acceptance": False,
             },
             f"ingest:{version_id}",

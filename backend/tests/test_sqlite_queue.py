@@ -67,9 +67,32 @@ def test_retry_and_final_failure_semantics(tmp_path: Path) -> None:
     assert second is not None
     final = queue.fail(second.id, "worker", "TEMPORARY", retryable=True, now=15)
     assert final.state is JobState.FAILED_FINAL
+    assert queue.dead_letters() == (
+        {
+            "job_id": final.id,
+            "error_code": "TEMPORARY",
+            "attempt": 2,
+            "payload": {},
+            "failed_at": 15.0,
+        },
+    )
     retried = queue.retry(final.id)
     assert retried.state is JobState.QUEUED
     assert retried.attempt == 0
+    assert queue.dead_letters() == ()
+
+
+def test_fresh_jobs_are_leased_before_due_retries(tmp_path: Path) -> None:
+    queue = _queue(tmp_path)
+    retry_job = queue.enqueue("parse", {"kind": "retry"}, "retry", "hash-1", available_at=1)
+    leased = queue.lease("worker", now=1)
+    assert leased is not None
+    queue.fail(retry_job.id, "worker", "TEMPORARY", retryable=True, retry_delay=1, now=1)
+    fresh = queue.enqueue("parse", {"kind": "fresh"}, "fresh", "hash-2", available_at=2)
+
+    selected = queue.lease("worker", now=2)
+
+    assert selected is not None and selected.id == fresh.id
 
 
 def test_cancel_queued_and_running_jobs(tmp_path: Path) -> None:

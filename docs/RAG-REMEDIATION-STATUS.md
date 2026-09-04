@@ -102,3 +102,13 @@ Gold、独立 Verifier 与正式 tokenizer 未配置前，受保护工作流必�
   `UPLOAD_MAX_CONCURRENT_STREAMS` 限制并发流并形成背压。
 - Frontend 使用 2 MiB Blob slice 增量 SHA-256，不再整文件 `arrayBuffer()`；Nginx 配置
   `client_max_body_size` 与 1 MiB body buffer。
+
+## P1 压缩包资源限制与 Worker 重试风暴整改
+
+- OOXML 校验新增累计解压字节、单条目解压字节、全局条目数和嵌套深度硬上限；嵌套包使用
+  有界内存的 spooled 临时文件递归扫描。校验运行在独立子进程，父进程执行墙钟超时终止，
+  POSIX 子进程同时设置 CPU rlimit。文件魔数和 UTF-8 检查也改为分块读取。
+- Worker 按 `base * 2^(attempt-1) + jitter` 计算有上限延迟，暂时、永久和未知错误使用不同
+  重试策略；连续依赖错误触发租约冷却。队列最终失败写入 SQLite/Redis DLQ，手动重试时移出。
+  主循环按失败建议延迟休眠且不再在队列状态保存后抛异常；租约排序优先新任务，避免重试挤压。
+- Worker 安全日志包含 Job/Document/attempt/异常类型/trace ID/重试和延迟，不包含异常正文。

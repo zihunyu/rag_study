@@ -6,6 +6,8 @@
 - Reject answer prose not fully covered by cited claims and render responses only from verified claims.
 - Bind real acceptance to non-zero quality thresholds, per-case Gold F1, and report-tested generations.
 - Stream uploads directly to quarantine with hard byte/quota limits and browser-side incremental hashing.
+- Validate OOXML archives in a timed child process with absolute expansion and nesting limits.
+- Add jittered Worker backoff, dependency circuit cooling, structured failures, fair leasing, and DLQs.
 - Normalize production MySQL aggregate persistence with row-level optimistic concurrency and pooling.
 - Make publication fail closed through durable switching intents and a transactional outbox finalization.
 - Preserve semantic chunk structure/tokenizer context and carry table headers into generation evidence.

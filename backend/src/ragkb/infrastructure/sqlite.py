@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_metadata (
@@ -38,6 +38,15 @@ CREATE TABLE IF NOT EXISTS job_queue (
 );
 CREATE INDEX IF NOT EXISTS idx_job_queue_lease
     ON job_queue(state, available_at, next_retry_at, created_at);
+CREATE TABLE IF NOT EXISTS job_dead_letters (
+    job_id TEXT PRIMARY KEY REFERENCES job_queue(id),
+    error_code TEXT NOT NULL,
+    attempt INTEGER NOT NULL,
+    payload_json TEXT NOT NULL,
+    failed_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_job_dead_letters_failed_at
+    ON job_dead_letters(failed_at DESC);
 
 CREATE TABLE IF NOT EXISTS tenants (
     id TEXT PRIMARY KEY,

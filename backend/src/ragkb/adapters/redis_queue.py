@@ -15,12 +15,13 @@ from ragkb.domain.state_machines import JobState
 
 
 class RedisPersistentJobQueue:
-    revision = "redis-persistent-queue:g4-v1"
+    revision = "redis-persistent-queue:dlq:g4-v2"
 
     def __init__(self, redis: RedisCacheRateLimitAdapter) -> None:
         self.redis = redis
         self.jobs_key = redis._key("queue", "jobs")
         self.idempotency_key = redis._key("queue", "idempotency")
+        self.dead_letters_key = redis._key("queue", "dead-letters")
         self.lock_key = redis._key("queue", "mutation-lock")
 
     @property
@@ -81,6 +82,20 @@ class RedisPersistentJobQueue:
         )
         self.client.hset(self.jobs_key, str(record["id"]), encoded)
         return self._job(record)
+
+    def _save_dead_letter(self, record: Mapping[str, Any]) -> None:
+        payload = {
+            "job_id": str(record["id"]),
+            "error_code": str(record.get("error_code") or "ATTEMPTS_EXHAUSTED"),
+            "attempt": int(record["attempt"]),
+            "payload": dict(record["payload"]),
+            "failed_at": float(record["updated_at"]),
+        }
+        self.client.hset(
+            self.dead_letters_key,
+            payload["job_id"],
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+        )
 
     def _records(self) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
@@ -165,6 +180,8 @@ class RedisPersistentJobQueue:
             for record in self._records():
                 if self._recover_record(record, timestamp):
                     self._save(record)
+                    if record["state"] == JobState.FAILED_FINAL.value:
+                        self._save_dead_letter(record)
                     recovered += 1
         return recovered
 
@@ -179,6 +196,8 @@ class RedisPersistentJobQueue:
             for record in records:
                 if self._recover_record(record, timestamp):
                     self._save(record)
+                    if record["state"] == JobState.FAILED_FINAL.value:
+                        self._save_dead_letter(record)
                 if (
                     record["state"] == JobState.RETRY_WAIT.value
                     and record.get("next_retry_at") is not None
@@ -196,7 +215,15 @@ class RedisPersistentJobQueue:
             ]
             if not eligible:
                 return None
-            record = min(eligible, key=lambda item: (float(item["created_at"]), str(item["id"])))
+            record = min(
+                eligible,
+                key=lambda item: (
+                    int(item["attempt"]) > 0,
+                    float(item["available_at"]),
+                    float(item["created_at"]),
+                    str(item["id"]),
+                ),
+            )
             record.update(
                 state=JobState.RUNNING.value,
                 attempt=int(record["attempt"]) + 1,
@@ -290,7 +317,10 @@ class RedisPersistentJobQueue:
                 heartbeat_at=None,
                 updated_at=timestamp,
             )
-            return self._save(record)
+            saved = self._save(record)
+            if state is JobState.FAILED_FINAL:
+                self._save_dead_letter(record)
+            return saved
 
     def request_cancel(self, job_id: str) -> QueueJob:
         with self._lock():
@@ -342,8 +372,20 @@ class RedisPersistentJobQueue:
                 available_at=timestamp,
                 updated_at=timestamp,
             )
+            self.client.hdel(self.dead_letters_key, job_id)
             return self._save(record)
 
     def get(self, job_id: str) -> QueueJob | None:
         record = self._load_record(job_id)
         return self._job(record) if record is not None else None
+
+    def dead_letters(self, *, limit: int = 100) -> tuple[dict[str, Any], ...]:
+        if limit < 1:
+            raise ValueError("dead-letter limit must be positive")
+        values: list[dict[str, Any]] = []
+        for raw in self.client.hgetall(self.dead_letters_key).values():
+            loaded = json.loads(str(raw))
+            if isinstance(loaded, dict):
+                values.append(loaded)
+        values.sort(key=lambda item: float(item.get("failed_at", 0)), reverse=True)
+        return tuple(values[:limit])

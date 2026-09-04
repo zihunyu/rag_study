@@ -245,8 +245,10 @@ def test_worker_marks_version_failed_after_final_unexpected_error(tmp_path: Path
         "failure-worker",
     )
 
-    with pytest.raises(RuntimeError, match="parser crash"):
-        worker.run_once()
+    assert worker.run_once() is True
+    assert worker.last_failure is not None
+    assert worker.last_failure.error_code == "INGEST_UNEXPECTED"
+    assert worker.last_failure.exception_type == "RuntimeError"
 
     assert components.queue.get(result["job_id"]).state is JobState.FAILED_FINAL  # type: ignore[union-attr]
     version = components.repository.get_version(result["document_version_id"])

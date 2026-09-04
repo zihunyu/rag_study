@@ -5,9 +5,17 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 UNCONFIGURED_MARKERS = frozenset({"", "change_me", "__fill_me__", "deferred", "not_applicable"})
 TOKEN_STRATEGY_ROUND_ROBIN: Final[Literal["round_robin"]] = "round_robin"  # noqa: S105
@@ -160,7 +168,13 @@ class EnvSettings(BaseModel):
     queue_lease_seconds: float = Field(default=60, gt=0)
     queue_heartbeat_seconds: float = Field(default=15, gt=0)
     queue_max_retries: int = Field(default=3, ge=0)
-    queue_retry_delay_seconds: float = Field(default=5, ge=0)
+    queue_retry_delay_seconds: float = Field(default=5, gt=0)
+    worker_retry_max_delay_seconds: float = Field(default=300, gt=0)
+    worker_retry_jitter_seconds: float = Field(default=1, ge=0)
+    worker_transient_max_attempts: int = Field(default=5, gt=0)
+    worker_dependency_failure_threshold: int = Field(default=3, gt=0)
+    worker_dependency_cooldown_seconds: float = Field(default=30, gt=0)
+    worker_failure_pause_seconds: float = Field(default=1, gt=0)
 
     mineru_base_url: str = "https://mineru.net/api/v4"
     mineru_tokens: tuple[SecretStr, ...] = ()
@@ -254,6 +268,10 @@ class EnvSettings(BaseModel):
     upload_max_pages: int = Field(default=600, gt=0)
     upload_quarantine_max_gb: float = Field(default=5.0, gt=0)
     upload_max_concurrent_streams: int = Field(default=4, gt=0)
+    upload_max_archive_uncompressed_bytes: int = Field(default=1024 * 1024 * 1024, gt=0)
+    upload_max_archive_entry_uncompressed_bytes: int = Field(default=256 * 1024 * 1024, gt=0)
+    upload_max_archive_nesting_depth: int = Field(default=1, ge=0)
+    upload_archive_validation_timeout_seconds: float = Field(default=10.0, gt=0)
     upload_allowed_extensions: tuple[str, ...] = (
         "pdf",
         "png",
@@ -325,6 +343,17 @@ class EnvSettings(BaseModel):
     @classmethod
     def parse_secret_csv(cls, value: Any) -> tuple[str, ...]:
         return _csv(value)
+
+    @model_validator(mode="after")
+    def validate_resource_limits(self) -> Self:
+        if (
+            self.upload_max_archive_entry_uncompressed_bytes
+            > self.upload_max_archive_uncompressed_bytes
+        ):
+            raise ValueError("archive entry limit cannot exceed total archive limit")
+        if self.worker_retry_max_delay_seconds < self.queue_retry_delay_seconds:
+            raise ValueError("worker retry maximum cannot be below retry base")
+        return self
 
 
 @dataclass(frozen=True)
