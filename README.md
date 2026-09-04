@@ -143,6 +143,14 @@ Embedding。默认结构化分片保留标题/章节路径，表格行重复携�
 长查询默认按语义查询处理，编号/错误码走 identifier。权限过滤后先 Rerank，再执行近重复及
 单文档、单章节数量限制。
 
+## 大文件上传
+
+上传内容不会再解析为完整 `bytes`。Backend 从 ASGI 请求流逐块写入隔离区临时文件，在同一遍
+处理中计算 SHA-256 和累计大小；`Content-Length` 仅用于快速拒绝，流内仍执行不可绕过的硬
+上限。大小或哈希不符、请求中断时删除临时/隔离文件。`UPLOAD_QUARANTINE_MAX_GB` 限制隔离区
+总容量，`UPLOAD_MAX_CONCURRENT_STREAMS` 通过等待队列提供背压。Frontend 使用 2 MiB 分块
+增量 SHA-256，不再调用整文件 `file.arrayBuffer()`。Nginx 同时限制 `client_max_body_size 200m`。
+
 ## 质量与测试
 
 ```text

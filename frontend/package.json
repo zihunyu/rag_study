@@ -6,13 +6,14 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
-    "test:api": "node --test src/api.test.mjs",
+    "test:api": "node --test src/api.test.mjs src/fileHash.test.mjs",
     "test:unit": "vitest run src/App.test.js",
     "test:e2e": "playwright test",
     "test": "npm run test:api && npm run test:unit",
     "check": "npm run test && vite build"
   },
   "dependencies": {
+    "@noble/hashes": "2.4.0",
     "vue": "^3.5.0"
   },
   "devDependencies": {

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
+from collections.abc import AsyncIterable
 from dataclasses import asdict
 from typing import Any
 
@@ -39,7 +41,11 @@ class UploadService:
         malware_scanner: MalwareScanPort,
         tenant_id: str,
         queue_max_attempts: int = 3,
+        quarantine_max_bytes: int | None = None,
+        max_concurrent_streams: int = 4,
     ) -> None:
+        if max_concurrent_streams < 1:
+            raise ValueError("UPLOAD_STREAM_CONCURRENCY_INVALID")
         self.repository = repository
         self.queue = queue
         self.storage = storage
@@ -47,6 +53,8 @@ class UploadService:
         self.malware_scanner = malware_scanner
         self.tenant_id = tenant_id
         self.queue_max_attempts = queue_max_attempts
+        self.quarantine_max_bytes = quarantine_max_bytes or validator.max_size_bytes * 10
+        self._stream_slots = asyncio.Semaphore(max_concurrent_streams)
 
     @staticmethod
     def request_hash(payload: dict[str, Any]) -> str:
@@ -68,6 +76,8 @@ class UploadService:
         safe_filename = self.validator.validate_filename(filename)
         if expected_size < 0:
             raise FileValidationError("DOC_INVALID_SIZE", "expected_size must be non-negative")
+        if expected_size > self.validator.max_size_bytes:
+            raise FileValidationError("DOC_SIZE_LIMIT", "file exceeds configured size limit")
         if not re.fullmatch(r"[a-fA-F0-9]{64}", expected_sha256):
             raise FileValidationError(
                 "DOC_INVALID_HASH", "expected_sha256 must be a SHA-256 hex digest"
@@ -127,7 +137,66 @@ class UploadService:
             raise UploadStateError(f"cannot upload content in state {session.state.value}")
         if len(content) > self.validator.max_size_bytes:
             raise FileValidationError("DOC_SIZE_LIMIT", "file exceeds configured size limit")
+        if len(content) != session.expected_size:
+            raise FileValidationError("DOC_SIZE_MISMATCH", "uploaded size differs from declaration")
+        if hashlib.sha256(content).hexdigest() != session.expected_sha256:
+            raise FileValidationError("DOC_HASH_MISMATCH", "uploaded hash differs from declaration")
         self.storage.write_bytes("quarantine", session.quarantine_key, content)
+        return self.repository.update_session(
+            session.id,
+            session.row_version,
+            UploadSessionState.UPLOADED,
+            error_code=None,
+        )
+
+    async def upload_content_stream(
+        self,
+        session_id: str,
+        chunks: AsyncIterable[bytes],
+        *,
+        expected_row_version: int,
+        content_length: int | None,
+    ) -> UploadSession:
+        session = self.repository.get_session(session_id)
+        if session.row_version != expected_row_version:
+            raise OptimisticConcurrencyError(session_id)
+        if session.state not in {UploadSessionState.CREATED, UploadSessionState.FAILED}:
+            raise UploadStateError(f"cannot upload content in state {session.state.value}")
+        if content_length is not None:
+            if content_length < 0:
+                raise FileValidationError(
+                    "DOC_CONTENT_LENGTH_INVALID", "Content-Length must be non-negative"
+                )
+            if content_length > self.validator.max_size_bytes:
+                raise FileValidationError("DOC_SIZE_LIMIT", "file exceeds configured size limit")
+            if content_length != session.expected_size:
+                raise FileValidationError(
+                    "DOC_SIZE_MISMATCH", "Content-Length differs from declared size"
+                )
+        async with self._stream_slots:
+            try:
+                written = await self.storage.write_stream(
+                    "quarantine",
+                    session.quarantine_key,
+                    chunks,
+                    max_bytes=self.validator.max_size_bytes,
+                    quota_bytes=self.quarantine_max_bytes,
+                    content_length=content_length,
+                )
+            except StorageIntegrityError as error:
+                messages = {
+                    "DOC_SIZE_LIMIT": "file exceeds configured size limit",
+                    "UPLOAD_QUARANTINE_QUOTA_EXCEEDED": "upload quarantine capacity exhausted",
+                }
+                raise FileValidationError(
+                    error.code, messages.get(error.code, "streaming upload failed")
+                ) from error
+        if written.size != session.expected_size:
+            self.storage.delete("quarantine", session.quarantine_key)
+            raise FileValidationError("DOC_SIZE_MISMATCH", "uploaded size differs from declaration")
+        if written.sha256 != session.expected_sha256:
+            self.storage.delete("quarantine", session.quarantine_key)
+            raise FileValidationError("DOC_HASH_MISMATCH", "uploaded hash differs from declaration")
         return self.repository.update_session(
             session.id,
             session.row_version,

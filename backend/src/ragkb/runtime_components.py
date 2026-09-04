@@ -220,6 +220,8 @@ def build_runtime_components(
         SignatureMalwareScanner(),
         tenant_id,
         queue_max_attempts=settings.queue_max_retries + 1,
+        quarantine_max_bytes=int(settings.upload_quarantine_max_gb * 1024**3),
+        max_concurrent_streams=settings.upload_max_concurrent_streams,
     )
     control_plane: RetrievalProjectionPort
     if settings.rag_runtime_profile == "production":

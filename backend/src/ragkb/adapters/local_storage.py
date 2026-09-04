@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import tempfile
+import threading
+from collections.abc import AsyncIterable
 from hashlib import sha256
 from pathlib import Path
 
-from ragkb.contracts.ports import StorageIntegrityError
+from ragkb.contracts.ports import StorageIntegrityError, StreamWriteResult
 
 ALLOWED_PARTITIONS = frozenset({"original", "artifacts", "quarantine", "temp", "audit"})
 
@@ -19,6 +22,8 @@ class StoragePathError(ValueError):
 class LocalFileStorage:
     def __init__(self, root: Path) -> None:
         self.root = root.resolve()
+        self._quota_lock = threading.Lock()
+        self._reserved_quarantine_bytes = 0
 
     def ensure_layout(self) -> None:
         for partition in sorted(ALLOWED_PARTITIONS):
@@ -56,6 +61,112 @@ class LocalFileStorage:
         finally:
             temporary.unlink(missing_ok=True)
         return target
+
+    @staticmethod
+    def _directory_size(path: Path) -> int:
+        if not path.exists():
+            return 0
+        return sum(
+            item.stat().st_size
+            for item in path.rglob("*")
+            if item.is_file() and not item.name.endswith(".uploading")
+        )
+
+    def _reserve_quarantine(
+        self,
+        target: Path,
+        *,
+        requested_bytes: int,
+        quota_bytes: int,
+    ) -> int:
+        with self._quota_lock:
+            partition_root = self.root / "quarantine"
+            existing_target = target.stat().st_size if target.is_file() else 0
+            committed = max(0, self._directory_size(partition_root) - existing_target)
+            if committed + self._reserved_quarantine_bytes + requested_bytes > quota_bytes:
+                raise StorageIntegrityError("UPLOAD_QUARANTINE_QUOTA_EXCEEDED")
+            self._reserved_quarantine_bytes += requested_bytes
+            return requested_bytes
+
+    def _grow_quarantine_reservation(
+        self,
+        target: Path,
+        reservation: int,
+        required: int,
+        quota_bytes: int,
+    ) -> int:
+        if required <= reservation:
+            return reservation
+        additional = required - reservation
+        with self._quota_lock:
+            partition_root = self.root / "quarantine"
+            existing_target = target.stat().st_size if target.is_file() else 0
+            committed = max(0, self._directory_size(partition_root) - existing_target)
+            if committed + self._reserved_quarantine_bytes + additional > quota_bytes:
+                raise StorageIntegrityError("UPLOAD_QUARANTINE_QUOTA_EXCEEDED")
+            self._reserved_quarantine_bytes += additional
+        return required
+
+    def _release_quarantine(self, reservation: int) -> None:
+        with self._quota_lock:
+            self._reserved_quarantine_bytes = max(0, self._reserved_quarantine_bytes - reservation)
+
+    async def write_stream(
+        self,
+        partition: str,
+        key: str,
+        chunks: AsyncIterable[bytes],
+        *,
+        max_bytes: int,
+        quota_bytes: int,
+        content_length: int | None = None,
+    ) -> StreamWriteResult:
+        if partition != "quarantine":
+            raise StoragePathError("stream writes are restricted to quarantine")
+        if max_bytes < 1 or quota_bytes < 1:
+            raise StorageIntegrityError("UPLOAD_STREAM_LIMIT_INVALID")
+        if content_length is not None and (content_length < 0 or content_length > max_bytes):
+            raise StorageIntegrityError("DOC_SIZE_LIMIT")
+        target = self._safe_path(partition, key)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        initial_reservation = content_length if content_length is not None else max_bytes
+        reservation = self._reserve_quarantine(
+            target,
+            requested_bytes=initial_reservation,
+            quota_bytes=quota_bytes,
+        )
+        try:
+            file_descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{target.name}.", suffix=".uploading", dir=target.parent
+            )
+        except Exception:
+            self._release_quarantine(reservation)
+            raise
+        temporary = Path(temporary_name)
+        digest = sha256()
+        size = 0
+        try:
+            with os.fdopen(file_descriptor, "wb") as handle:
+                async for chunk in chunks:
+                    if not chunk:
+                        continue
+                    if not isinstance(chunk, (bytes, bytearray, memoryview)):
+                        raise StorageIntegrityError("UPLOAD_STREAM_CHUNK_INVALID")
+                    size += len(chunk)
+                    if size > max_bytes:
+                        raise StorageIntegrityError("DOC_SIZE_LIMIT")
+                    reservation = self._grow_quarantine_reservation(
+                        target, reservation, size, quota_bytes
+                    )
+                    digest.update(chunk)
+                    await asyncio.to_thread(handle.write, chunk)
+                await asyncio.to_thread(handle.flush)
+                await asyncio.to_thread(os.fsync, handle.fileno())
+            await asyncio.to_thread(os.replace, temporary, target)
+            return StreamWriteResult(target, size, digest.hexdigest())
+        finally:
+            temporary.unlink(missing_ok=True)
+            self._release_quarantine(reservation)
 
     def read_bytes(self, partition: str, key: str) -> bytes:
         return self._safe_path(partition, key).read_bytes()

@@ -56,3 +56,6 @@ def test_containers_are_digest_pinned_non_root_health_checked_and_fully_scanned(
     assert "--hash=sha256:" in (root / "requirements.lock").read_text(encoding="utf-8")
     assert (root / "LICENSE").is_file()
     assert (root / "NOTICE").is_file()
+    nginx = (root / "frontend/nginx.conf").read_text(encoding="utf-8")
+    assert "client_max_body_size 200m" in nginx
+    assert "client_body_buffer_size 1m" in nginx

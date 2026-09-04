@@ -8,7 +8,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable, Iterator
 
-from fastapi import Body, FastAPI, Header, Request, Response, status
+from fastapi import FastAPI, Header, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -357,6 +357,10 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
 
     @app.exception_handler(FileValidationError)
     async def invalid_file(request: Request, error: FileValidationError) -> JSONResponse:
+        if error.code == "DOC_SIZE_LIMIT":
+            return _error(request, error.code, str(error), 413)
+        if error.code == "UPLOAD_QUARANTINE_QUOTA_EXCEEDED":
+            return _error(request, error.code, str(error), 507, retryable=True)
         return _error(request, error.code, str(error), 422)
 
     @app.exception_handler(SecurityWatermarkNotReady)
@@ -584,19 +588,36 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
         "/api/v1/upload-sessions/{session_id}/content",
         response_model=UploadSessionStatusResponse,
         tags=["ingestion"],
+        openapi_extra={
+            "requestBody": {
+                "required": True,
+                "content": {
+                    "application/octet-stream": {"schema": {"type": "string", "format": "binary"}}
+                },
+            }
+        },
     )
     async def upload_content(
         session_id: str,
         response: Response,
         request: Request,
-        content: bytes = Body(media_type="application/octet-stream"),
         if_match: str = Header(alias="If-Match"),
     ) -> UploadSessionStatusResponse:
         principal = _principal(request)
         _require_role(principal, "knowledge_maintainer", "admin")
         _require_local_tenant(runtime, principal)
-        session = runtime.uploads.upload_content(
-            session_id, content, expected_row_version=_if_match(if_match)
+        raw_content_length = request.headers.get("content-length")
+        try:
+            content_length = int(raw_content_length) if raw_content_length is not None else None
+        except ValueError as error:
+            raise FileValidationError(
+                "DOC_CONTENT_LENGTH_INVALID", "Content-Length must be an integer"
+            ) from error
+        session = await runtime.uploads.upload_content_stream(
+            session_id,
+            request.stream(),
+            expected_row_version=_if_match(if_match),
+            content_length=content_length,
         )
         response.headers["ETag"] = _etag(session.row_version)
         return UploadSessionStatusResponse(

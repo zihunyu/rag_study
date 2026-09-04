@@ -252,6 +252,8 @@ class EnvSettings(BaseModel):
 
     upload_max_file_size_mb: int = Field(default=200, gt=0)
     upload_max_pages: int = Field(default=600, gt=0)
+    upload_quarantine_max_gb: float = Field(default=5.0, gt=0)
+    upload_max_concurrent_streams: int = Field(default=4, gt=0)
     upload_allowed_extensions: tuple[str, ...] = (
         "pdf",
         "png",

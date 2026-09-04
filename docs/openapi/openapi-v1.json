@@ -5014,8 +5014,7 @@
           "content": {
             "application/octet-stream": {
               "schema": {
-                "contentMediaType": "application/octet-stream",
-                "title": "Content",
+                "format": "binary",
                 "type": "string"
               }
             }

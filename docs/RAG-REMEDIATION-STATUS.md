@@ -93,3 +93,12 @@ Gold、独立 Verifier 与正式 tokenizer 未配置前，受保护工作流必�
 - RAG-055：三个基础镜像固定 digest，容器使用非 root、HEALTHCHECK、只读根文件系统、清空
   Linux capabilities；三种镜像均执行 Trivy 和 CycloneDX SBOM，Python 锁文件包含 hashes，
   并补充 LICENSE 与 NOTICE。
+
+## P1 大文件上传内存整改
+
+- Backend 上传路由直接消费 `request.stream()`，单遍完成隔离区写入、SHA-256 和字节计数；
+  `Content-Length` 快速拒绝之外仍有流内硬上限，失败或中断会删除 `.uploading` 临时文件。
+- 隔离区使用 `UPLOAD_QUARANTINE_MAX_GB` 容量预留，避免并发超卖；
+  `UPLOAD_MAX_CONCURRENT_STREAMS` 限制并发流并形成背压。
+- Frontend 使用 2 MiB Blob slice 增量 SHA-256，不再整文件 `arrayBuffer()`；Nginx 配置
+  `client_max_body_size` 与 1 MiB body buffer。

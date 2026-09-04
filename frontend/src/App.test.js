@@ -80,7 +80,14 @@ describe("trusted QA UI", () => {
     const input = wrapper.get('[data-testid="initial-upload-file"]');
     const file = new File(["policy"], "policy.md", { type: "text/markdown" });
     Object.defineProperty(file, "arrayBuffer", {
-      value: async () => new TextEncoder().encode("policy").buffer,
+      value: async () => {
+        throw new Error("whole file read is forbidden");
+      },
+    });
+    Object.defineProperty(file, "slice", {
+      value: (start, end) => ({
+        arrayBuffer: async () => new TextEncoder().encode("policy").slice(start, end).buffer,
+      }),
     });
     Object.defineProperty(input.element, "files", { value: [file] });
     await input.trigger("change");

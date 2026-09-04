@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
@@ -25,6 +26,13 @@ class StorageIntegrityError(RuntimeError):
         self.code = code
 
 
+@dataclass(frozen=True)
+class StreamWriteResult:
+    path: Path
+    size: int
+    sha256: str
+
+
 class ParsingDeferred(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -34,6 +42,17 @@ class ParsingDeferred(RuntimeError):
 
 class ContentStoragePort(Protocol):
     def write_bytes(self, partition: str, key: str, content: bytes) -> Path: ...
+
+    async def write_stream(
+        self,
+        partition: str,
+        key: str,
+        chunks: AsyncIterable[bytes],
+        *,
+        max_bytes: int,
+        quota_bytes: int,
+        content_length: int | None = None,
+    ) -> StreamWriteResult: ...
 
     def read_bytes(self, partition: str, key: str) -> bytes: ...
 
