@@ -67,6 +67,24 @@ def _complete_session(
     return completed.json()
 
 
+def test_direct_browser_preflight_allows_frontend_without_reverse_proxy(tmp_path: Path) -> None:
+    components = _components(tmp_path)
+    client = TestClient(create_app(components))
+
+    response = client.options(
+        "/api/v1/spaces",
+        headers={
+            "Origin": "http://127.0.0.1:5173",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "Authorization,Content-Type",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:5173"
+    assert "Authorization" in response.headers["access-control-allow-headers"]
+
+
 def test_upload_complete_document_job_and_worker_flow(tmp_path: Path) -> None:
     components = _components(tmp_path)
     client = TestClient(create_app(components))

@@ -10,5 +10,8 @@ test("Playwright uses installed cross-platform CLIs and one backend launcher", (
   assert.match(config, /RAGKB_E2E_BACKEND \|\| "ragkb-backend"/);
   assert.match(config, /RAGKB_E2E_WORKER \|\| "ragkb-worker"/);
   assert.match(config, /node \.\/scripts\/run-e2e-backend\.mjs/);
+  assert.match(config, /node \.\/scripts\/serve-dist\.mjs/);
+  assert.doesNotMatch(config, /npm run dev/);
+  assert.doesNotMatch(config, /nginx/i);
   assert.doesNotMatch(config, /process\.env\.CI\s*\?\s*"bash/);
 });

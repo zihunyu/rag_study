@@ -56,6 +56,26 @@ def test_containers_are_digest_pinned_non_root_health_checked_and_fully_scanned(
     assert "--hash=sha256:" in (root / "requirements.lock").read_text(encoding="utf-8")
     assert (root / "LICENSE").is_file()
     assert (root / "NOTICE").is_file()
-    nginx = (root / "frontend/nginx.conf").read_text(encoding="utf-8")
-    assert "client_max_body_size 200m" in nginx
-    assert "client_body_buffer_size 1m" in nginx
+    frontend_dockerfile = (root / "frontend/Dockerfile").read_text(encoding="utf-8")
+    static_server = (root / "frontend/scripts/serve-dist.mjs").read_text(encoding="utf-8")
+    assert "nginx" not in frontend_dockerfile.lower()
+    assert "USER node" in frontend_dockerfile
+    assert "FRONTEND_API_BASE_URL_REQUIRED" in static_server
+    assert "runtime-config.js" in static_server
+
+
+def test_runtime_and_development_dependency_locks_are_separated_and_reproducible() -> None:
+    root = Path(__file__).resolve().parents[2]
+    runtime_lock = (root / "requirements.lock").read_text(encoding="utf-8")
+    development_lock = (root / "requirements-dev.lock").read_text(encoding="utf-8")
+    tools_lock = (root / "requirements-tools.lock").read_text(encoding="utf-8")
+    compiler = (root / "scripts/compile_requirements.py").read_text(encoding="utf-8")
+
+    for development_package in ("mypy==", "pytest==", "ruff=="):
+        assert development_package not in runtime_lock
+        assert development_package in development_lock
+    assert "opentelemetry-sdk==" in runtime_lock
+    assert "pip-tools==7.6.1" in tools_lock
+    assert "setuptools==84.0.0" in tools_lock
+    assert "wheel==0.48.0" in tools_lock
+    assert 'PIP_TOOLS_VERSION = "7.6.1"' in compiler

@@ -1,6 +1,7 @@
 <script setup>
-import { computed, ref } from "vue";
-import { apiUrl, askStream, request, sourceUrl } from "./api.js";
+import { computed, onMounted, ref } from "vue";
+import { apiUrl, askStream, authorizedFetch, request, sourceUrl } from "./api.js";
+import { initializeAuth, oidcEnabled, signIn, signOut } from "./auth.js";
 import { sha256File } from "./fileHash.js";
 
 const tab = ref("ask");
@@ -30,6 +31,7 @@ const pilot = ref({ id: "", name: "Synthetic Pilot", flag: "pilot.synthetic", re
 const uat = ref({ id: "", title: "Synthetic UAT", rowVersion: 0, evidence: null, result: null });
 const observation = ref({ id: "", name: "Synthetic optional window", rowVersion: 0, result: null });
 const acceptance = ref(null);
+const authenticatedUser = ref(null);
 let uploadHashRevision = 0;
 let versionHashRevision = 0;
 const citations = computed(() =>
@@ -38,6 +40,14 @@ const citations = computed(() =>
     href: sourceUrl(citation.source_url),
   })),
 );
+
+onMounted(async () => {
+  try {
+    authenticatedUser.value = await initializeAuth();
+  } catch (cause) {
+    error.value = `OIDC_AUTHENTICATION_FAILED:${cause.message}`;
+  }
+});
 
 async function ask() {
   if (!question.value.trim()) return;
@@ -129,7 +139,7 @@ async function uploadDocument() {
         declared_mime: file.type || "application/octet-stream",
       }),
     });
-    const uploadedResponse = await fetch(sourceUrl(created.upload_path), {
+    const uploadedResponse = await authorizedFetch(sourceUrl(created.upload_path), {
       method: "PUT",
       headers: { "If-Match": `"${created.row_version}"` },
       body: file,
@@ -156,7 +166,7 @@ async function loadDocumentVersionEtag() {
 async function uploadNewVersion() {
   const file = versionUpload.value.file;
   if (!file || !versionUpload.value.documentRowVersion) return;
-  const createdResponse = await fetch(
+  const createdResponse = await authorizedFetch(
     apiUrl(`/documents/${lifecycle.value.documentId}/versions/upload-sessions`),
     {
       method: "POST",
@@ -175,7 +185,7 @@ async function uploadNewVersion() {
   );
   if (!createdResponse.ok) throw new Error("VERSION_SESSION_CREATE_FAILED");
   const created = await createdResponse.json();
-  const uploadedResponse = await fetch(sourceUrl(created.upload_path), {
+  const uploadedResponse = await authorizedFetch(sourceUrl(created.upload_path), {
     method: "PUT",
     headers: { "If-Match": `"${created.row_version}"` },
     body: file,
@@ -319,7 +329,7 @@ async function generateAcceptance() {
   <div class="shell">
     <aside><h1>RAG KB <small>IMPLEMENTATION</small></h1><button v-for="name in ['ask','admin','debug','governance']" :key="name" :class="{active: tab===name}" @click="tab=name">{{ {ask:'可信问答',admin:'知识管理',debug:'检索调试',governance:'试点与验收'}[name] }}</button><p>simulated=true<br>real_acceptance=false<br>final validation deferred</p></aside>
     <main>
-      <header><div><span>ENTERPRISE KNOWLEDGE</span><h2>可信问答与治理控制台</h2></div><b>real_acceptance=false</b></header>
+      <header><div><span>ENTERPRISE KNOWLEDGE</span><h2>可信问答与治理控制台</h2></div><div class="session"><b>real_acceptance=false</b><button v-if="oidcEnabled && !authenticatedUser" @click="signIn">OIDC 登录</button><button v-if="oidcEnabled && authenticatedUser" @click="signOut">退出 {{ authenticatedUser.profile?.name ?? authenticatedUser.profile?.sub }}</button></div></header>
       <section v-if="tab==='ask'">
         <article><label>问题</label><textarea v-model="question" rows="4"/><button class="primary" @click="ask">提交可信问答</button><span>{{ stage }}</span></article>
         <article><h3>{{ result?.status ?? '尚未运行' }}</h3><p class="answer">{{ result?.answer ?? '答案仅在引用与权限复核后显示。' }}</p><a v-for="citation in citations" :key="citation.evidence_id" :href="citation.href" target="_blank">{{ citation.evidence_id }} · 签名来源</a><form v-if="result" @submit.prevent="submitFeedback"><select v-model="feedback.rating"><option :value="5">有帮助</option><option :value="1">无帮助</option></select><input v-model="feedback.comment" placeholder="反馈说明"><button>提交反馈</button></form><p class="error">{{ error }}</p></article>

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { askStream, request, sourceUrl } from "./api.js";
+import { askStream, authorizedFetch, request, sourceUrl } from "./api.js";
 
 function sseResponse(frames) {
   const encoder = new TextEncoder();
@@ -77,4 +77,18 @@ test("non-success API response exposes only stable server code", async () => {
   await assert.rejects(() => request("/search", {}, fakeFetch), {
     message: "PERMISSION_DENIED",
   });
+});
+
+test("production requests attach the OIDC bearer token", async () => {
+  let observed;
+  const fakeFetch = async (_url, options) => {
+    observed = new Headers(options.headers);
+    return new Response("{}", { status: 200 });
+  };
+
+  await authorizedFetch("https://api.example.test/api/v1/spaces", {}, fakeFetch, async () =>
+    "signed-access-token",
+  );
+
+  assert.equal(observed.get("Authorization"), "Bearer signed-access-token");
 });

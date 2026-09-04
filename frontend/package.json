@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@noble/hashes": "2.4.0",
+    "oidc-client-ts": "3.5.0",
     "vue": "^3.5.0"
   },
   "devDependencies": {

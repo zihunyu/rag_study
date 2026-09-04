@@ -27,6 +27,9 @@ test("ask progress releases the verified answer and citation", async ({ page }) 
 test("upload, worker indexing, publish, ask, and citation use the real local backend", async ({
   page,
 }, testInfo) => {
+  const runtimeConfig = await page.request.get("http://127.0.0.1:4173/runtime-config.js");
+  expect(runtimeConfig.ok()).toBeTruthy();
+  expect(await runtimeConfig.text()).toContain("http://127.0.0.1:8000/api/v1");
   const policy = testInfo.outputPath("policy.md");
   const content = Buffer.from("# Product policy\nWarranty is three years.\n", "utf8");
   writeFileSync(policy, content);

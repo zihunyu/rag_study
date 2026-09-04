@@ -42,8 +42,14 @@ export default defineConfig({
       reuseExistingServer: false,
     },
     {
-      command: "npm run dev -- --port 4173",
-      url: "http://127.0.0.1:4173",
+      command: "npm run build && node ./scripts/serve-dist.mjs",
+      url: "http://127.0.0.1:4173/health",
+      env: {
+        ...process.env,
+        PORT: "4173",
+        FRONTEND_API_BASE_URL: "http://127.0.0.1:8000/api/v1",
+        FRONTEND_PUBLIC_ORIGIN: "http://127.0.0.1:4173",
+      },
       reuseExistingServer: false,
     },
   ],

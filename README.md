@@ -33,7 +33,7 @@ BM25 + Dense 检索、查询类型感知融合、Rerank、基于证据生成、�
 Copy-Item config/.env.example config/.env
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install --require-hashes -r requirements.lock
+python -m pip install --require-hashes -r requirements-dev.lock
 python -m pip install -e . --no-deps
 python scripts/check_env.py --gate G0
 ```
@@ -43,7 +43,7 @@ python scripts/check_env.py --gate G0
 cp config/.env.example config/.env
 python3.12 -m venv .venv
 source .venv/bin/activate
-python -m pip install --require-hashes -r requirements.lock
+python -m pip install --require-hashes -r requirements-dev.lock
 python -m pip install -e . --no-deps
 python scripts/check_env.py --gate G0
 ```
@@ -149,7 +149,8 @@ Embedding。默认结构化分片保留标题/章节路径，表格行重复携�
 处理中计算 SHA-256 和累计大小；`Content-Length` 仅用于快速拒绝，流内仍执行不可绕过的硬
 上限。大小或哈希不符、请求中断时删除临时/隔离文件。`UPLOAD_QUARANTINE_MAX_GB` 限制隔离区
 总容量，`UPLOAD_MAX_CONCURRENT_STREAMS` 通过等待队列提供背压。Frontend 使用 2 MiB 分块
-增量 SHA-256，不再调用整文件 `file.arrayBuffer()`。Nginx 同时限制 `client_max_body_size 200m`。
+增量 SHA-256，不再调用整文件 `file.arrayBuffer()`。Backend 的流式硬上限是最终强制边界，部署
+不依赖反向代理提供上传保护。
 
 DOCX/XLSX/PPTX 的 ZIP 容器在独立子进程中校验，除压缩比和条目数外还限制累计解压字节、
 单条目解压字节、嵌套深度、CPU 时间和墙钟时间。相关配置为
@@ -206,6 +207,34 @@ docker compose up --build
 Compose 使用同一个持久卷共享本地存储；Zilliz/Milvus 和模型 Provider 仍是外部服务。三个
 镜像均固定基础镜像 digest、使用非 root 用户和 HEALTHCHECK；Compose 使用只读根文件系统、
 移除 Linux capabilities，并只开放 Backend 8000 与 Frontend 8080（宿主仍映射为 5173）。
+Frontend 由最小 Node 静态服务器提供，不安装或使用 Nginx。`/runtime-config.js` 在容器启动时
+根据环境变量生成，因此无需重新构建前端即可切换 Backend 或 OIDC：
+
+```text
+FRONTEND_API_BASE_URL=https://api.example.com/api/v1
+FRONTEND_PUBLIC_ORIGIN=https://rag.example.com
+FRONTEND_OIDC_ENABLED=true
+FRONTEND_OIDC_AUTHORITY=https://id.example.com
+FRONTEND_OIDC_CLIENT_ID=rag-spa-public-client
+FRONTEND_OIDC_SCOPE=openid profile email rag.read rag.write
+```
+
+前端采用 OIDC Authorization Code + PKCE，不保存客户端密钥；登录后的 Access Token 自动作为
+`Authorization: Bearer ...` 添加到 JSON、SSE 和流式上传请求。Backend 的 `CORS_ORIGINS` 必须
+包含 `FRONTEND_PUBLIC_ORIGIN`。非本机的 `FRONTEND_API_BASE_URL` 必须使用 HTTPS。
+
+## 依赖锁
+
+`requirements.lock` 只包含 Backend/Worker 运行依赖及生产 OpenTelemetry；开发和测试工具使用
+`requirements-dev.lock`。锁生成器和 Python 构建工具由 `requirements-tools.lock` 哈希固定：
+
+```text
+python -m pip install --require-hashes -r requirements-tools.lock
+python scripts/compile_requirements.py
+```
+
+`scripts/compile_requirements.py` 会校验 pip-tools 版本，先生成生产锁，再以生产锁为约束生成开发
+锁，避免两个环境使用不同的运行库版本。
 
 ## 可观测性与安全边界
 

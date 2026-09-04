@@ -24,11 +24,18 @@ services:
 
   frontend:
     build: frontend
+    environment:
+      FRONTEND_API_BASE_URL: ${FRONTEND_API_BASE_URL:-http://127.0.0.1:8000/api/v1}
+      FRONTEND_PUBLIC_ORIGIN: ${FRONTEND_PUBLIC_ORIGIN:-http://127.0.0.1:5173}
+      FRONTEND_OIDC_ENABLED: ${FRONTEND_OIDC_ENABLED:-false}
+      FRONTEND_OIDC_AUTHORITY: ${FRONTEND_OIDC_AUTHORITY:-}
+      FRONTEND_OIDC_CLIENT_ID: ${FRONTEND_OIDC_CLIENT_ID:-}
+      FRONTEND_OIDC_SCOPE: ${FRONTEND_OIDC_SCOPE:-openid profile email}
     ports: ["5173:8080"]
     read_only: true
     cap_drop: ["ALL"]
     security_opt: ["no-new-privileges:true"]
-    tmpfs: ["/tmp", "/var/cache/nginx", "/var/run"]
+    tmpfs: ["/tmp"]
 
 volumes:
   rag-data:

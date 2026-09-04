@@ -2,6 +2,7 @@
 
 ## 2026-09-04
 
+- Split hashed runtime/dev/tool locks and replace the Nginx frontend with a runtime-configured Node server and OIDC PKCE bearer flow.
 - Make local Playwright startup platform-neutral and split API/runtime assembly by domain/profile.
 - Make index Saga retries attempt-aware and require exact manifest reconciliation before READY.
 - Reject answer prose not fully covered by cited claims and render responses only from verified claims.

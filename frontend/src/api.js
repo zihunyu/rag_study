@@ -1,4 +1,7 @@
-const configuredBase = import.meta.env?.VITE_API_BASE_URL?.trim();
+import { accessToken } from "./auth.js";
+
+const runtimeBase = globalThis.__RAGKB_CONFIG__?.apiBaseUrl?.trim();
+const configuredBase = runtimeBase || import.meta.env?.VITE_API_BASE_URL?.trim();
 
 export const API_BASE = (configuredBase || "/api/v1").replace(/\/$/, "");
 
@@ -12,11 +15,23 @@ export function sourceUrl(path, apiBase = API_BASE) {
   return path;
 }
 
+export async function authorizedFetch(
+  url,
+  options = {},
+  fetchImpl = fetch,
+  tokenProvider = accessToken,
+) {
+  const token = await tokenProvider();
+  const headers = new Headers(options.headers ?? {});
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  return fetchImpl(url, { ...options, headers });
+}
+
 export async function request(path, options = {}, fetchImpl = fetch) {
-  const response = await fetchImpl(apiUrl(path), {
+  const response = await authorizedFetch(apiUrl(path), {
     headers: { "Content-Type": "application/json", ...(options.headers ?? {}) },
     ...options,
-  });
+  }, fetchImpl);
   const body = await response.json();
   if (!response.ok) throw new Error(body.code ?? "REQUEST_FAILED");
   return body;
@@ -47,11 +62,11 @@ export async function consumeSSE(response, onEvent) {
 }
 
 export async function askStream(question, onProgress, fetchImpl = fetch) {
-  const response = await fetchImpl(apiUrl("/ask:stream"), {
+  const response = await authorizedFetch(apiUrl("/ask:stream"), {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
     body: JSON.stringify({ question }),
-  });
+  }, fetchImpl);
   let verified = false;
   let result = null;
   await consumeSSE(response, (event, payload) => {

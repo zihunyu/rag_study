@@ -100,8 +100,8 @@ Gold、独立 Verifier 与正式 tokenizer 未配置前，受保护工作流必�
   `Content-Length` 快速拒绝之外仍有流内硬上限，失败或中断会删除 `.uploading` 临时文件。
 - 隔离区使用 `UPLOAD_QUARANTINE_MAX_GB` 容量预留，避免并发超卖；
   `UPLOAD_MAX_CONCURRENT_STREAMS` 限制并发流并形成背压。
-- Frontend 使用 2 MiB Blob slice 增量 SHA-256，不再整文件 `arrayBuffer()`；Nginx 配置
-  `client_max_body_size` 与 1 MiB body buffer。
+- Frontend 使用 2 MiB Blob slice 增量 SHA-256，不再整文件 `arrayBuffer()`；Backend 流式硬上限
+  是不依赖代理、不可绕过的最终保护边界。
 
 ## P1 压缩包资源限制与 Worker 重试风暴整改
 
