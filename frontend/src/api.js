@@ -28,12 +28,25 @@ export async function authorizedFetch(
 }
 
 export async function request(path, options = {}, fetchImpl = fetch) {
+  const { headers: optionHeaders, ...requestOptions } = options;
   const response = await authorizedFetch(apiUrl(path), {
-    headers: { "Content-Type": "application/json", ...(options.headers ?? {}) },
-    ...options,
+    ...requestOptions,
+    headers: { "Content-Type": "application/json", ...(optionHeaders ?? {}) },
   }, fetchImpl);
   const body = await response.json();
-  if (!response.ok) throw new Error(body.code ?? "REQUEST_FAILED");
+  if (!response.ok) {
+    const validationCode = Array.isArray(body.detail)
+      ? body.detail
+          .map((item) => `${item.loc?.slice(1).join(".") || "request"}:${item.msg || item.type}`)
+          .join(";")
+      : null;
+    const detailCode = typeof body.detail === "string"
+      ? body.detail
+      : body.detail?.code;
+    throw new Error(
+      body.code ?? validationCode ?? detailCode ?? `REQUEST_FAILED_HTTP_${response.status}`,
+    );
+  }
   return body;
 }
 
@@ -61,11 +74,11 @@ export async function consumeSSE(response, onEvent) {
   }
 }
 
-export async function askStream(question, onProgress, fetchImpl = fetch) {
+export async function askStream(question, onProgress, fetchImpl = fetch, spaceId = null) {
   const response = await authorizedFetch(apiUrl("/ask:stream"), {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify({ question, ...(spaceId ? { space_id: spaceId } : {}) }),
   }, fetchImpl);
   let verified = false;
   let result = null;

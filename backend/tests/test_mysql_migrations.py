@@ -64,6 +64,14 @@ def test_recorded_migrations_apply_once_and_second_run_is_idempotent() -> None:
     assert not any("DROP " in statement.upper() for statement in connection.statements)
 
 
+def test_publication_outbox_primary_key_fits_mysql_utf8mb4_index_limit() -> None:
+    statement = dict(MYSQL_G3_MIGRATIONS)["121_publication_outbox_v3"]
+
+    assert "tenant_id VARCHAR(191)" in statement
+    assert "operation VARCHAR(191)" in statement
+    assert "idempotency_key VARCHAR(191)" in statement
+
+
 def test_migration_failure_rolls_back_and_does_not_record_failed_step() -> None:
     connection = _MigrationConnection(fail_table="index_generations")
 

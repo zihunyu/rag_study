@@ -10,14 +10,18 @@ def test_g3_frontend_exposes_qa_admin_feedback_and_retrieval_debug_contracts() -
     api = (root / "src/api.js").read_text(encoding="utf-8")
     package = (root / "package.json").read_text(encoding="utf-8")
     for marker in (
-        "可信问答",
-        "知识管理",
+        "知识问答",
+        "创建知识库",
+        "已入库文件",
+        "查看分块",
+        "分块状态",
+        "从此知识库回答",
         "检索调试",
-        "追加式审计",
-        "发布 / 回滚",
-        "清理 Outbox 状态",
+        "系统治理",
+        "发布文档",
+        "高级生命周期操作",
         "既有文档新版本",
-        "单文档质量复核",
+        "检查质量并提交复核",
         "Pilot Go/No-Go 与灰度",
         "合成 UAT",
         "可选观察窗与最终报告",
@@ -40,5 +44,7 @@ def test_g3_frontend_exposes_qa_admin_feedback_and_retrieval_debug_contracts() -
     assert "/governance/uat-cases" in script
     assert "final-acceptance-report" in script
     assert "真实证据缺失时必须保持 BLOCKED" in script
+    assert "space_id: selectedSpaceId.value" in script
+    assert "/document-versions/${item.version_id}/chunks" in script
     assert "cleanup/${store}:complete" not in script
     assert "说明卡片" not in script

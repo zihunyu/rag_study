@@ -14,7 +14,11 @@ from typing import Any, Protocol
 import httpx
 
 from ragkb.config import EnvSettings
-from ragkb.domain.claim_coverage import extract_answer_clauses, verify_answer_claim_coverage
+from ragkb.domain.claim_coverage import (
+    extract_answer_clauses,
+    render_verified_claims,
+    verify_answer_claim_coverage,
+)
 from ragkb.domain.errors import (
     InvalidProviderResponse,
     ProviderCircuitOpen,
@@ -465,6 +469,8 @@ class OpenAICompatibleBufferedGenerator(_GuardedModelAdapter):
                             "(array of evidence IDs), "
                             "and claims (array of objects containing text and evidence_ids). "
                             "Each material factual claim must be atomic and explicitly supported. "
+                            "The answer must be exactly the claim texts joined by newlines, in the "
+                            "same order, with no introduction, conclusion, or paraphrase. "
                             "If evidence is insufficient, use an empty answer and citation_ids."
                         ),
                     },
@@ -516,7 +522,11 @@ class OpenAICompatibleBufferedGenerator(_GuardedModelAdapter):
             parsed_claims.append(AtomicClaim(text, tuple(map(str, evidence_ids))))
         if answer.strip() and not parsed_claims:
             raise InvalidProviderResponse("LLM_CLAIMS_REQUIRED")
-        return DraftAnswer(answer, tuple(map(str, citation_ids)), tuple(parsed_claims))
+        if not answer.strip() and parsed_claims:
+            raise InvalidProviderResponse("LLM_ANSWER_REQUIRED_FOR_CLAIMS")
+        immutable_claims = tuple(parsed_claims)
+        verified_surface = render_verified_claims(immutable_claims) if answer.strip() else ""
+        return DraftAnswer(verified_surface, tuple(map(str, citation_ids)), immutable_claims)
 
 
 class OpenAICompatibleClaimVerifier(_GuardedModelAdapter):

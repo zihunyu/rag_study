@@ -129,6 +129,46 @@ def test_grounded_generator_separates_untrusted_evidence_and_parses_citations(
     assert "<evidence id=" not in payload["messages"][1]["content"]
 
 
+def test_grounded_generator_rebuilds_surface_text_from_atomic_claims(tmp_path: Path) -> None:
+    settings, _ = _settings(tmp_path)
+    transport = _MockTransport(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            '{"answer":"According to the evidence, the warranty is three years.",'
+                            '"citation_ids":["E1"],'
+                            '"claims":[{"text":"The warranty is three years.",'
+                            '"evidence_ids":["E1"]}]}'
+                        )
+                    }
+                }
+            ]
+        }
+    )
+    generator = OpenAICompatibleBufferedGenerator(settings, transport=transport)
+    evidence = Evidence(
+        "E1",
+        "chunk",
+        "document",
+        "version",
+        "The warranty is three years.",
+        {"page": 1},
+        0,
+        0,
+        1,
+        1,
+        True,
+        True,
+    )
+
+    result = generator.generate("What is the warranty?", (evidence,))
+
+    assert result.text == "The warranty is three years."
+    assert "According to" not in result.text
+
+
 def test_independent_verifier_requires_one_supported_verdict_per_claim(tmp_path: Path) -> None:
     settings, _ = _settings(tmp_path)
     settings = settings.model_copy(

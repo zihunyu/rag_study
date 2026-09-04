@@ -40,6 +40,18 @@ def conditional_issues(result: EnvLoadResult) -> tuple[EnvIssue, ...]:
             issues.append(EnvIssue(key, "ENV_REQUIRED", gate))
 
     if settings.app_env == "production":
+        if settings.auth_mode == "local_single_user" and settings.app_host not in {
+            "127.0.0.1",
+            "::1",
+            "localhost",
+        }:
+            issues.append(
+                EnvIssue(
+                    "APP_HOST",
+                    "LOCAL_SINGLE_USER_AUTH_REQUIRES_LOOPBACK",
+                    "G0",
+                )
+            )
         if settings.app_debug:
             issues.append(EnvIssue("APP_DEBUG", "PRODUCTION_DEBUG_FORBIDDEN", "G4"))
         require("APP_SECRET_KEY", "G4")

@@ -313,16 +313,27 @@ class TrustedQAService:
         *,
         subject_scope_tokens: tuple[str, ...] = (),
         clearance_level: int = 0,
+        space_id: str | None = None,
     ) -> AskResult:
         try:
             with self.tracer.span("rag.ask.evidence.build"):
-                package = self.evidence_provider.build_package(
-                    question,
-                    tenant_id,
-                    user_id,
-                    subject_scope_tokens=subject_scope_tokens,
-                    clearance_level=clearance_level,
-                )
+                if space_id is None:
+                    package = self.evidence_provider.build_package(
+                        question,
+                        tenant_id,
+                        user_id,
+                        subject_scope_tokens=subject_scope_tokens,
+                        clearance_level=clearance_level,
+                    )
+                else:
+                    package = self.evidence_provider.build_package(
+                        question,
+                        tenant_id,
+                        user_id,
+                        subject_scope_tokens=subject_scope_tokens,
+                        clearance_level=clearance_level,
+                        space_id=space_id,
+                    )
         except (RetrievalFailClosed, TransientProviderError):
             package = EvidencePackage(
                 rag_run_id=new_uuid7(),
@@ -475,14 +486,18 @@ class TrustedQAService:
         *,
         subject_scope_tokens: tuple[str, ...] = (),
         clearance_level: int = 0,
+        space_id: str | None = None,
     ) -> AskResult:
-        with self.tracer.span("rag.ask", {"tenant_id": tenant_id}):
+        with self.tracer.span(
+            "rag.ask", {"tenant_id": tenant_id, "space_id": space_id or "default"}
+        ):
             return self._ask(
                 question,
                 tenant_id,
                 user_id,
                 subject_scope_tokens=subject_scope_tokens,
                 clearance_level=clearance_level,
+                space_id=space_id,
             )
 
     def feedback(

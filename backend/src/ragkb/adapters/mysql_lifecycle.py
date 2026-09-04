@@ -327,7 +327,8 @@ class MySQLLifecycleStore(InMemoryLifecycleStore):
                         payload_json, created_at, updated_at
                     ) VALUES (%s, %s, %s, %s, %s, %s, 'PENDING', 1, %s, NOW(6), NOW(6))
                     AS incoming ON DUPLICATE KEY UPDATE
-                        state='PENDING', attempt_count=attempt_count+1,
+                        state='PENDING',
+                        attempt_count=publication_outbox_v3.attempt_count+1,
                         payload_json=incoming.payload_json, updated_at=NOW(6)
                     """,
                     (

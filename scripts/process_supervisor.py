@@ -9,6 +9,7 @@ import secrets
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import asdict, dataclass
@@ -158,7 +159,7 @@ class SubprocessLauncher:
 
     def start(self, spec: ProcessSpec, owner_token: str) -> ProcessIdentity:
         command = [
-            os.fspath(Path(os.sys.executable).resolve()),
+            os.fspath(Path(sys.executable).resolve()),
             os.fspath(self.wrapper),
             "--owner-token",
             owner_token,
@@ -241,6 +242,17 @@ class SystemProcessInspector:
         )
 
     def terminate(self, pid: int) -> None:
+        if os.name == "nt":
+            taskkill = shutil.which("taskkill") or str(
+                Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32/taskkill.exe"
+            )
+            subprocess.run(  # noqa: S603
+                [taskkill, "/PID", str(pid), "/T"],
+                check=False,
+                capture_output=True,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            return
         os.kill(pid, signal.SIGTERM)
 
     def wait(self, pid: int, timeout_seconds: float) -> bool:
@@ -252,4 +264,15 @@ class SystemProcessInspector:
         return False
 
     def kill(self, pid: int) -> None:
+        if os.name == "nt":
+            taskkill = shutil.which("taskkill") or str(
+                Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32/taskkill.exe"
+            )
+            subprocess.run(  # noqa: S603
+                [taskkill, "/PID", str(pid), "/T", "/F"],
+                check=False,
+                capture_output=True,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            return
         os.kill(pid, signal.SIGKILL if hasattr(signal, "SIGKILL") else signal.SIGTERM)

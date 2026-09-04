@@ -130,10 +130,22 @@ def build_runtime_components(
         settings.auth_local_tenant,
         "general_knowledge",
         tenant_id_override=(
-            settings.oidc_tenant_id if profile_factory.name == "production" else None
+            (
+                settings.auth_local_tenant
+                if settings.auth_mode == "local_single_user"
+                else settings.oidc_tenant_id
+            )
+            if profile_factory.name == "production"
+            else None
         ),
         space_id_override=(
-            settings.oidc_default_space_id if profile_factory.name == "production" else None
+            (
+                "general_knowledge"
+                if settings.auth_mode == "local_single_user"
+                else settings.oidc_default_space_id
+            )
+            if profile_factory.name == "production"
+            else None
         ),
     )
     validator = UploadFileValidator(

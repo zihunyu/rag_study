@@ -50,10 +50,12 @@ class SearchBackedEvidenceProvider:
         *,
         subject_scope_tokens: tuple[str, ...] = (),
         clearance_level: int = 0,
+        space_id: str | None = None,
     ) -> EvidencePackage:
         query_time = int(self.clock())
+        selected_space_id = space_id or self.space_id
         release = (
-            self.release_provider.current_release(tenant_id, self.space_id)
+            self.release_provider.current_release(tenant_id, selected_space_id)
             if self.release_provider is not None
             else None
         )
@@ -72,7 +74,7 @@ class SearchBackedEvidenceProvider:
         )
         context = SearchContext(
             tenant_id=tenant_id,
-            space_ids=(self.space_id,),
+            space_ids=(selected_space_id,),
             subject_scope_tokens=subject_scope_tokens,
             clearance_level=clearance_level,
             as_of_epoch=query_time,

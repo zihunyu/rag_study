@@ -38,8 +38,9 @@ class SyntheticEvidenceProvider:
         *,
         subject_scope_tokens: tuple[str, ...] = (),
         clearance_level: int = 0,
+        space_id: str | None = None,
     ) -> EvidencePackage:
-        del subject_scope_tokens, clearance_level
+        del subject_scope_tokens, clearance_level, space_id
         return EvidencePackage(
             rag_run_id=new_uuid7(),
             tenant_id=tenant_id or "local",

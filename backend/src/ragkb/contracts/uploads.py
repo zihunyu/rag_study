@@ -10,6 +10,14 @@ from ragkb.domain.validation import DocumentQualityReport
 
 
 class UploadRepositoryPort(Protocol):
+    def create_space(self, tenant_id: str, name: str) -> dict[str, str]: ...
+
+    def list_spaces(self) -> list[dict[str, str]]: ...
+
+    def list_documents(self, space_id: str) -> list[dict[str, Any]]: ...
+
+    def list_chunks(self, version_id: str) -> list[dict[str, Any]]: ...
+
     def create_upload_session(
         self,
         *,

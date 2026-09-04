@@ -18,7 +18,7 @@ test("ask progress releases the verified answer and citation", async ({ page }) 
   });
   await page.goto("/");
   await page.locator("textarea").fill("保修期多久？");
-  await page.getByRole("button", { name: "提交可信问答" }).click();
+  await page.getByRole("button", { name: "从此知识库回答" }).click();
 
   await expect(page.getByText("保修期为三年。")).toBeVisible();
   await expect(page.getByRole("link", { name: /E1/ })).toBeVisible();
@@ -33,45 +33,16 @@ test("upload, worker indexing, publish, ask, and citation use the real local bac
   const policy = testInfo.outputPath("policy.md");
   const content = Buffer.from("# Product policy\nWarranty is three years.\n", "utf8");
   writeFileSync(policy, content);
-  const spaces = await page.request.get("http://127.0.0.1:8000/api/v1/spaces");
-  const spacesBody = await spaces.json();
-  expect(spaces.ok(), JSON.stringify(spacesBody)).toBeTruthy();
-  const spaceId = spacesBody[0].id;
-  const createdResponse = await page.request.post(
-    `http://127.0.0.1:8000/api/v1/spaces/${spaceId}/upload-sessions`,
-    {
-      headers: { "Idempotency-Key": `e2e-create-${Date.now()}` },
-      data: {
-        filename: "policy.md",
-        expected_size: content.length,
-        expected_sha256: createHash("sha256").update(content).digest("hex"),
-        declared_mime: "text/markdown",
-      },
-    },
-  );
-  const created = await createdResponse.json();
-  expect(createdResponse.ok(), JSON.stringify(created)).toBeTruthy();
-  const uploadedResponse = await page.request.put(
-    `http://127.0.0.1:8000${created.upload_path}`,
-    { headers: { "If-Match": `"${created.row_version}"` }, data: content },
-  );
-  const uploaded = await uploadedResponse.json();
-  expect(uploadedResponse.ok(), JSON.stringify(uploaded)).toBeTruthy();
-  const completedResponse = await page.request.post(
-    `http://127.0.0.1:8000/api/v1/upload-sessions/${created.upload_session_id}:complete`,
-    {
-      headers: {
-        "If-Match": `"${uploaded.row_version}"`,
-        "Idempotency-Key": `e2e-complete-${Date.now()}`,
-      },
-    },
-  );
-  const completed = await completedResponse.json();
-  expect(completedResponse.ok(), JSON.stringify(completed)).toBeTruthy();
   await page.goto("/");
-  await page.getByRole("button", { name: "知识管理" }).click();
-  await page.getByPlaceholder("Document ID").fill(completed.document_id);
-  await page.getByPlaceholder("Version ID").fill(completed.document_version_id);
+  await page.getByRole("button", { name: "知识库", exact: true }).click();
+  await page.getByTestId("new-space-name").fill(`Playwright 产品库 ${Date.now()}`);
+  await page.getByTestId("create-space-submit").click();
+  await page.getByTestId("initial-upload-file").setInputFiles(policy);
+  await expect(page.getByTestId("initial-upload-hash")).toHaveText(
+    createHash("sha256").update(content).digest("hex"),
+  );
+  await page.getByTestId("initial-upload-submit").click();
+  await expect(page.getByTestId("initial-upload-result")).toContainText(/Job ID.*01a/);
 
   const workerOutput = execFileSync(
     process.env.RAGKB_E2E_WORKER,
@@ -83,31 +54,18 @@ test("upload, worker indexing, publish, ask, and citation use the real local bac
     },
   ).toString();
   expect(workerOutput).toContain('"failed": false');
-  const reviewed = await page.request.post(
-    `http://127.0.0.1:8000/api/v1/document-versions/${completed.document_version_id}/review`,
-    {
-      headers: { "Idempotency-Key": `e2e-review-${Date.now()}` },
-      data: {
-        decision: "APPROVED",
-        comment: "browser e2e",
-        security_projection: {
-          visibility: "TENANT",
-          classification_level: 0,
-          acl_scope_tokens: [],
-        },
-      },
-    },
-  );
-  expect(reviewed.ok(), await reviewed.text()).toBeTruthy();
-  const published = await page.request.post(
-    `http://127.0.0.1:8000/api/v1/document-versions/${completed.document_version_id}:publish`,
-    { headers: { "Idempotency-Key": `e2e-publish-${Date.now()}` } },
-  );
-  expect(published.ok(), await published.text()).toBeTruthy();
+  await expect(page.getByText("解析入库完成", { exact: false })).toBeVisible();
+  await expect(page.getByTestId("document-list")).toContainText("policy.md");
+  await page.getByTestId("view-chunks").click();
+  await expect(page.getByTestId("chunk-panel")).toContainText("Warranty is three years.");
+  await page.getByPlaceholder("复核说明").fill("browser e2e");
+  await page.getByRole("button", { name: "提交复核", exact: true }).click();
+  await page.getByRole("button", { name: "发布文档", exact: true }).click();
+  await expect(page.getByTestId("document-list")).toContainText("SERVING");
 
-  await page.getByRole("button", { name: "可信问答" }).click();
+  await page.getByRole("button", { name: "知识问答" }).click();
   await page.locator("textarea").fill("What is the warranty period?");
-  await page.getByRole("button", { name: "提交可信问答" }).click();
+  await page.getByRole("button", { name: "从此知识库回答" }).click();
   await expect(page.getByText("根据已验证证据，设备保修期为三年。")).toBeVisible();
   await expect(page.getByRole("link", { name: /E1/ })).toBeVisible();
 });

@@ -481,9 +481,9 @@ MYSQL_G3_MIGRATIONS: tuple[tuple[str, str], ...] = (
         "121_publication_outbox_v3",
         """
         CREATE TABLE IF NOT EXISTS publication_outbox_v3 (
-            tenant_id VARCHAR(255) NOT NULL,
-            operation VARCHAR(320) NOT NULL,
-            idempotency_key VARCHAR(255) NOT NULL,
+            tenant_id VARCHAR(191) NOT NULL,
+            operation VARCHAR(191) NOT NULL,
+            idempotency_key VARCHAR(191) NOT NULL,
             document_id VARCHAR(255) NOT NULL,
             target_version_id VARCHAR(255) NOT NULL,
             generation_id VARCHAR(255) NOT NULL,

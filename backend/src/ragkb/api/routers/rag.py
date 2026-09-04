@@ -48,6 +48,15 @@ OPENAPI_VERSION = "1.0.0"
 def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
     router = APIRouter()
 
+    def selected_space(tenant_id: str, requested_space_id: str | None) -> str:
+        space_id = requested_space_id or runtime.space_id
+        if not any(
+            str(item["id"]) == space_id and str(item["tenant_id"]) == tenant_id
+            for item in runtime.repository.list_spaces()
+        ):
+            raise ResourceNotFoundError(space_id)
+        return space_id
+
     @router.post(
         "/api/v1/search",
         response_model=SearchResponse,
@@ -58,13 +67,12 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
         principal = _principal(request)
         _require_role(principal, "reader", "knowledge_maintainer", "admin")
         _require_local_tenant(runtime, principal)
-        if body.space_id is not None and body.space_id != runtime.space_id:
-            raise ResourceNotFoundError(body.space_id)
+        space_id = selected_space(principal.tenant_id, body.space_id)
         runtime.lifecycle_store.reload()
-        release = runtime.retrieval_release.current_release(principal.tenant_id, runtime.space_id)
+        release = runtime.retrieval_release.current_release(principal.tenant_id, space_id)
         context = SearchContext(
             tenant_id=principal.tenant_id,
-            space_ids=(runtime.space_id,),
+            space_ids=(space_id,),
             subject_scope_tokens=principal.scope_tokens,
             clearance_level=principal.clearance_level,
             as_of_epoch=int(time.time()),
@@ -110,6 +118,7 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
         principal = _principal(request)
         _require_role(principal, "reader", "knowledge_maintainer", "admin")
         _require_local_tenant(runtime, principal)
+        space_id = selected_space(principal.tenant_id, body.space_id)
         runtime.lifecycle_store.reload()
         result = await run_in_threadpool(
             runtime.qa_service.ask,
@@ -118,6 +127,7 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
             principal.user_id,
             subject_scope_tokens=principal.scope_tokens,
             clearance_level=principal.clearance_level,
+            space_id=space_id,
         )
         return _ask_response(result)
 
@@ -130,6 +140,7 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
         principal = _principal(request)
         _require_role(principal, "reader", "knowledge_maintainer", "admin")
         _require_local_tenant(runtime, principal)
+        space_id = selected_space(principal.tenant_id, body.space_id)
         runtime.lifecycle_store.reload()
 
         def stream() -> Iterator[str]:
@@ -141,6 +152,7 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
                 principal.user_id,
                 subject_scope_tokens=principal.scope_tokens,
                 clearance_level=principal.clearance_level,
+                space_id=space_id,
             )
             verification = "verified" if result.verified else "verification_failed"
             yield f"event: progress\ndata: {json.dumps({'stage': verification})}\n\n"

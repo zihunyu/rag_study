@@ -3,6 +3,8 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+import pytest
+from ragkb.adapters.auth import LocalSingleUserAuthenticator
 from ragkb.adapters.model_http import (
     OpenAICompatibleBufferedGenerator,
     OpenAICompatibleClaimVerifier,
@@ -10,7 +12,9 @@ from ragkb.adapters.model_http import (
     OpenAICompatibleRerankerAdapter,
 )
 from ragkb.adapters.zilliz import ZillizCloudAdapter
+from ragkb.config import load_env
 from ragkb.runtime_components import build_runtime_components
+from ragkb.runtime_profiles.production import ProductionRuntimeFactory
 
 
 def test_production_profile_contains_no_deterministic_rag_components(tmp_path: Path) -> None:
@@ -93,3 +97,43 @@ def test_production_profile_contains_no_deterministic_rag_components(tmp_path: P
     assert components.model_transport is not None
     for transport in components.provider_transports:
         transport.close()
+
+
+def test_production_factory_allows_loopback_local_auth_for_full_provider_testing(
+    tmp_path: Path,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    loaded = load_env(root, environ={})
+    assert loaded.settings is not None
+    settings = loaded.settings.model_copy(
+        update={
+            "app_env": "production",
+            "rag_runtime_profile": "production",
+            "app_host": "127.0.0.1",
+            "auth_mode": "local_single_user",
+            "auth_local_tenant": "local",
+        }
+    )
+    factory = ProductionRuntimeFactory()
+
+    authenticator = factory.build_authenticator(settings, "local")
+
+    assert isinstance(authenticator, LocalSingleUserAuthenticator)
+    assert authenticator.authenticate(None).tenant_id == "local"
+
+
+def test_production_factory_rejects_network_exposure_with_local_auth() -> None:
+    root = Path(__file__).resolve().parents[2]
+    loaded = load_env(root, environ={})
+    assert loaded.settings is not None
+    settings = loaded.settings.model_copy(
+        update={
+            "app_env": "production",
+            "rag_runtime_profile": "production",
+            "app_host": "0.0.0.0",  # noqa: S104 - intentional negative security test.
+            "auth_mode": "local_single_user",
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="LOCAL_SINGLE_USER_AUTH_REQUIRES_LOOPBACK"):
+        ProductionRuntimeFactory().build_authenticator(settings, "local")

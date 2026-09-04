@@ -195,6 +195,168 @@ class MySQLUploadRepository:
     def list_spaces(self) -> list[dict[str, str]]:
         return [dict(item) for item in self._read()["spaces"].values()]
 
+    def create_space(self, tenant_id: str, name: str) -> dict[str, str]:
+        if tenant_id != self.tenant_id:
+            raise ResourceNotFoundError(tenant_id)
+        normalized = " ".join(name.split())
+        if not normalized:
+            raise ValueError("SPACE_NAME_REQUIRED")
+
+        def mutate(state: dict[str, Any]) -> dict[str, str]:
+            for item in state["spaces"].values():
+                if str(item["name"]).casefold() == normalized.casefold():
+                    return {
+                        "id": str(item["id"]),
+                        "tenant_id": self.tenant_id,
+                        "name": str(item["name"]),
+                        "status": str(item["status"]),
+                    }
+            space_id = new_uuid7()
+            created = {
+                "id": space_id,
+                "tenant_id": self.tenant_id,
+                "name": normalized,
+                "status": "ACTIVE",
+                "tenant_code": self.tenant_id,
+            }
+            state["spaces"][space_id] = created
+            return {
+                "id": space_id,
+                "tenant_id": self.tenant_id,
+                "name": normalized,
+                "status": "ACTIVE",
+            }
+
+        return self._mutate(mutate)
+
+    def list_documents(self, space_id: str) -> list[dict[str, Any]]:
+        state = self._read()
+        if space_id not in state["spaces"]:
+            raise ResourceNotFoundError(space_id)
+        sessions = [
+            item
+            for item in state["sessions"].values()
+            if item.get("space_id") == space_id and item.get("document_id")
+        ]
+        document_ids = {str(item["document_id"]) for item in sessions}
+        latest_by_document: dict[str, dict[str, Any]] = {}
+        for version in state["versions"].values():
+            document_id = str(version["document_id"])
+            if document_id not in document_ids:
+                continue
+            previous = latest_by_document.get(document_id)
+            if previous is None or int(version["version_no"]) > int(previous["version_no"]):
+                latest_by_document[document_id] = version
+        session_by_version = {
+            str(item["document_version_id"]): item
+            for item in sessions
+            if item.get("document_version_id")
+        }
+        counts: dict[str, int] = {}
+        version_ids = [str(item["id"]) for item in latest_by_document.values()]
+        if version_ids:
+            connection = self.control.connect()
+            try:
+                cursor = connection.cursor()
+                placeholders = ",".join("%s" for _ in version_ids)
+                query = (
+                    "SELECT document_version_id, COUNT(*) AS chunk_count "  # noqa: S608
+                    "FROM retrieval_chunk_projections WHERE document_version_id "
+                    f"IN ({placeholders}) GROUP BY document_version_id"
+                )
+                cursor.execute(
+                    query,
+                    tuple(version_ids),
+                )
+                for row in cursor.fetchall():
+                    version_id = str(
+                        row["document_version_id"] if isinstance(row, dict) else row[0]
+                    )
+                    counts[version_id] = int(
+                        row["chunk_count"] if isinstance(row, dict) else row[1]
+                    )
+            finally:
+                connection.close()
+        results: list[dict[str, Any]] = []
+        for document_id, version in latest_by_document.items():
+            document = state["documents"].get(document_id)
+            if document is None or document.get("state") == DocumentState.DELETED.value:
+                continue
+            version_id = str(version["id"])
+            session = session_by_version.get(version_id)
+            results.append(
+                {
+                    "document_id": document_id,
+                    "space_id": space_id,
+                    "filename": (
+                        str(session["filename"])
+                        if session is not None
+                        else str(document["external_key"])
+                    ),
+                    "version_id": version_id,
+                    "version_no": int(version["version_no"]),
+                    "processing_state": str(version["processing_state"]),
+                    "publication_state": str(version["publication_state"]),
+                    "parser_revision": (
+                        str(version["parser_revision"])
+                        if version.get("parser_revision") is not None
+                        else None
+                    ),
+                    "chunk_count": counts.get(version_id, 0),
+                    "job_id": str(session["job_id"]) if session and session.get("job_id") else None,
+                }
+            )
+        return sorted(results, key=lambda item: (str(item["filename"]), str(item["document_id"])))
+
+    def list_chunks(self, version_id: str) -> list[dict[str, Any]]:
+        if version_id not in self._read()["versions"]:
+            raise ResourceNotFoundError(version_id)
+        connection = self.control.connect()
+        try:
+            cursor = connection.cursor()
+            cursor.execute(
+                """
+                SELECT chunk_id, parent_chunk_id, display_text, locator_json,
+                       lifecycle_projection, current_version
+                FROM retrieval_chunk_projections
+                WHERE document_version_id=%s ORDER BY chunk_id
+                """,
+                (version_id,),
+            )
+            rows = cursor.fetchall()
+            results: list[dict[str, Any]] = []
+            for ordinal, raw in enumerate(rows):
+                row = (
+                    raw
+                    if isinstance(raw, dict)
+                    else dict(zip((item[0] for item in cursor.description), raw, strict=True))
+                )
+                locator = row["locator_json"]
+                if isinstance(locator, str):
+                    locator = json.loads(locator)
+                results.append(
+                    {
+                        "chunk_id": str(row["chunk_id"]),
+                        "document_version_id": version_id,
+                        "parent_chunk_id": (
+                            str(row["parent_chunk_id"]) if row["parent_chunk_id"] else None
+                        ),
+                        "ordinal": ordinal,
+                        "kind": str(locator.get("node_type", "CHUNK")),
+                        "token_count": None,
+                        "status": (
+                            "SERVING"
+                            if bool(row["current_version"])
+                            else str(row["lifecycle_projection"])
+                        ),
+                        "text": str(row["display_text"]),
+                        "locator": dict(locator),
+                    }
+                )
+            return results
+        finally:
+            connection.close()
+
     def idempotency_response(
         self, operation: str, key: str, request_hash: str
     ) -> dict[str, Any] | None:

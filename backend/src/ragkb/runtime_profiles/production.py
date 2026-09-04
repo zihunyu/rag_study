@@ -5,7 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import cast
 
-from ragkb.adapters.auth import OIDCDiscoveryJWTDecoder, OIDCJWTAuthenticator
+from ragkb.adapters.auth import (
+    LocalSingleUserAuthenticator,
+    OIDCDiscoveryJWTDecoder,
+    OIDCJWTAuthenticator,
+)
 from ragkb.adapters.external_cleanup import (
     ExternalProjectionCleanupExecutor,
     ProjectionInspectorPort,
@@ -66,6 +70,20 @@ class ProductionRuntimeFactory:
     def _guard(settings: EnvSettings) -> None:
         if settings.rag_runtime_profile != "production" or settings.app_env != "production":
             raise RuntimeError("PRODUCTION_FACTORY_REQUIRES_PRODUCTION_SETTINGS")
+        if settings.auth_mode == "local_single_user" and settings.app_host not in {
+            "127.0.0.1",
+            "::1",
+            "localhost",
+        }:
+            raise RuntimeError("LOCAL_SINGLE_USER_AUTH_REQUIRES_LOOPBACK_APP_HOST")
+
+    @staticmethod
+    def _tenant_id(settings: EnvSettings) -> str:
+        return (
+            settings.auth_local_tenant
+            if settings.auth_mode == "local_single_user"
+            else settings.oidc_tenant_id
+        )
 
     def build_persistence(
         self, settings: EnvSettings, database: SQLiteDatabase
@@ -75,10 +93,10 @@ class ProductionRuntimeFactory:
         mysql = MySQLControlPlaneAdapter(settings)
         redis = RedisCacheRateLimitAdapter(settings)
         return PersistenceAdapters(
-            governance_repository=MySQLGovernanceRepository(mysql, settings.oidc_tenant_id),
+            governance_repository=MySQLGovernanceRepository(mysql, self._tenant_id(settings)),
             repository=MySQLUploadRepository(
                 mysql,
-                settings.oidc_tenant_id,
+                self._tenant_id(settings),
                 settings.retrieval_active_generation_id,
             ),
             queue=RedisPersistentJobQueue(redis),
@@ -282,8 +300,9 @@ class ProductionRuntimeFactory:
         return cast(RetrievalReleasePort, retrieval.control_plane)
 
     def build_authenticator(self, settings: EnvSettings, tenant_id: str):  # type: ignore[no-untyped-def]
-        del tenant_id
         self._guard(settings)
+        if settings.auth_mode == "local_single_user":
+            return LocalSingleUserAuthenticator(settings, tenant_id=tenant_id)
         return OIDCJWTAuthenticator(settings, verified_decoder=OIDCDiscoveryJWTDecoder(settings))
 
     def build_answer_cache(

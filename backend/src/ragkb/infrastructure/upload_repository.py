@@ -143,6 +143,140 @@ class SQLiteUploadRepository:
             ).fetchall()
             return [dict(row) for row in rows]
 
+    def create_space(self, tenant_id: str, name: str) -> dict[str, str]:
+        normalized = " ".join(name.split())
+        if not normalized:
+            raise ValueError("SPACE_NAME_REQUIRED")
+        now = time.time()
+        with self.database.transaction(immediate=True) as connection:
+            tenant = connection.execute(
+                "SELECT id FROM tenants WHERE id = ?", (tenant_id,)
+            ).fetchone()
+            if tenant is None:
+                raise ResourceNotFoundError(tenant_id)
+            existing = connection.execute(
+                "SELECT id, tenant_id, name, status FROM knowledge_spaces "
+                "WHERE tenant_id = ? AND name = ?",
+                (tenant_id, normalized),
+            ).fetchone()
+            if existing is not None:
+                return dict(existing)
+            space_id = new_uuid7()
+            corpus_id = new_uuid7()
+            connection.execute(
+                "INSERT INTO knowledge_spaces(id, tenant_id, name, status, created_at) "
+                "VALUES (?, ?, ?, 'ACTIVE', ?)",
+                (space_id, tenant_id, normalized, now),
+            )
+            connection.execute(
+                "INSERT INTO corpora(id, tenant_id, space_id, name, created_at) "
+                "VALUES (?, ?, ?, 'uploads', ?)",
+                (corpus_id, tenant_id, space_id, now),
+            )
+            connection.execute(
+                "INSERT INTO sources(id, tenant_id, corpus_id, kind, external_key, created_at) "
+                "VALUES (?, ?, ?, 'UPLOAD', 'local-upload', ?)",
+                (new_uuid7(), tenant_id, corpus_id, now),
+            )
+            return {
+                "id": space_id,
+                "tenant_id": tenant_id,
+                "name": normalized,
+                "status": "ACTIVE",
+            }
+
+    def list_documents(self, space_id: str) -> list[dict[str, Any]]:
+        with self.database.connect() as connection:
+            space = connection.execute(
+                "SELECT tenant_id FROM knowledge_spaces WHERE id = ?", (space_id,)
+            ).fetchone()
+            if space is None:
+                raise ResourceNotFoundError(space_id)
+            documents = connection.execute(
+                """
+                SELECT d.id, d.external_key
+                FROM documents d
+                JOIN sources src ON src.id = d.source_id
+                JOIN corpora c ON c.id = src.corpus_id
+                WHERE c.space_id = ? AND d.state != 'DELETED'
+                ORDER BY d.created_at DESC
+                """,
+                (space_id,),
+            ).fetchall()
+            results: list[dict[str, Any]] = []
+            for document in documents:
+                version = connection.execute(
+                    "SELECT * FROM document_versions WHERE document_id = ? "
+                    "ORDER BY version_no DESC LIMIT 1",
+                    (str(document["id"]),),
+                ).fetchone()
+                if version is None:
+                    continue
+                session = connection.execute(
+                    "SELECT filename, job_id FROM upload_sessions "
+                    "WHERE document_version_id = ? ORDER BY updated_at DESC LIMIT 1",
+                    (str(version["id"]),),
+                ).fetchone()
+                chunk_count = int(
+                    connection.execute(
+                        "SELECT COUNT(*) AS count FROM chunks WHERE version_id = ?",
+                        (str(version["id"]),),
+                    ).fetchone()["count"]
+                )
+                results.append(
+                    {
+                        "document_id": str(document["id"]),
+                        "space_id": space_id,
+                        "filename": (
+                            str(session["filename"])
+                            if session is not None
+                            else str(document["external_key"])
+                        ),
+                        "version_id": str(version["id"]),
+                        "version_no": int(version["version_no"]),
+                        "processing_state": str(version["processing_state"]),
+                        "publication_state": str(version["publication_state"]),
+                        "parser_revision": (
+                            str(version["parser_revision"])
+                            if version["parser_revision"] is not None
+                            else None
+                        ),
+                        "chunk_count": chunk_count,
+                        "job_id": str(session["job_id"]) if session and session["job_id"] else None,
+                    }
+                )
+            return results
+
+    def list_chunks(self, version_id: str) -> list[dict[str, Any]]:
+        with self.database.connect() as connection:
+            version = connection.execute(
+                "SELECT id FROM document_versions WHERE id = ?", (version_id,)
+            ).fetchone()
+            if version is None:
+                raise ResourceNotFoundError(version_id)
+            rows = connection.execute(
+                "SELECT id, parent_chunk_id, ordinal, kind, token_count, status, "
+                "display_text, locator_json FROM chunks WHERE version_id = ? "
+                "ORDER BY ordinal, id",
+                (version_id,),
+            ).fetchall()
+            return [
+                {
+                    "chunk_id": str(row["id"]),
+                    "document_version_id": version_id,
+                    "parent_chunk_id": (
+                        str(row["parent_chunk_id"]) if row["parent_chunk_id"] else None
+                    ),
+                    "ordinal": int(row["ordinal"]),
+                    "kind": str(row["kind"]),
+                    "token_count": int(row["token_count"]),
+                    "status": str(row["status"]),
+                    "text": str(row["display_text"]),
+                    "locator": json.loads(str(row["locator_json"])),
+                }
+                for row in rows
+            ]
+
     def _idempotency_in(
         self,
         connection: sqlite3.Connection,

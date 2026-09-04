@@ -34,6 +34,21 @@ test("SSE result is released only after verified progress", async () => {
   assert.deepEqual(progress, ["retrieval_started", "verified"]);
 });
 
+test("SSE request is bound to the selected knowledge base", async () => {
+  let requestBody;
+  const fakeFetch = async (_url, options) => {
+    requestBody = JSON.parse(options.body);
+    return sseResponse([
+      'event: progress\ndata: {"stage":"verified"}\n\n',
+      'event: result\ndata: {"answer":"ok","citations":[],"verified":true}\n\n',
+    ]);
+  };
+
+  await askStream("question", () => {}, fakeFetch, "space-products");
+
+  assert.deepEqual(requestBody, { question: "question", space_id: "space-products" });
+});
+
 test("unverified SSE payload cannot expose buffered answer", async () => {
   const fakeFetch = async () =>
     sseResponse([
@@ -77,6 +92,30 @@ test("non-success API response exposes only stable server code", async () => {
   await assert.rejects(() => request("/search", {}, fakeFetch), {
     message: "PERMISSION_DENIED",
   });
+});
+
+test("custom idempotency headers do not remove the JSON content type", async () => {
+  let observed;
+  const fakeFetch = async (_url, options) => {
+    observed = new Headers(options.headers);
+    return new Response("{}", {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+
+  await request(
+    "/spaces/space-1/upload-sessions",
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": "upload-1" },
+      body: JSON.stringify({ filename: "example.md" }),
+    },
+    fakeFetch,
+  );
+
+  assert.equal(observed.get("Content-Type"), "application/json");
+  assert.equal(observed.get("Idempotency-Key"), "upload-1");
 });
 
 test("production requests attach the OIDC bearer token", async () => {

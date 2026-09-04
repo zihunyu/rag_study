@@ -25,6 +25,7 @@ class EvidenceProviderPort(Protocol):
         *,
         subject_scope_tokens: tuple[str, ...] = (),
         clearance_level: int = 0,
+        space_id: str | None = None,
     ) -> EvidencePackage: ...
 
 

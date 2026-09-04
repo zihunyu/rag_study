@@ -60,6 +60,35 @@ class SpaceResponse(StrictModel):
     status: str
 
 
+class CreateSpaceRequest(StrictModel):
+    name: str = Field(min_length=1, max_length=100, pattern=r".*\S.*")
+
+
+class KnowledgeDocumentResponse(StrictModel):
+    document_id: str
+    space_id: str
+    filename: str
+    version_id: str
+    version_no: int
+    processing_state: str
+    publication_state: str
+    parser_revision: str | None
+    chunk_count: int
+    job_id: str | None
+
+
+class DocumentChunkResponse(StrictModel):
+    chunk_id: str
+    document_version_id: str
+    parent_chunk_id: str | None
+    ordinal: int
+    kind: str
+    token_count: int | None
+    status: str
+    text: str
+    locator: dict[str, Any]
+
+
 class DocumentResponse(StrictModel):
     id: str
     tenant_id: str
@@ -180,6 +209,7 @@ class SearchResponse(StrictModel):
 
 class AskRequest(StrictModel):
     question: str = Field(min_length=1, max_length=4000)
+    space_id: str | None = Field(default=None, min_length=1, max_length=255)
 
 
 class CitationResponse(StrictModel):

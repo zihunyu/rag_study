@@ -89,7 +89,13 @@ def test_oidc_invalid_expiry_issuer_or_missing_bearer_is_rejected(tmp_path: Path
         authenticator.authenticate("Bearer expired")
 
 
-def test_api_uses_oidc_principal_for_401_403_and_tenant_fail_closed(tmp_path: Path) -> None:
+def test_api_uses_oidc_principal_for_401_403_and_tenant_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("APP_ENV", "testing")
+    monkeypatch.setenv("RAG_RUNTIME_PROFILE", "local")
+    monkeypatch.setenv("AUTH_MODE", "local_single_user")
+    monkeypatch.setenv("REAL_PROVIDER_CALLS_ENABLED", "false")
     components = build_runtime_components(
         storage_root=tmp_path / "storage",
         database_path=tmp_path / "control.sqlite3",

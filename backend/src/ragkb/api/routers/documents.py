@@ -7,6 +7,7 @@ import time
 from fastapi import APIRouter, Header, Request, Response, status
 
 from ragkb.api.models import (
+    DocumentChunkResponse,
     DocumentQualityResponse,
     DocumentResponse,
     DocumentReviewRequest,
@@ -111,6 +112,22 @@ def build_documents_router(runtime: RuntimeComponents) -> APIRouter:
                 ),
             )
             for item in runtime.repository.get_versions(document_id)
+        ]
+
+    @router.get(
+        "/api/v1/document-versions/{version_id}/chunks",
+        response_model=list[DocumentChunkResponse],
+        tags=["documents", "retrieval"],
+    )
+    async def chunks(version_id: str, request: Request) -> list[DocumentChunkResponse]:
+        principal = _principal(request)
+        _require_role(principal, "reader", "knowledge_maintainer", "admin")
+        _require_local_tenant(runtime, principal)
+        version = runtime.repository.get_version(version_id)
+        _ensure_document_readable(runtime, str(version["document_id"]), principal)
+        return [
+            DocumentChunkResponse.model_validate(item)
+            for item in runtime.repository.list_chunks(version_id)
         ]
 
     @router.get(

@@ -217,6 +217,9 @@ class StaticRetrievalReleaseProvider:
             raise KeyError("retrieval release")
         return self.release
 
+    def set_release(self, release: RetrievalRelease) -> None:
+        self.release = release
+
 
 class LocalRetrievalReleaseProvider:
     revision = "local-dynamic-retrieval-release:v1"
@@ -235,10 +238,14 @@ class LocalRetrievalReleaseProvider:
         self.generation_id = generation_id
         self.permission_revision = permission_revision
         self.security_watermark = security_watermark
+        self._releases: dict[str, RetrievalRelease] = {}
 
     def current_release(self, tenant_id: str, space_id: str) -> RetrievalRelease:
-        if tenant_id != self.tenant_id or space_id != self.space_id:
+        if tenant_id != self.tenant_id:
             raise KeyError("retrieval release")
+        configured = self._releases.get(space_id)
+        if configured is not None:
+            return configured
         return RetrievalRelease(
             tenant_id,
             space_id,
@@ -246,3 +253,8 @@ class LocalRetrievalReleaseProvider:
             self.permission_revision(),
             self.security_watermark(),
         )
+
+    def set_release(self, release: RetrievalRelease) -> None:
+        if release.tenant_id != self.tenant_id:
+            raise KeyError("retrieval release")
+        self._releases[release.space_id] = release
