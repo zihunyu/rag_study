@@ -191,7 +191,8 @@ OpenTelemetry SDK/OTLP。依赖已经进入锁文件，生产镜像无需临时�
 表达签名验收绑定和当前降级原因。
 
 权限过滤在检索与生成前执行，生成后再次复核。索引先以最高密级、空 ACL、非 Serving 状态
-写入；只有审核冻结完整安全投影、Saga 批次对账并发布后才可检索。删除、撤权或索引代际变化
+写入；Saga 对每次 attempt 保存完整 Chunk manifest，失败重试会清空旧批次，只有连续批次、
+精确 Chunk 集合、checksum 和 Vector/Control 双确认全部对账并再次读到 `READY` 后才可发布。删除、撤权或索引代际变化
 会使答案缓存失效。外部真实调用仍需部署负责人显式开启。
 
 贡献流程、架构决策和发布记录分别见 `CONTRIBUTING.md`、`docs/adr` 与 `CHANGELOG.md`。

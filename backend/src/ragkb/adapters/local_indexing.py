@@ -356,7 +356,7 @@ class SQLiteLocalIndexingSink:
         permission_revision: int = 1,
         security_projection: SecurityProjection | None = None,
         cancel_check: Callable[[], bool] | None = None,
-    ) -> None:
+    ) -> bool:
         security = security_projection or SecurityProjection.unapproved(
             permission_revision=permission_revision,
             now=int(time.time()),
@@ -414,6 +414,7 @@ class SQLiteLocalIndexingSink:
             self.control_plane.delete_version_projection(document_id, version_id)
             self._delete_version_index(version_id)
             raise IngestionCancelled("INGEST_CANCELLED")
+        return True
 
     def _delete_version_index(self, version_id: str) -> None:
         with self.database.transaction(immediate=True) as connection:

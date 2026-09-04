@@ -33,7 +33,7 @@ class LocalIndexingSinkPort(Protocol):
         permission_revision: int = 1,
         security_projection: SecurityProjection | None = None,
         cancel_check: Callable[[], bool] | None = None,
-    ) -> None: ...
+    ) -> bool: ...
 
 
 class LocalIngestionWorker:
@@ -111,7 +111,7 @@ class LocalIngestionWorker:
                 if callable(save_chunking):
                     save_chunking(document, chunking)
                 if self.indexing_sink is not None:
-                    self.indexing_sink.index(
+                    index_ready = self.indexing_sink.index(
                         chunking,
                         document_id=str(job.payload["document_id"]),
                         tenant_id=str(job.payload["tenant_id"]),
@@ -123,6 +123,8 @@ class LocalIngestionWorker:
                             ).cancel_requested
                         ),
                     )
+                    if index_ready is not True:
+                        raise RuntimeError("INDEX_SAGA_READY_CONFIRMATION_REQUIRED")
                     mark_index_ready = getattr(self.repository, "mark_index_ready", None)
                     if callable(mark_index_ready):
                         mark_index_ready(version_id)

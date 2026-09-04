@@ -2,6 +2,7 @@
 
 ## 2026-09-04
 
+- Make index Saga retries attempt-aware and require exact manifest reconciliation before READY.
 - Normalize production MySQL aggregate persistence with row-level optimistic concurrency and pooling.
 - Make publication fail closed through durable switching intents and a transactional outbox finalization.
 - Preserve semantic chunk structure/tokenizer context and carry table headers into generation evidence.

@@ -109,6 +109,8 @@ class IndexSagaPort(Protocol):
 
     def mark_ready(self, index_job_id: str) -> None: ...
 
+    def is_ready(self, index_job_id: str) -> bool: ...
+
     def fail(self, index_job_id: str, error_code: str) -> None: ...
 
 
@@ -251,7 +253,7 @@ class ZillizChunkIndexingSink:
         permission_revision: int = 1,
         security_projection: SecurityProjection | None = None,
         cancel_check: Callable[[], bool] | None = None,
-    ) -> None:
+    ) -> bool:
         vectors: list[Sequence[float]] = []
         for start in range(0, len(result.chunks), self.settings.embedding_batch_size):
             if cancel_check is not None and cancel_check():
@@ -401,6 +403,8 @@ class ZillizChunkIndexingSink:
                         control=True,
                     )
                 saga.mark_ready(index_job_id)
+                if not saga.is_ready(index_job_id):
+                    raise RuntimeError("INDEX_SAGA_READY_CONFIRMATION_FAILED")
         except IngestionCancelled:
             if saga is not None and index_job_id is not None:
                 saga.fail(index_job_id, "INDEX_CANCELLED")
@@ -409,6 +413,7 @@ class ZillizChunkIndexingSink:
             if saga is not None and index_job_id is not None:
                 saga.fail(index_job_id, "CONTROL_PROJECTION_WRITE_FAILED")
             raise
+        return True
 
     def _cleanup_cancelled(self, document_id: str, version_id: str) -> None:
         delete_vector = getattr(self.adapter, "delete_version_projection", None)

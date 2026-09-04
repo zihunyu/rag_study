@@ -62,6 +62,11 @@ Gold、独立 Verifier 与正式 tokenizer 未配置前，受保护工作流必�
 
 ## RAG-046～RAG-055 补充整改
 
+- RAG-042：索引 Saga 使用 v3 attempt-aware Job/Batch 账本。`FAILED` 或 manifest 变化会原子
+  增加 attempt 并清除旧批次；重复批次必须拥有相同 Chunk manifest 和 checksum。READY 前验证
+  连续批号、无重复 Chunk、完整 Chunk 集合、聚合 checksum、Vector/Control 双确认及状态转移
+  rowcount；Worker 只在再次读取到 Saga `READY` 后提升版本索引状态。
+
 - RAG-046：Production 聚合由“每租户单行 JSON”迁移为按实体独立行的 v3 表，使用实体级
   revision 做乐观并发；MySQL 连接由有界池复用并在应用关闭时回收。
 - RAG-047：Production 发布先持久化不可见的 `SWITCHING` 意图与 Outbox，再执行外部投影；

@@ -167,6 +167,52 @@ def test_running_cancel_is_acknowledged_before_artifact_or_chunk_write(tmp_path:
     assert not components.storage.exists("artifacts", artifact_key)
 
 
+def test_worker_never_marks_repository_ready_without_sink_ready_confirmation(
+    tmp_path: Path,
+) -> None:
+    components = _components(tmp_path)
+    completed = _enqueue_text(
+        components,
+        filename="not-ready.txt",
+        content=b"index is not reconciled",
+        key="not-ready",
+    )
+
+    class _NotReadySink:
+        def index(self, *args, **kwargs) -> bool:
+            del args, kwargs
+            return False
+
+    class _Repository:
+        def __init__(self) -> None:
+            self.ready_calls = 0
+
+        def __getattr__(self, name: str):
+            return getattr(components.repository, name)
+
+        def mark_index_ready(self, version_id: str) -> None:
+            del version_id
+            self.ready_calls += 1
+
+    repository = _Repository()
+
+    worker = LocalIngestionWorker(
+        components.queue,
+        repository,
+        components.storage,
+        ParserRouter(),
+        "not-ready-worker",
+        chunker=components.chunker,
+        indexing_sink=_NotReadySink(),
+    )
+
+    iteration = run_worker_iteration(worker, error_stream=io.StringIO())
+
+    assert iteration.failed is True
+    assert repository.ready_calls == 0
+    assert components.queue.get(str(completed["job_id"])).state.value == "FAILED_FINAL"  # type: ignore[union-attr]
+
+
 def test_worker_once_returns_nonzero_and_emits_only_safe_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

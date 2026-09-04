@@ -76,7 +76,6 @@ branch = true
 source = ["ragkb"]
 omit = [
   "backend/src/ragkb/adapters/mysql_governance.py",
-  "backend/src/ragkb/adapters/mysql_index_saga.py",
   "backend/src/ragkb/adapters/mysql_lifecycle.py",
   "backend/src/ragkb/adapters/mysql_rag.py",
   "backend/src/ragkb/adapters/mysql_references.py",

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Protocol
 
-MYSQL_MIGRATION_REVISION = "mysql-control-plane:g4-v3"
+MYSQL_MIGRATION_REVISION = "mysql-control-plane:g4-v4"
 MYSQL_MIGRATION_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
     migration_id VARCHAR(128) PRIMARY KEY,
@@ -155,7 +155,7 @@ MYSQL_MIGRATIONS: tuple[tuple[str, str], ...] = (
     ),
 )
 
-MYSQL_G3_MIGRATION_REVISION = "mysql-trusted-qa-lifecycle:g4-v3"
+MYSQL_G3_MIGRATION_REVISION = "mysql-trusted-qa-lifecycle:g4-v4"
 MYSQL_G3_MIGRATIONS: tuple[tuple[str, str], ...] = (
     (
         "101_rag_runs",
@@ -496,6 +496,48 @@ MYSQL_G3_MIGRATIONS: tuple[tuple[str, str], ...] = (
             PRIMARY KEY (tenant_id, operation, idempotency_key),
             KEY idx_publication_outbox_state (state, updated_at),
             KEY idx_publication_outbox_document (tenant_id, document_id, state)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+        """,
+    ),
+    (
+        "122_index_jobs_v3",
+        """
+        CREATE TABLE IF NOT EXISTS index_jobs_v3 (
+            index_job_id VARCHAR(255) PRIMARY KEY,
+            tenant_id VARCHAR(255) NOT NULL,
+            space_id VARCHAR(255) NOT NULL,
+            document_id VARCHAR(255) NOT NULL,
+            document_version_id VARCHAR(255) NOT NULL,
+            generation_id VARCHAR(255) NOT NULL,
+            expected_count BIGINT UNSIGNED NOT NULL,
+            expected_checksum CHAR(64) NOT NULL,
+            expected_manifest_json JSON NOT NULL,
+            state VARCHAR(32) NOT NULL,
+            attempt_number INT UNSIGNED NOT NULL DEFAULT 1,
+            error_code VARCHAR(128),
+            created_at DATETIME(6) NOT NULL,
+            updated_at DATETIME(6) NOT NULL,
+            UNIQUE KEY uq_index_job_v3_generation_version (generation_id, document_version_id),
+            KEY idx_index_job_v3_state (tenant_id, state, updated_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+        """,
+    ),
+    (
+        "123_index_batches_v3",
+        """
+        CREATE TABLE IF NOT EXISTS index_batches_v3 (
+            index_job_id VARCHAR(255) NOT NULL,
+            batch_number INT UNSIGNED NOT NULL,
+            attempt_number INT UNSIGNED NOT NULL,
+            chunk_manifest_json JSON NOT NULL,
+            batch_checksum CHAR(64) NOT NULL,
+            vector_confirmed BOOLEAN NOT NULL DEFAULT FALSE,
+            control_confirmed BOOLEAN NOT NULL DEFAULT FALSE,
+            updated_at DATETIME(6) NOT NULL,
+            PRIMARY KEY (index_job_id, batch_number),
+            KEY idx_index_batch_v3_attempt (index_job_id, attempt_number, batch_number),
+            CONSTRAINT fk_index_batch_v3_job FOREIGN KEY (index_job_id)
+                REFERENCES index_jobs_v3(index_job_id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
         """,
     ),
