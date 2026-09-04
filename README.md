@@ -172,6 +172,10 @@ cd frontend && npm run check
 cd frontend && npx playwright install chromium && npm run test:e2e
 ```
 
+Playwright 默认调用当前环境 `PATH` 中由 `pip install .` 安装的 `ragkb-backend` 和
+`ragkb-worker`，Windows、Linux 与 macOS 使用同一启动器，不依赖 `.venv/Scripts`。如需指定
+其他解释器环境，可通过 `RAGKB_E2E_BACKEND`、`RAGKB_E2E_WORKER` 覆盖可执行文件。
+
 质量门禁覆盖 Ruff、Mypy、分支覆盖率、后端测试、前端组件/API/E2E、安全扫描和冻结 Gold
 Dataset 的 Recall@K、Precision@K、Hit Rate、MRR、nDCG、答案 F1、引用精确率/召回率与
 No-answer Accuracy。阈值位于 `config/rag-quality-thresholds.json`。

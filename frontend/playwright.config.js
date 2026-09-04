@@ -4,13 +4,9 @@ import path from "node:path";
 const storageRoot =
   process.env.RAGKB_E2E_STORAGE_ROOT ||
   path.resolve("../artifacts/frontend-e2e", `${Date.now()}-${process.pid}`, "storage");
-const backendExecutable = process.env.RAGKB_E2E_BACKEND ||
-  (process.env.CI ? "ragkb-backend" : path.resolve("../.venv/Scripts/ragkb-backend.exe"));
-const workerExecutable = process.env.RAGKB_E2E_WORKER ||
-  (process.env.CI ? "ragkb-worker" : path.resolve("../.venv/Scripts/ragkb-worker.exe"));
-const backendCommand = process.env.CI
-  ? "bash -o pipefail -c 'mkdir -p ../artifacts/frontend-e2e && ragkb-backend --host 127.0.0.1 --port 8000 2>&1 | tee ../artifacts/frontend-e2e/backend.log'"
-  : `"${backendExecutable}" --host 127.0.0.1 --port 8000`;
+const backendExecutable = process.env.RAGKB_E2E_BACKEND || "ragkb-backend";
+const workerExecutable = process.env.RAGKB_E2E_WORKER || "ragkb-worker";
+const backendCommand = "node ./scripts/run-e2e-backend.mjs";
 Object.assign(process.env, {
   APP_ENV: "testing",
   RAG_RUNTIME_PROFILE: "local",

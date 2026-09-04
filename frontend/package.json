@@ -7,9 +7,10 @@
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "test:api": "node --test src/api.test.mjs src/fileHash.test.mjs",
+    "test:config": "node --test src/playwrightConfig.test.mjs",
     "test:unit": "vitest run src/App.test.js",
     "test:e2e": "playwright test",
-    "test": "npm run test:api && npm run test:unit",
+    "test": "npm run test:api && npm run test:config && npm run test:unit",
     "check": "npm run test && vite build"
   },
   "dependencies": {
