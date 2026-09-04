@@ -209,7 +209,7 @@ def test_llm_allow_http_false_accepts_https(tmp_path: Path) -> None:
     )
 
 
-def test_production_rejects_http_and_local_runtime_at_g0(tmp_path: Path) -> None:
+def test_production_accepts_explicit_http_but_still_rejects_local_runtime(tmp_path: Path) -> None:
     env_file = tmp_path / ".env"
     _write(
         env_file,
@@ -226,11 +226,48 @@ def test_production_rejects_http_and_local_runtime_at_g0(tmp_path: Path) -> None
         load_env(Path(__file__).resolve().parents[2], env_path=env_file, environ={}), "G0"
     )
 
-    assert {
-        "RAG_RUNTIME_PROFILE:PRODUCTION_PROFILE_REQUIRED",
-        "LLM_ALLOW_HTTP:PRODUCTION_HTTP_OVERRIDE_FORBIDDEN",
-        "LLM_BASE_URL:PRODUCTION_HTTPS_REQUIRED",
-    }.issubset(set(report["gate_blockers"]))
+    blockers = set(report["gate_blockers"])
+    assert "RAG_RUNTIME_PROFILE:PRODUCTION_PROFILE_REQUIRED" in blockers
+    assert "LLM_ALLOW_HTTP:PRODUCTION_HTTP_OVERRIDE_FORBIDDEN" not in blockers
+    assert "LLM_BASE_URL:PRODUCTION_HTTPS_REQUIRED" not in blockers
+    assert "LLM_BASE_URL:SENSITIVE_TRANSPORT_ENCRYPTION_REQUIRED" not in blockers
+
+
+def test_production_reports_missing_or_mismatched_tokenizer_artifact(tmp_path: Path) -> None:
+    missing_env = tmp_path / "missing.env"
+    _write(
+        missing_env,
+        {
+            "APP_ENV": "production",
+            "TOKENIZER_ARTIFACT_PATH": str(tmp_path / "missing-tokenizer.json"),
+            "TOKENIZER_ARTIFACT_SHA256": "0" * 64,
+            "TOKENIZER_ID": "provider-model-v1",
+        },
+    )
+    missing_report = build_env_report(
+        load_env(Path(__file__).resolve().parents[2], env_path=missing_env, environ={}), "G4"
+    )
+    assert "TOKENIZER_ARTIFACT_PATH:TOKENIZER_ARTIFACT_MISSING" in missing_report["gate_blockers"]
+
+    tokenizer = tmp_path / "tokenizer.json"
+    tokenizer.write_text("{}", encoding="utf-8")
+    mismatch_env = tmp_path / "mismatch.env"
+    _write(
+        mismatch_env,
+        {
+            "APP_ENV": "production",
+            "TOKENIZER_ARTIFACT_PATH": str(tokenizer),
+            "TOKENIZER_ARTIFACT_SHA256": "0" * 64,
+            "TOKENIZER_ID": "provider-model-v1",
+        },
+    )
+    mismatch_report = build_env_report(
+        load_env(Path(__file__).resolve().parents[2], env_path=mismatch_env, environ={}), "G4"
+    )
+    assert (
+        "TOKENIZER_ARTIFACT_SHA256:TOKENIZER_ARTIFACT_SHA256_MISMATCH"
+        in mismatch_report["gate_blockers"]
+    )
 
 
 def test_asr_disabled_is_nonblocking_and_reenabled_scope_requires_three_keys(

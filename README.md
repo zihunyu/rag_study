@@ -78,7 +78,7 @@ OIDC_TENANT_ID=<Token tenant_id 必须匹配的部署租户>
 OIDC_DEFAULT_SPACE_ID=<默认知识空间>
 RETRIEVAL_ACTIVE_GENERATION_ID=<已对账的不可变代际>
 VECTOR_BACKEND=zilliz                 # 或 milvus
-LLM_ALLOW_HTTP=false
+LLM_ALLOW_HTTP=<HTTP 地址填 true；HTTPS 地址填 false>
 VERIFIER_BASE_URL=<独立核验模型地址>
 VERIFIER_API_KEY=<受保护 Secret>
 VERIFIER_MODEL=<不得与 LLM_MODEL 相同>
@@ -87,8 +87,9 @@ TOKENIZER_ARTIFACT_SHA256=<artifact SHA-256>
 TOKENIZER_ID=<正式 tokenizer revision>
 ```
 
-同时配置模型、向量库、身份、数据区域和密钥。`production + http://` 会在 G0 配置门禁中直接
-失败。Production 启动会执行完整 G4 配置门禁，并要求 OIDC Discovery/JWKS、MySQL 检索控制面、
+同时配置模型、向量库、身份、数据区域和密钥。LLM 地址同时支持 HTTP 和 HTTPS；使用 HTTP 时
+必须显式设置 `LLM_ALLOW_HTTP=true`，表示部署方接受该传输方式。Production 启动会执行完整
+G4 配置门禁，并要求 OIDC Discovery/JWKS、MySQL 检索控制面、
 Redis 队列/缓存、真实 MinerU OCR Parser 和外部生命周期写入均可配置。由于原始文件继续保存
 在本地磁盘，Production 强制 `single_instance`，不得宣称多实例或高可用。密钥只能放在
 `config/.env`、部署 Secret Store 或进程环境中，禁止写入日志和仓库。

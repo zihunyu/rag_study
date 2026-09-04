@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from urllib.parse import urlparse
 
 from ragkb.config.env import (
@@ -79,10 +80,6 @@ def conditional_issues(result: EnvLoadResult) -> tuple[EnvIssue, ...]:
             )
         if settings.vector_backend == "local":
             issues.append(EnvIssue("VECTOR_BACKEND", "PRODUCTION_VECTOR_BACKEND_REQUIRED", "G0"))
-        if settings.llm_allow_http:
-            issues.append(EnvIssue("LLM_ALLOW_HTTP", "PRODUCTION_HTTP_OVERRIDE_FORBIDDEN", "G0"))
-        if urlparse(settings.llm_base_url).scheme.casefold() == "http":
-            issues.append(EnvIssue("LLM_BASE_URL", "PRODUCTION_HTTPS_REQUIRED", "G0"))
     if settings.queue_heartbeat_seconds >= settings.queue_lease_seconds:
         issues.append(EnvIssue("QUEUE_HEARTBEAT_SECONDS", "QUEUE_HEARTBEAT_NOT_BELOW_LEASE", "G1"))
     configured_vector_dimension = (
@@ -124,6 +121,21 @@ def conditional_issues(result: EnvLoadResult) -> tuple[EnvIssue, ...]:
     if settings.app_env == "production":
         for key in ("TOKENIZER_ARTIFACT_PATH", "TOKENIZER_ARTIFACT_SHA256", "TOKENIZER_ID"):
             require(key, "G4")
+        tokenizer_path = settings.tokenizer_artifact_path
+        if not tokenizer_path.is_absolute():
+            tokenizer_path = result.repository_root / tokenizer_path
+        if not tokenizer_path.is_file():
+            issues.append(EnvIssue("TOKENIZER_ARTIFACT_PATH", "TOKENIZER_ARTIFACT_MISSING", "G4"))
+        elif settings.tokenizer_artifact_sha256:
+            digest = hashlib.sha256(tokenizer_path.read_bytes()).hexdigest()
+            if digest != settings.tokenizer_artifact_sha256.casefold():
+                issues.append(
+                    EnvIssue(
+                        "TOKENIZER_ARTIFACT_SHA256",
+                        "TOKENIZER_ARTIFACT_SHA256_MISMATCH",
+                        "G4",
+                    )
+                )
     if settings.retrieval_rerank_top_k > (
         settings.retrieval_bm25_top_k + settings.retrieval_dense_top_k
     ):
