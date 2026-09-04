@@ -20,7 +20,6 @@ CONFIG_HINTS = {
     "VERIFIER_BASE_URL": "填写独立核验模型的 OpenAI-compatible Base URL",
     "VERIFIER_API_KEY": "填写核验模型服务商发放的真实 API Key",
     "VERIFIER_MODEL": "填写与 LLM_MODEL 不同的核验模型 ID",
-    "PROVIDER_PRICING": "把六项 *_COST_PER_MILLION_CNY 填为服务商真实人民币单价",
     "OIDC_ISSUER_URL": "填写身份平台 Discovery 文档中的 issuer URL",
     "OIDC_AUDIENCE": "填写 Access Token 中预期的 aud 值",
     "OIDC_CLIENT_ID": "填写身份平台为 Backend/API 注册的 Client ID",

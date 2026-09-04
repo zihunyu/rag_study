@@ -248,27 +248,6 @@ def conditional_issues(result: EnvLoadResult) -> tuple[EnvIssue, ...]:
     if settings.app_env == "production":
         for key in ("VERIFIER_BASE_URL", "VERIFIER_API_KEY", "VERIFIER_MODEL"):
             require(key, "G4")
-        for key in (
-            "EMBEDDING_INPUT_COST_PER_MILLION_CNY",
-            "RERANKER_INPUT_COST_PER_MILLION_CNY",
-            "LLM_INPUT_COST_PER_MILLION_CNY",
-            "LLM_OUTPUT_COST_PER_MILLION_CNY",
-            "VERIFIER_INPUT_COST_PER_MILLION_CNY",
-            "VERIFIER_OUTPUT_COST_PER_MILLION_CNY",
-        ):
-            require(key, "G4")
-        if (
-            min(
-                settings.embedding_input_cost_per_million_cny,
-                settings.reranker_input_cost_per_million_cny,
-                settings.llm_input_cost_per_million_cny,
-                settings.llm_output_cost_per_million_cny,
-                settings.verifier_input_cost_per_million_cny,
-                settings.verifier_output_cost_per_million_cny,
-            )
-            <= 0
-        ):
-            issues.append(EnvIssue("PROVIDER_PRICING", "REAL_COST_RATES_REQUIRED", "G4"))
         if settings.verifier_model and settings.verifier_model == settings.llm_model:
             issues.append(EnvIssue("VERIFIER_MODEL", "INDEPENDENT_VERIFIER_MODEL_REQUIRED", "G4"))
     require("APP_SECRET_KEY", "G3")

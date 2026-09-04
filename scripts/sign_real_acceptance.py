@@ -39,6 +39,7 @@ def validate_signable_report(
         "expected_answers_passed",
         "cases_passed",
         "prompt_injection_passed",
+        "cost_calculated",
     )
     if any(report.get(field) is not True for field in required_true):
         raise ValueError("QUALITY_REPORT_REQUIRED_GATE_NOT_PASSED")

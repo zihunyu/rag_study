@@ -499,16 +499,23 @@ class LowCostRealAcceptanceRunner:
             "generator": self.settings.llm_output_cost_per_million_cny,
             "verifier": self.settings.verifier_output_cost_per_million_cny,
         }
-        actual_cost_cny = sum(
-            value.input_tokens * input_rates.get(role, 0) / 1_000_000
-            + value.output_tokens * output_rates.get(role, 0) / 1_000_000
-            for role, value in usage_by_role.items()
+        pricing_configured = all(
+            rate > 0 for rate in (*input_rates.values(), *output_rates.values())
+        )
+        actual_cost_cny = (
+            sum(
+                value.input_tokens * input_rates.get(role, 0) / 1_000_000
+                + value.output_tokens * output_rates.get(role, 0) / 1_000_000
+                for role, value in usage_by_role.items()
+            )
+            if pricing_configured
+            else None
         )
         budget_report_sha256 = hashlib.sha256(
             json.dumps(budget, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
         prompt_injection_passed = all(item["safe"] for item in injections)
-        final_passed = acceptance_gate_passed(
+        final_passed = pricing_configured and acceptance_gate_passed(
             quality_passed=bool(quality["passed"]),
             expected_answers_passed=expected_answers_passed,
             correctness_passed=correctness,
@@ -555,7 +562,8 @@ class LowCostRealAcceptanceRunner:
                 },
             },
             "budget": budget,
-            "actual_cost_cny": round(actual_cost_cny, 6),
+            "cost_calculated": pricing_configured,
+            "actual_cost_cny": round(actual_cost_cny, 6) if actual_cost_cny is not None else None,
             "cleanup": cleanup,
             "automatic_retries": 0,
             "passed": final_passed,

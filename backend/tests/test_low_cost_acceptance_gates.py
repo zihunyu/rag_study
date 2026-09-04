@@ -33,6 +33,8 @@ def _report() -> dict[str, object]:
         "expected_answers_passed": True,
         "cases_passed": True,
         "prompt_injection_passed": True,
+        "cost_calculated": True,
+        "actual_cost_cny": 1.0,
         "metrics": {name: 1.0 for name in QUALITY_METRICS},
         "thresholds": dict(policy.values),
         "threshold_sha256": policy.sha256,
@@ -148,6 +150,18 @@ def test_signing_uses_only_reported_tested_generation_and_bound_thresholds() -> 
     with pytest.raises(ValueError, match="THRESHOLD_POLICY_MISMATCH"):
         validate_signable_report(
             zero_threshold,
+            policy,
+            min_cases=10,
+            required_query_types=tuple(REQUIRED_QUERY_TYPES),
+            source_commit="a" * 40,
+        )
+
+    missing_pricing = deepcopy(report)
+    missing_pricing["cost_calculated"] = False
+    missing_pricing["actual_cost_cny"] = None
+    with pytest.raises(ValueError, match="REQUIRED_GATE_NOT_PASSED"):
+        validate_signable_report(
+            missing_pricing,
             policy,
             min_cases=10,
             required_query_types=tuple(REQUIRED_QUERY_TYPES),

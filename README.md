@@ -237,6 +237,9 @@ python scripts/compile_requirements.py
 `scripts/compile_requirements.py` 会校验 pip-tools 版本，先生成生产锁，再以生产锁为约束生成开发
 锁，避免两个环境使用不同的运行库版本。
 
+六项 `*_COST_PER_MILLION_CNY` 不是服务启动条件。保持 `0` 时上传、解析、检索和问答仍正常运行，
+报告记录 `cost_calculated=false` 且不输出虚假的零成本；只有签署真实验收报告时才必须填写价格。
+
 ## 可观测性与安全边界
 
 搜索和问答记录 `rag.ask`、evidence build、BM25、Dense、Embedding、fusion、rerank、LLM 与
