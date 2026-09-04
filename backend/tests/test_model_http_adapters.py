@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import httpx
@@ -170,6 +171,49 @@ def test_independent_verifier_requires_one_supported_verdict_per_claim(tmp_path:
 
     assert result.supported is True
     assert result.verdicts[0].reason_code == "ENTAILED"
+    verifier_payload = transport.calls[0]["payload"]
+    verifier_input = json.loads(verifier_payload["messages"][1]["content"])
+    assert verifier_input["answer"] == draft.text
+    assert verifier_input["answer_clauses"] == ["保修期为三年"]
+    assert verifier_input["answer_claims_covered"] is True
+
+
+def test_independent_verifier_rejects_uncovered_answer_before_provider_call(tmp_path: Path) -> None:
+    settings, _ = _settings(tmp_path)
+    settings = settings.model_copy(
+        update={
+            "verifier_base_url": "https://verifier.example/v1",
+            "verifier_model": "independent-verifier",
+        }
+    )
+    transport = _MockTransport({})
+    verifier = OpenAICompatibleClaimVerifier(settings, transport=transport)
+    evidence = Evidence(
+        "E1",
+        "chunk",
+        "document",
+        "version",
+        "产品提供标准保修服务。",
+        {"page": 1},
+        0,
+        0,
+        1,
+        1,
+        True,
+        True,
+    )
+    draft = DraftAnswer(
+        "产品保修期为五年。",
+        ("E1",),
+        (AtomicClaim("产品提供标准保修服务。", ("E1",)),),
+    )
+
+    result = verifier.verify("保修期多久？", draft, (evidence,))
+
+    assert result.supported is False
+    assert result.answer_claims_covered is False
+    assert result.verdicts[0].reason_code == "ANSWER_CLAIM_UNCOVERED"
+    assert transport.calls == []
 
 
 def test_pooled_transport_retries_429_and_records_metrics(tmp_path: Path) -> None:

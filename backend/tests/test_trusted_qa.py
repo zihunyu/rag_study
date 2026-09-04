@@ -11,7 +11,13 @@ from ragkb.adapters.rag_stubs import (
 )
 from ragkb.application.qa import TrustedQAService
 from ragkb.domain.errors import RetrievalFailClosed
-from ragkb.domain.rag import AnswerStatus, Evidence, QuestionDisposition
+from ragkb.domain.rag import (
+    AnswerStatus,
+    AtomicClaim,
+    DraftAnswer,
+    Evidence,
+    QuestionDisposition,
+)
 from ragkb.engineering_security.references import HMACReferenceSigner, ReferenceTokenError
 from ragkb.infrastructure.rag_repository import SQLiteRAGRunRepository
 from ragkb.infrastructure.reference_repository import SQLiteReferenceStore
@@ -92,6 +98,60 @@ def test_wrong_numeric_claim_is_not_marked_verified(tmp_path: Path) -> None:
     assert result.verified is False
     assert result.answer is None
     assert "EXACT_FACT_NOT_IN_EVIDENCE" in result.warnings
+
+
+def test_unclaimed_hallucination_in_answer_body_is_rejected(tmp_path: Path) -> None:
+    class _MismatchedGenerator(DeterministicBufferedGenerator):
+        revision = "mismatched-answer-claims:test"
+
+        def generate(self, question: str, evidence: tuple[Evidence, ...]) -> DraftAnswer:
+            del question, evidence
+            return DraftAnswer(
+                "产品保修期为五年。",
+                ("E1",),
+                (AtomicClaim("产品提供标准保修服务。", ("E1",)),),
+            )
+
+    service, _, _ = _service(
+        tmp_path,
+        SyntheticEvidenceProvider((_evidence(text="产品提供标准保修服务。"),)),
+        generator=_MismatchedGenerator(),
+    )
+
+    result = service.ask("保修期多久？", "tenant-1", "user-1")
+
+    assert result.status is AnswerStatus.INSUFFICIENT_EVIDENCE
+    assert result.answer is None
+    assert result.verified is False
+    assert result.warnings == ("ANSWER_CLAIM_UNCOVERED",)
+
+
+def test_returned_answer_is_rebuilt_only_from_verified_claims(tmp_path: Path) -> None:
+    class _MultiClaimGenerator(DeterministicBufferedGenerator):
+        revision = "multi-claim-answer:test"
+
+        def generate(self, question: str, evidence: tuple[Evidence, ...]) -> DraftAnswer:
+            del question, evidence
+            return DraftAnswer(
+                "保修期为三年。另外，不需要登记。",
+                ("E1",),
+                (
+                    AtomicClaim("保修期为三年。", ("E1",)),
+                    AtomicClaim("不需要登记。", ("E1",)),
+                ),
+            )
+
+    service, _, _ = _service(
+        tmp_path,
+        SyntheticEvidenceProvider((_evidence(text="保修期为三年，不需要登记。"),)),
+        generator=_MultiClaimGenerator(),
+    )
+
+    result = service.ask("保修政策？", "tenant-1", "user-1")
+
+    assert result.verified is True
+    assert result.answer == "保修期为三年。\n不需要登记。"
+    assert "另外" not in result.answer
 
 
 def test_unapproved_url_and_credential_request_are_not_marked_verified(

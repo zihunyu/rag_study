@@ -21,12 +21,12 @@ from ragkb.contracts.rag import (
     RAGRunRepositoryPort,
     VerifiedAnswerCachePort,
 )
+from ragkb.domain.claim_coverage import render_verified_claims, verify_answer_claim_coverage
 from ragkb.domain.errors import InvalidProviderResponse, RetrievalFailClosed, TransientProviderError
 from ragkb.domain.ids import new_uuid7
 from ragkb.domain.rag import (
     AnswerStatus,
     AskResult,
-    AtomicClaim,
     Citation,
     ClaimVerdict,
     DraftAnswer,
@@ -91,7 +91,7 @@ def _normalized_fact_text(value: str) -> str:
 class DeterministicClaimVerifier:
     """Fail-closed structural checks that run before any answer is marked verified."""
 
-    revision = "deterministic-claim-verifier:v1"
+    revision = "deterministic-claim-verifier:answer-coverage:v2"
 
     def __init__(self, allowed_output_domains: tuple[str, ...] = ()) -> None:
         self.allowed_output_domains = frozenset(
@@ -106,7 +106,53 @@ class DeterministicClaimVerifier:
     ) -> VerificationResult:
         del question
         available = {item.evidence_id: item for item in evidence}
-        claims = draft.claims or (AtomicClaim(draft.text, draft.citation_ids),)
+        claims = draft.claims
+        if not claims:
+            return VerificationResult(
+                (
+                    ClaimVerdict(
+                        draft.text,
+                        (),
+                        "INSUFFICIENT",
+                        "ANSWER_CLAIMS_REQUIRED",
+                    ),
+                ),
+                self.revision,
+                answer_claims_covered=False,
+            )
+        coverage = verify_answer_claim_coverage(draft.text, claims)
+        if not coverage.complete:
+            return VerificationResult(
+                tuple(
+                    ClaimVerdict(
+                        clause,
+                        (),
+                        "INSUFFICIENT",
+                        "ANSWER_CLAIM_UNCOVERED",
+                    )
+                    for clause in coverage.uncovered_clauses
+                ),
+                self.revision,
+                answer_claims_covered=False,
+            )
+        declared_citations = set(draft.citation_ids)
+        if any(
+            evidence_id not in declared_citations
+            for claim in claims
+            for evidence_id in claim.evidence_ids
+        ):
+            return VerificationResult(
+                (
+                    ClaimVerdict(
+                        draft.text,
+                        (),
+                        "INSUFFICIENT",
+                        "CLAIM_CITATION_NOT_DECLARED",
+                    ),
+                ),
+                self.revision,
+                citation_ids_valid=False,
+            )
         verdicts: list[ClaimVerdict] = []
         for claim in claims:
             cited = [available.get(evidence_id) for evidence_id in claim.evidence_ids]
@@ -155,7 +201,12 @@ class DeterministicClaimVerifier:
             else:
                 verdict, reason = "SUPPORTED", "STRUCTURE_AND_EXACT_FACTS_SUPPORTED"
             verdicts.append(ClaimVerdict(claim.text, claim.evidence_ids, verdict, reason))
-        return VerificationResult(tuple(verdicts), self.revision)
+        return VerificationResult(
+            tuple(verdicts),
+            self.revision,
+            answer_claims_covered=True,
+            evidence_support_verified=all(item.verdict == "SUPPORTED" for item in verdicts),
+        )
 
 
 class CompositeClaimVerifier:
@@ -171,9 +222,29 @@ class CompositeClaimVerifier:
     ) -> VerificationResult:
         structural = self.structural.verify(question, draft, evidence)
         if not structural.supported:
-            return VerificationResult(structural.verdicts, self.revision)
+            return VerificationResult(
+                structural.verdicts,
+                self.revision,
+                citation_ids_valid=structural.citation_ids_valid,
+                answer_claims_covered=structural.answer_claims_covered,
+                evidence_support_verified=structural.evidence_support_verified,
+                conflict_checked=structural.conflict_checked,
+                policy_checked=structural.policy_checked,
+            )
         semantic = self.semantic.verify(question, draft, evidence)
-        return VerificationResult(semantic.verdicts, self.revision)
+        return VerificationResult(
+            semantic.verdicts,
+            self.revision,
+            citation_ids_valid=structural.citation_ids_valid and semantic.citation_ids_valid,
+            answer_claims_covered=(
+                structural.answer_claims_covered and semantic.answer_claims_covered
+            ),
+            evidence_support_verified=(
+                structural.evidence_support_verified and semantic.evidence_support_verified
+            ),
+            conflict_checked=structural.conflict_checked and semantic.conflict_checked,
+            policy_checked=structural.policy_checked and semantic.policy_checked,
+        )
 
 
 class TrustedQAService:
@@ -314,6 +385,7 @@ class TrustedQAService:
         if (
             not draft.text.strip()
             or not draft.citation_ids
+            or not draft.claims
             or len(set(draft.citation_ids)) != len(draft.citation_ids)
             or any(evidence_id not in available for evidence_id in draft.citation_ids)
         ):
@@ -322,7 +394,22 @@ class TrustedQAService:
                 AnswerStatus.SYSTEM_ERROR,
                 warnings=("CITATION_VALIDATION_FAILED",),
             )
-        cited = tuple(available[evidence_id] for evidence_id in draft.citation_ids)
+        claim_citation_ids = tuple(
+            dict.fromkeys(
+                evidence_id for claim in draft.claims for evidence_id in claim.evidence_ids
+            )
+        )
+        if (
+            not claim_citation_ids
+            or any(evidence_id not in available for evidence_id in claim_citation_ids)
+            or not set(claim_citation_ids).issubset(draft.citation_ids)
+        ):
+            return self._save(
+                package,
+                AnswerStatus.SYSTEM_ERROR,
+                warnings=("CLAIM_CITATION_VALIDATION_FAILED",),
+            )
+        cited = tuple(available[evidence_id] for evidence_id in claim_citation_ids)
         if not self._permission_recheck(package, subject_scope_tokens):
             return self._save(
                 package,
@@ -344,6 +431,17 @@ class TrustedQAService:
                 AnswerStatus.INSUFFICIENT_EVIDENCE,
                 warnings=tuple(item.reason_code for item in verification.verdicts),
             )
+        verified_draft = DraftAnswer(
+            render_verified_claims(draft.claims),
+            claim_citation_ids,
+            draft.claims,
+        )
+        if not verified_draft.text:
+            return self._save(
+                package,
+                AnswerStatus.INSUFFICIENT_EVIDENCE,
+                warnings=("VERIFIED_CLAIMS_EMPTY",),
+            )
         with self.tracer.span("rag.ask.citation.verify"):
             citations = tuple(
                 Citation(
@@ -360,11 +458,11 @@ class TrustedQAService:
                 for evidence in cited
             )
         if self.cache is not None:
-            self.cache.put(package, draft)
+            self.cache.put(package, verified_draft)
         return self._save(
             package,
             AnswerStatus.ANSWERED,
-            answer=draft.text,
+            answer=verified_draft.text,
             citations=citations,
             verified=True,
         )

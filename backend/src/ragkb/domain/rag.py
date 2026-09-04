@@ -104,10 +104,23 @@ class ClaimVerdict:
 class VerificationResult:
     verdicts: tuple[ClaimVerdict, ...]
     revision: str
+    citation_ids_valid: bool = True
+    answer_claims_covered: bool = True
+    evidence_support_verified: bool = True
+    conflict_checked: bool = True
+    policy_checked: bool = True
 
     @property
     def supported(self) -> bool:
-        return bool(self.verdicts) and all(item.verdict == "SUPPORTED" for item in self.verdicts)
+        return bool(
+            self.verdicts
+            and self.citation_ids_valid
+            and self.answer_claims_covered
+            and self.evidence_support_verified
+            and self.conflict_checked
+            and self.policy_checked
+            and all(item.verdict == "SUPPORTED" for item in self.verdicts)
+        )
 
 
 @dataclass(frozen=True)

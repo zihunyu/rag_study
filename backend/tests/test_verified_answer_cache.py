@@ -6,7 +6,7 @@ from pathlib import Path
 from pydantic import SecretStr
 from ragkb.adapters.rag_stubs import StaticFinalPermission, SyntheticEvidenceProvider
 from ragkb.application.qa import InMemoryVerifiedAnswerCache, TrustedQAService
-from ragkb.domain.rag import DraftAnswer, Evidence
+from ragkb.domain.rag import AtomicClaim, DraftAnswer, Evidence
 from ragkb.engineering_security.references import HMACReferenceSigner
 from ragkb.infrastructure.rag_repository import SQLiteRAGRunRepository
 from ragkb.infrastructure.reference_repository import SQLiteReferenceStore
@@ -23,7 +23,7 @@ class _CountingGenerator:
         del question
         self.calls += 1
         answer = "五年" if "五年" in evidence[0].text else "三年"
-        return DraftAnswer(answer, ("E1",))
+        return DraftAnswer(answer, ("E1",), (AtomicClaim(answer, ("E1",)),))
 
 
 def _evidence() -> Evidence:

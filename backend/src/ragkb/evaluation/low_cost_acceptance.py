@@ -36,6 +36,7 @@ from ragkb.application.qa import CompositeClaimVerifier, DeterministicClaimVerif
 from ragkb.application.search import HybridSearchService
 from ragkb.config import EnvSettings
 from ragkb.document_processing.mineru_parser import MinerUProductionParser
+from ragkb.domain.claim_coverage import render_verified_claims
 from ragkb.domain.rag import Evidence
 from ragkb.domain.retrieval import AuthorizedChunk, SearchContext
 from ragkb.evaluation.rag_quality import evaluate_quality
@@ -280,7 +281,7 @@ class LowCostRealAcceptanceRunner:
                         str(case["question"]), draft, evidence
                     )
                     verified = verification.supported
-                    answer = draft.text if verified else ""
+                    answer = render_verified_claims(draft.claims) if verified else ""
                     citations = [
                         next(item.chunk_id for item in evidence if item.evidence_id == evidence_id)
                         for evidence_id in draft.citation_ids

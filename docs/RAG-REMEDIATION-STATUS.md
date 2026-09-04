@@ -66,6 +66,9 @@ Gold、独立 Verifier 与正式 tokenizer 未配置前，受保护工作流必�
   增加 attempt 并清除旧批次；重复批次必须拥有相同 Chunk manifest 和 checksum。READY 前验证
   连续批号、无重复 Chunk、完整 Chunk 集合、聚合 checksum、Vector/Control 双确认及状态转移
   rowcount；Worker 只在再次读取到 Saga `READY` 后提升版本索引状态。
+- RAG-043：答案正文在 Provider Verifier 前确定性拆成原子子句，每个实质子句必须由带证据的
+  Claim 完整覆盖；独立 Verifier 同时接收完整 answer 与覆盖清单。最终答案不再直接返回模型
+  原始正文，而是仅从全部验证通过的 Claims 程序化重建；覆盖失败不会调用 Provider 或写入缓存。
 
 - RAG-046：Production 聚合由“每租户单行 JSON”迁移为按实体独立行的 v3 表，使用实体级
   revision 做乐观并发；MySQL 连接由有界池复用并在应用关闭时回收。

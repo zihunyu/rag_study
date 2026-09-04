@@ -104,8 +104,9 @@ Production 发布使用两阶段 fail-closed 协议：先持久化不可见的 `
 - `local` 使用 SQLite 持久 BM25 + Dense，仅供开发和离线验收。
 
 Embedding、Reranker、Generator 和 Verifier 分别使用独立连接池、并发门、熔断和整体 deadline。
-生成 Prompt 以 JSON 传入不可信 Evidence，不使用可由正文闭合的 XML。答案必须输出原子 Claim，
-先通过数字/日期/URL/凭证请求规则，再通过独立 Verifier 的证据蕴含检查。
+生成 Prompt 以 JSON 传入不可信 Evidence，不使用可由正文闭合的 XML。答案必须输出原子 Claim；
+系统会独立拆分完整答案并要求每个实质子句被带引用的 Claim 覆盖，再执行数字/日期/URL/凭证
+规则和独立 Verifier。最终返回文本只由验证通过的 Claims 程序化重建，不直接释放模型原始正文。
 
 首次部署先执行显式批准的基础设施操作，再发布检索 Release：
 
