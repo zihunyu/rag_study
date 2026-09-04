@@ -69,7 +69,7 @@ def _answer_tokens(text: str) -> list[str]:
     return re.findall(r"[\u3400-\u9fff]|[a-z0-9]+", text.casefold())
 
 
-def _token_f1(expected: str, actual: str) -> float:
+def answer_token_f1(expected: str, actual: str) -> float:
     expected_tokens = _answer_tokens(expected)
     actual_tokens = _answer_tokens(actual)
     if not expected_tokens or not actual_tokens:
@@ -96,7 +96,7 @@ def generation_metrics(cases: Sequence[Mapping[str, Any]]) -> GenerationMetrics:
         expected_citations = set(map(str, case.get("relevant_chunk_ids", ())))
         actual_citations = set(map(str, case.get("actual_citation_chunk_ids", ())))
         if answerable:
-            answer_scores.append(_token_f1(expected_answer, actual_answer))
+            answer_scores.append(answer_token_f1(expected_answer, actual_answer))
             citation_precision.append(
                 len(expected_citations & actual_citations) / len(actual_citations)
                 if actual_citations

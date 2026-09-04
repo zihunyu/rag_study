@@ -69,6 +69,10 @@ Gold、独立 Verifier 与正式 tokenizer 未配置前，受保护工作流必�
 - RAG-043：答案正文在 Provider Verifier 前确定性拆成原子子句，每个实质子句必须由带证据的
   Claim 完整覆盖；独立 Verifier 同时接收完整 answer 与覆盖清单。最终答案不再直接返回模型
   原始正文，而是仅从全部验证通过的 Claims 程序化重建；覆盖失败不会调用 Provider 或写入缓存。
+- RAG-044：低成本真实验收读取并哈希绑定 `config/rag-quality-thresholds.json` 的全部非零阈值，
+  全局质量、逐条 Gold 答案 F1、权限/拒答、Prompt Injection 和清理均为最终硬门禁。报告记录
+  1/5/20 实际 generation 和每条用例使用的 generation；签名器删除所有可伪造的 Provider、
+  revision、dataset 和 generation CLI 参数，只能签署报告中实际受测的 20-Chunk generation。
 
 - RAG-046：Production 聚合由“每租户单行 JSON”迁移为按实体独立行的 v3 表，使用实体级
   revision 做乐观并发；MySQL 连接由有界池复用并在应用关闭时回收。

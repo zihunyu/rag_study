@@ -82,7 +82,9 @@ class RealAcceptanceEvidence:
         ).hexdigest()
         now = int(time.time()) if now_epoch is None else now_epoch
         metrics_pass = bool(self.thresholds) and all(
-            key in self.metrics and float(self.metrics[key]) >= float(minimum)
+            0 < float(minimum) <= 1
+            and key in self.metrics
+            and float(self.metrics[key]) >= float(minimum)
             for key, minimum in self.thresholds.items()
         )
         return bool(

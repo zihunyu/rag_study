@@ -129,16 +129,6 @@ jobs:
         run: >-
           python scripts/sign_real_acceptance.py --approved
           --quality-report artifacts/acceptance/low-cost-real.json
-          --provider real-low-cost-rag
-          --embedding-revision openai-compatible-embedding:g2-v1
-          --reranker-revision openai-compatible-reranker:g2-v1
-          --model-revision "openai-compatible-generation:${LLM_MODEL}:grounded-qa:v1"
-          --verifier-revision "claim-verifier-chain:deterministic-claim-verifier:v1+openai-compatible-claim-verifier:${VERIFIER_MODEL}:v1"
-          --tokenizer-revision "${TOKENIZER_ID}:${TOKENIZER_ARTIFACT_SHA256:0:16}"
-          --prompt-revision grounded-qa:v1
-          --index-generation-id "${RETRIEVAL_ACTIVE_GENERATION_ID}"
-          --dataset-revision "${{ vars.REAL_GOLD_DATASET_REVISION }}"
-          --ci-run-id "${{ github.run_id }}"
           --output artifacts/acceptance/real-rag.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()

@@ -161,7 +161,9 @@ PR 意外产生费用或接触生产密钥。
 
 低成本真实验收固定为 10 条经业务签名的 Gold、1/5/20 Chunk 和三份恶意 PDF/DOCX/OCR
 Fixture。所有模型 Provider 合计最多 60 次调用、输入 200,000 Token、输出 20,000 Token，
-验收执行器禁止自动重试。性能只记录低置信度基线并固定 `slo_claimed=false`：
+验收执行器禁止自动重试。质量使用 `config/rag-quality-thresholds.json` 的全部非零阈值，且每条
+回答必须达到答案 F1 门槛；性能只记录低置信度基线并固定 `slo_claimed=false`。验收签名器只
+从报告读取 Provider/revision/dataset 和实际受测 generation，不接受命令行覆盖这些身份：
 
 ```text
 python scripts/validate_real_gold.py --dataset <approved-gold.yaml>

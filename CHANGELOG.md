@@ -4,6 +4,7 @@
 
 - Make index Saga retries attempt-aware and require exact manifest reconciliation before READY.
 - Reject answer prose not fully covered by cited claims and render responses only from verified claims.
+- Bind real acceptance to non-zero quality thresholds, per-case Gold F1, and report-tested generations.
 - Normalize production MySQL aggregate persistence with row-level optimistic concurrency and pooling.
 - Make publication fail closed through durable switching intents and a transactional outbox finalization.
 - Preserve semantic chunk structure/tokenizer context and carry table headers into generation evidence.

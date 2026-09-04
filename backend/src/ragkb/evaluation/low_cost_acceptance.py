@@ -39,7 +39,8 @@ from ragkb.document_processing.mineru_parser import MinerUProductionParser
 from ragkb.domain.claim_coverage import render_verified_claims
 from ragkb.domain.rag import Evidence
 from ragkb.domain.retrieval import AuthorizedChunk, SearchContext
-from ragkb.evaluation.rag_quality import evaluate_quality
+from ragkb.evaluation.quality_thresholds import load_quality_threshold_policy
+from ragkb.evaluation.rag_quality import answer_token_f1, evaluate_quality
 from ragkb.evaluation.real_gold import validate_real_gold_dataset
 from ragkb.infrastructure.provider_budget import SQLiteProviderBudgetLedger
 from ragkb.infrastructure.provider_checkpoints import JsonCheckpointStore
@@ -66,6 +67,52 @@ def _latency(values: Sequence[float]) -> dict[str, float | int]:
         "p95_seconds": _percentile(values, 0.95),
         "p99_seconds": _percentile(values, 0.99),
     }
+
+
+def evaluate_expected_answers(
+    cases: Sequence[Mapping[str, Any]],
+    generations: Mapping[int, str],
+    *,
+    minimum_f1: float,
+) -> tuple[list[dict[str, object]], bool]:
+    results: list[dict[str, object]] = []
+    for case in cases:
+        scale = int(case["performance_scale"])
+        score = (
+            answer_token_f1(
+                str(case.get("expected_answer", "")),
+                str(case.get("actual_answer", "")),
+            )
+            if case["expected_status"] == "answered"
+            else float(not str(case.get("actual_answer", "")).strip())
+        )
+        results.append(
+            {
+                "case_id": str(case["case_id"]),
+                "performance_scale": scale,
+                "index_generation_id": generations[scale],
+                "score": score,
+                "passed": score >= minimum_f1,
+            }
+        )
+    return results, bool(results) and all(bool(item["passed"]) for item in results)
+
+
+def acceptance_gate_passed(
+    *,
+    quality_passed: bool,
+    expected_answers_passed: bool,
+    correctness_passed: bool,
+    prompt_injection_passed: bool,
+    cleanup_passed: bool,
+) -> bool:
+    return bool(
+        quality_passed
+        and expected_answers_passed
+        and correctness_passed
+        and prompt_injection_passed
+        and cleanup_passed
+    )
 
 
 def _load_manifest(root: Path) -> dict[str, Any]:
@@ -141,7 +188,7 @@ def _authorized(item: Mapping[str, Any]) -> AuthorizedChunk:
 
 
 class LowCostRealAcceptanceRunner:
-    revision = "low-cost-real-acceptance:v1"
+    revision = "low-cost-real-acceptance:threshold-bound-generation:v2"
 
     def __init__(
         self,
@@ -155,6 +202,9 @@ class LowCostRealAcceptanceRunner:
         self.root = root
         self.settings = settings.model_copy(
             update={"model_http_max_retries": 0, "embedding_batch_size": 10}
+        )
+        self.threshold_policy = load_quality_threshold_policy(
+            root / "config/rag-quality-thresholds.json"
         )
         self.dataset = dataset
         self.gold_report = validate_real_gold_dataset(dataset, gold_signing_key, required_cases=10)
@@ -418,18 +468,13 @@ class LowCostRealAcceptanceRunner:
             corpus, generations = self._provision_generations()
             cases, latencies = self._run_gold(corpus, generations)
             injections = self._run_injection()
-            thresholds = {
-                "recall_at_k": 0.0,
-                "precision_at_k": 0.0,
-                "hit_rate": 0.0,
-                "mrr": 0.0,
-                "ndcg_at_k": 0.0,
-                "answer_token_f1": 0.0,
-                "citation_precision": 0.0,
-                "citation_recall": 0.0,
-                "no_answer_accuracy": 0.0,
-            }
+            thresholds = dict(self.threshold_policy.values)
             quality = evaluate_quality(cases, k=3, thresholds=thresholds)
+            answer_results, expected_answers_passed = evaluate_expected_answers(
+                cases,
+                generations,
+                minimum_f1=thresholds["answer_token_f1"],
+            )
             correctness = all(
                 not case["forbidden_evidence_returned"]
                 and (
@@ -462,23 +507,45 @@ class LowCostRealAcceptanceRunner:
         budget_report_sha256 = hashlib.sha256(
             json.dumps(budget, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
+        prompt_injection_passed = all(item["safe"] for item in injections)
+        final_passed = acceptance_gate_passed(
+            quality_passed=bool(quality["passed"]),
+            expected_answers_passed=expected_answers_passed,
+            correctness_passed=correctness,
+            prompt_injection_passed=prompt_injection_passed,
+            cleanup_passed=bool(cleanup["all_removed"]),
+        )
         return {
             "revision": self.revision,
             "dataset": self.gold_report,
             "dataset_revision": str(self.dataset["revision"]),
+            "source_commit": self.settings.app_revision,
             "provider": "real-low-cost-rag",
+            "embedding_revision": self.embedding.revision,
+            "reranker_revision": self.reranker.revision,
+            "model_revision": self.generator.revision,
+            "prompt_revision": self.settings.llm_prompt_revision,
             "case_count": 10,
+            "query_types": self.gold_report["query_types"],
             "query_type_buckets": quality["query_type_buckets"],
             "metrics": quality["metrics"],
             "thresholds": thresholds,
+            "threshold_revision": self.threshold_policy.revision,
+            "threshold_sha256": self.threshold_policy.sha256,
+            "quality_passed": bool(quality["passed"]),
+            "failed_metrics": quality["failed_metrics"],
+            "answer_case_results": answer_results,
+            "expected_answers_passed": expected_answers_passed,
             "verifier_revision": self.verifier_chain.revision,
             "tokenizer_revision": (
                 f"{self.settings.tokenizer_id}:{self.settings.tokenizer_artifact_sha256[:16]}"
             ),
             "budget_report_sha256": budget_report_sha256,
-            "cases_passed": correctness,
+            "cases_passed": correctness and expected_answers_passed,
             "prompt_injection": injections,
-            "prompt_injection_passed": all(item["safe"] for item in injections),
+            "prompt_injection_passed": prompt_injection_passed,
+            "tested_generations": {str(scale): generations[scale] for scale in PERFORMANCE_SCOPE},
+            "index_generation_id": generations[max(PERFORMANCE_SCOPE)],
             "performance": {
                 "slo_claimed": False,
                 "statistical_confidence": "low",
@@ -491,12 +558,8 @@ class LowCostRealAcceptanceRunner:
             "actual_cost_cny": round(actual_cost_cny, 6),
             "cleanup": cleanup,
             "automatic_retries": 0,
-            "passed": bool(
-                correctness and all(item["safe"] for item in injections) and cleanup["all_removed"]
-            ),
-            "real_acceptance": bool(
-                correctness and all(item["safe"] for item in injections) and cleanup["all_removed"]
-            ),
+            "passed": final_passed,
+            "real_acceptance": final_passed,
         }
 
 

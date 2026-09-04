@@ -46,6 +46,27 @@ def test_acceptance_requires_signature_freshness_and_passing_thresholds(tmp_path
 
     evidence = load_acceptance_evidence(path, signing_key=key, max_age_hours=1)
     assert evidence.verified(key, max_age_hours=1)
+    zero_body = {
+        **body,
+        "metrics": {"recall_at_k": 0.0},
+        "thresholds": {"recall_at_k": 0.0},
+    }
+    zero_payload = json.dumps(zero_body, sort_keys=True, separators=(",", ":")).encode()
+    zero_path = tmp_path / "zero-threshold.json"
+    zero_path.write_text(
+        json.dumps(
+            {
+                **zero_body,
+                "payload_sha256": hashlib.sha256(zero_payload).hexdigest(),
+                "signature": hmac.new(
+                    key.get_secret_value().encode(), zero_payload, hashlib.sha256
+                ).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="SIGNATURE_OR_THRESHOLD_INVALID"):
+        load_acceptance_evidence(zero_path, signing_key=key, max_age_hours=1)
     path.write_text(
         json.dumps({**body, "payload_sha256": digest, "signature": "0" * 64}),
         encoding="utf-8",
