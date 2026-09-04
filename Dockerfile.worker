@@ -1,11 +1,18 @@
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 COPY pyproject.toml requirements.lock ./
 COPY backend ./backend
 COPY config/.env.example ./config/.env.example
-COPY run_worker.py ./
-RUN python -m pip install --no-cache-dir -r requirements.lock \
-    && python -m pip install --no-cache-dir . --no-deps
-CMD ["python", "run_worker.py"]
+COPY config/.env.example ./config/.env
+RUN python -m pip install --no-cache-dir --require-hashes -r requirements.lock \
+    && python -m pip install --no-cache-dir . --no-deps \
+    && groupadd --system --gid 10001 ragkb \
+    && useradd --system --uid 10001 --gid ragkb --home-dir /app --shell /usr/sbin/nologin ragkb \
+    && mkdir -p /app/data/storage /app/artifacts \
+    && chown -R ragkb:ragkb /app/data /app/artifacts
+USER 10001:10001
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+  CMD ["ragkb-worker", "--check"]
+CMD ["ragkb-worker"]

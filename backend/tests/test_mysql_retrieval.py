@@ -123,9 +123,8 @@ def test_mysql_projection_authorization_write_lifecycle_and_release(tmp_path: Pa
         Path(__file__).resolve().parents[2], env_path=tmp_path / "missing", environ={}
     ).settings
     assert settings is not None
-    adapter = MySQLRetrievalControlPlane(
-        MySQLControlPlaneAdapter(settings, connection_factory=factory)
-    )
+    control = MySQLControlPlaneAdapter(settings, connection_factory=factory)
+    adapter = MySQLRetrievalControlPlane(control)
     context = SearchContext("tenant-1", ("space-1",), ("group:reader",), 1, 1, "generation-1", 2, 2)
 
     assert adapter.authorize_chunks(("chunk-1",), context)["chunk-1"] == chunk
@@ -144,4 +143,7 @@ def test_mysql_projection_authorization_write_lifecycle_and_release(tmp_path: Pa
 
     assert any(connection.executemany_calls for connection in connections)
     assert sum(connection.commits for connection in connections) == 4
-    assert all(connection.closed == 1 for connection in connections)
+    assert len(connections) == 1
+    assert connections[0].closed == 0
+    control.close()
+    assert connections[0].closed == 1

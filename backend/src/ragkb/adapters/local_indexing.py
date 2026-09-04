@@ -9,7 +9,8 @@ import hashlib
 import json
 import threading
 import time
-from collections.abc import Sequence
+from collections import OrderedDict
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from ragkb.adapters.sqlite_retrieval import SQLiteRetrievalControlPlane
 from ragkb.application.tracing import InMemoryTracer, TracerPort
 from ragkb.contracts.ports import EmbeddingPort
 from ragkb.document_processing.chunking import ChunkingResult
+from ragkb.domain.errors import IngestionCancelled
 from ragkb.domain.retrieval import (
     AuthorizedChunk,
     IndexCandidate,
@@ -39,42 +41,121 @@ class _SnapshotRecord:
 
 @dataclass(frozen=True)
 class _LocalANNSnapshot:
-    signature: tuple[int, float]
+    signature: tuple[int, str]
     index: Index | None
     key_to_record: dict[int, _SnapshotRecord]
+    path: Path | None
 
 
 class SQLiteLocalHybridIndex:
     revision = "sqlite-fts5-usearch-snapshot-index:v2"
 
-    def __init__(self, database: SQLiteDatabase) -> None:
+    def __init__(
+        self,
+        database: SQLiteDatabase,
+        *,
+        max_cached_generations: int = 3,
+        max_disk_snapshots: int = 6,
+    ) -> None:
+        if max_cached_generations < 1 or max_disk_snapshots < max_cached_generations:
+            raise ValueError("LOCAL_ANN_RETENTION_INVALID")
         self.database = database
         self.database.initialize()
         self._lock = threading.Lock()
-        self._snapshots: dict[str, _LocalANNSnapshot] = {}
+        self._snapshots: OrderedDict[str, _LocalANNSnapshot] = OrderedDict()
         self._ann_root = self.database.path.parent / "local-ann"
+        self._max_cached_generations = max_cached_generations
+        self._max_disk_snapshots = max_disk_snapshots
 
     @staticmethod
     def _key(chunk_id: str) -> int:
         digest = hashlib.blake2b(chunk_id.encode("utf-8"), digest_size=8).digest()
         return int.from_bytes(digest, "big") & ((1 << 63) - 1)
 
-    def _signature(self, generation_id: str) -> tuple[int, float]:
+    def _signature(self, generation_id: str) -> tuple[int, str]:
         with self.database.connect() as connection:
             row = connection.execute(
                 """
-                SELECT COUNT(*) AS item_count, COALESCE(MAX(updated_at), 0) AS latest
-                FROM local_search_index WHERE index_generation_id = ?
+                SELECT revision, manifest_sha256, retired FROM local_index_generations
+                WHERE generation_id = ?
                 """,
                 (generation_id,),
             ).fetchone()
-        return int(row["item_count"]), float(row["latest"])
+            if row is not None:
+                if bool(row["retired"]):
+                    raise KeyError("LOCAL_ANN_GENERATION_RETIRED")
+                return int(row["revision"]), str(row["manifest_sha256"])
+            rows = connection.execute(
+                """
+                SELECT chunk_id, vector_json FROM local_search_index
+                WHERE index_generation_id = ? ORDER BY chunk_id
+                """,
+                (generation_id,),
+            ).fetchall()
+        digest = hashlib.sha256()
+        for item in rows:
+            digest.update(str(item["chunk_id"]).encode())
+            digest.update(b"\0")
+            digest.update(str(item["vector_json"]).encode())
+            digest.update(b"\0")
+        return 0, digest.hexdigest()
+
+    def _prune(self) -> None:
+        while len(self._snapshots) > self._max_cached_generations:
+            self._snapshots.popitem(last=False)
+        protected = {
+            snapshot.path.resolve()
+            for snapshot in self._snapshots.values()
+            if snapshot.path is not None
+        }
+        if not self._ann_root.exists():
+            return
+        paths = sorted(
+            self._ann_root.glob("*.usearch"), key=lambda item: item.stat().st_mtime, reverse=True
+        )
+        retained = len(protected)
+        for path in paths:
+            if path.resolve() in protected:
+                continue
+            if retained < self._max_disk_snapshots:
+                retained += 1
+                continue
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                continue
+
+    def retire_generation(self, generation_id: str) -> None:
+        with self._lock:
+            snapshot = self._snapshots.pop(generation_id, None)
+            path = snapshot.path if snapshot is not None else None
+            with self.database.transaction(immediate=True) as connection:
+                row = connection.execute(
+                    "SELECT snapshot_path FROM local_index_generations WHERE generation_id = ?",
+                    (generation_id,),
+                ).fetchone()
+                if path is None and row is not None and row["snapshot_path"]:
+                    path = Path(str(row["snapshot_path"]))
+                connection.execute(
+                    """
+                    UPDATE local_index_generations SET retired = 1, updated_at = ?
+                    WHERE generation_id = ?
+                    """,
+                    (time.time(), generation_id),
+                )
+            if path is not None:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            self._prune()
 
     def _snapshot(self, generation_id: str) -> _LocalANNSnapshot:
         signature = self._signature(generation_id)
         with self._lock:
             cached = self._snapshots.get(generation_id)
             if cached is not None and cached.signature == signature:
+                self._snapshots.move_to_end(generation_id)
                 return cached
             with self.database.connect() as connection:
                 rows = connection.execute(
@@ -110,7 +191,7 @@ class SQLiteLocalHybridIndex:
                 path = self._ann_root / f"{fingerprint}.usearch"
                 index = Index(ndim=dimension, metric="cos", dtype="f32")
                 if path.exists():
-                    index.view(path)
+                    index.load(path)
                 else:
                     self._ann_root.mkdir(parents=True, exist_ok=True)
                     index.add(
@@ -120,8 +201,20 @@ class SQLiteLocalHybridIndex:
                     temporary = Path(f"{path}.tmp")
                     index.save(temporary)
                     temporary.replace(path)
-            snapshot = _LocalANNSnapshot(signature, index, records)
+            snapshot_path = path if vectors else None
+            if snapshot_path is not None:
+                with self.database.transaction(immediate=True) as connection:
+                    connection.execute(
+                        """
+                        UPDATE local_index_generations SET snapshot_path = ?, updated_at = ?
+                        WHERE generation_id = ? AND retired = 0
+                        """,
+                        (str(snapshot_path), time.time(), generation_id),
+                    )
+            snapshot = _LocalANNSnapshot(signature, index, records, snapshot_path)
             self._snapshots[generation_id] = snapshot
+            self._snapshots.move_to_end(generation_id)
+            self._prune()
             return snapshot
 
     @staticmethod
@@ -262,6 +355,7 @@ class SQLiteLocalIndexingSink:
         space_id: str,
         permission_revision: int = 1,
         security_projection: SecurityProjection | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> None:
         security = security_projection or SecurityProjection.unapproved(
             permission_revision=permission_revision,
@@ -269,6 +363,8 @@ class SQLiteLocalIndexingSink:
         )
         vectors: list[Sequence[float]] = []
         for start in range(0, len(result.chunks), self.embedding_batch_size):
+            if cancel_check is not None and cancel_check():
+                raise IngestionCancelled("INGEST_CANCELLED")
             batch = result.chunks[start : start + self.embedding_batch_size]
             with self.tracer.span(
                 "document.embedding.batch", {"batch_size": len(batch), "provider": "local"}
@@ -279,6 +375,9 @@ class SQLiteLocalIndexingSink:
         parent_by_id = {item.id: item for item in result.parent_chunks}
         with self.tracer.span("document.vector.write", {"chunk_count": len(result.chunks)}):
             self._write_index(result, vectors, security.permission_revision)
+        if cancel_check is not None and cancel_check():
+            self._delete_version_index(result.chunks[0].version_id)
+            raise IngestionCancelled("INGEST_CANCELLED")
         projections: list[AuthorizedChunk] = []
         for chunk in (*result.parent_chunks, *result.chunks):
             parent = parent_by_id.get(chunk.id)
@@ -310,6 +409,46 @@ class SQLiteLocalIndexingSink:
                 )
             )
         self.control_plane.upsert_chunks(projections)
+        if cancel_check is not None and cancel_check():
+            version_id = result.chunks[0].version_id
+            self.control_plane.delete_version_projection(document_id, version_id)
+            self._delete_version_index(version_id)
+            raise IngestionCancelled("INGEST_CANCELLED")
+
+    def _delete_version_index(self, version_id: str) -> None:
+        with self.database.transaction(immediate=True) as connection:
+            rows = connection.execute(
+                "SELECT chunk_id FROM local_search_index WHERE document_version_id = ?",
+                (version_id,),
+            ).fetchall()
+            for row in rows:
+                connection.execute(
+                    "DELETE FROM local_search_fts WHERE chunk_id = ?", (str(row["chunk_id"]),)
+                )
+            connection.execute(
+                "DELETE FROM local_search_index WHERE document_version_id = ?", (version_id,)
+            )
+            manifest_rows = connection.execute(
+                """
+                SELECT chunk_id, vector_json FROM local_search_index
+                WHERE index_generation_id = ? ORDER BY chunk_id
+                """,
+                (self.generation_id,),
+            ).fetchall()
+            digest = hashlib.sha256()
+            for row in manifest_rows:
+                digest.update(str(row["chunk_id"]).encode())
+                digest.update(b"\0")
+                digest.update(str(row["vector_json"]).encode())
+                digest.update(b"\0")
+            connection.execute(
+                """
+                UPDATE local_index_generations
+                SET revision=revision+1, manifest_sha256=?, snapshot_path=NULL, updated_at=?
+                WHERE generation_id=?
+                """,
+                (digest.hexdigest(), time.time(), self.generation_id),
+            )
 
     def _write_index(
         self,
@@ -354,3 +493,30 @@ class SQLiteLocalIndexingSink:
                     "INSERT INTO local_search_fts(chunk_id, retrieval_terms) VALUES (?, ?)",
                     (chunk.id, " ".join(analyze_terms(chunk.retrieval_text))),
                 )
+            manifest_rows = connection.execute(
+                """
+                SELECT chunk_id, vector_json FROM local_search_index
+                WHERE index_generation_id = ? ORDER BY chunk_id
+                """,
+                (self.generation_id,),
+            ).fetchall()
+            digest = hashlib.sha256()
+            for row in manifest_rows:
+                digest.update(str(row["chunk_id"]).encode())
+                digest.update(b"\0")
+                digest.update(str(row["vector_json"]).encode())
+                digest.update(b"\0")
+            connection.execute(
+                """
+                INSERT INTO local_index_generations(
+                    generation_id, revision, manifest_sha256, snapshot_path, retired, updated_at
+                ) VALUES (?, 1, ?, NULL, 0, ?)
+                ON CONFLICT(generation_id) DO UPDATE SET
+                    revision=local_index_generations.revision+1,
+                    manifest_sha256=excluded.manifest_sha256,
+                    snapshot_path=NULL,
+                    retired=0,
+                    updated_at=excluded.updated_at
+                """,
+                (self.generation_id, digest.hexdigest(), time.time()),
+            )

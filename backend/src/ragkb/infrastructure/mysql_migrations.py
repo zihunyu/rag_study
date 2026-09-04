@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Protocol
 
-MYSQL_MIGRATION_REVISION = "mysql-control-plane:g2-v1"
+MYSQL_MIGRATION_REVISION = "mysql-control-plane:g4-v3"
 MYSQL_MIGRATION_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
     migration_id VARCHAR(128) PRIMARY KEY,
@@ -155,7 +155,7 @@ MYSQL_MIGRATIONS: tuple[tuple[str, str], ...] = (
     ),
 )
 
-MYSQL_G3_MIGRATION_REVISION = "mysql-trusted-qa-lifecycle:g3-v1"
+MYSQL_G3_MIGRATION_REVISION = "mysql-trusted-qa-lifecycle:g4-v3"
 MYSQL_G3_MIGRATIONS: tuple[tuple[str, str], ...] = (
     (
         "101_rag_runs",
@@ -414,6 +414,88 @@ MYSQL_G3_MIGRATIONS: tuple[tuple[str, str], ...] = (
             tenant_id VARCHAR(255) PRIMARY KEY,
             state_json JSON NOT NULL,
             updated_at DATETIME(6) NOT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+        """,
+    ),
+    (
+        "118_upload_entities_v3",
+        """
+        CREATE TABLE IF NOT EXISTS upload_entities_v3 (
+            tenant_id VARCHAR(255) NOT NULL,
+            entity_type VARCHAR(64) NOT NULL,
+            entity_id VARCHAR(255) NOT NULL,
+            logical_key TEXT NOT NULL,
+            parent_id VARCHAR(255),
+            ordinal INT UNSIGNED NOT NULL DEFAULT 0,
+            payload_json JSON NOT NULL,
+            entity_revision BIGINT UNSIGNED NOT NULL DEFAULT 1,
+            created_at DATETIME(6) NOT NULL,
+            updated_at DATETIME(6) NOT NULL,
+            PRIMARY KEY (tenant_id, entity_type, entity_id),
+            KEY idx_upload_entity_parent (tenant_id, entity_type, parent_id, ordinal),
+            KEY idx_upload_entity_updated (tenant_id, entity_type, updated_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+        """,
+    ),
+    (
+        "119_lifecycle_entities_v3",
+        """
+        CREATE TABLE IF NOT EXISTS lifecycle_entities_v3 (
+            tenant_id VARCHAR(255) NOT NULL,
+            entity_type VARCHAR(64) NOT NULL,
+            entity_id VARCHAR(255) NOT NULL,
+            logical_key TEXT NOT NULL,
+            parent_id VARCHAR(255),
+            ordinal INT UNSIGNED NOT NULL DEFAULT 0,
+            payload_json JSON NOT NULL,
+            entity_revision BIGINT UNSIGNED NOT NULL DEFAULT 1,
+            created_at DATETIME(6) NOT NULL,
+            updated_at DATETIME(6) NOT NULL,
+            PRIMARY KEY (tenant_id, entity_type, entity_id),
+            KEY idx_lifecycle_entity_parent (tenant_id, entity_type, parent_id, ordinal),
+            KEY idx_lifecycle_entity_updated (tenant_id, entity_type, updated_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+        """,
+    ),
+    (
+        "120_governance_entities_v3",
+        """
+        CREATE TABLE IF NOT EXISTS governance_entities_v3 (
+            tenant_id VARCHAR(255) NOT NULL,
+            entity_type VARCHAR(64) NOT NULL,
+            entity_id VARCHAR(255) NOT NULL,
+            logical_key TEXT NOT NULL,
+            parent_id VARCHAR(255),
+            ordinal INT UNSIGNED NOT NULL DEFAULT 0,
+            payload_json JSON NOT NULL,
+            entity_revision BIGINT UNSIGNED NOT NULL DEFAULT 1,
+            created_at DATETIME(6) NOT NULL,
+            updated_at DATETIME(6) NOT NULL,
+            PRIMARY KEY (tenant_id, entity_type, entity_id),
+            KEY idx_governance_entity_parent (tenant_id, entity_type, parent_id, ordinal),
+            KEY idx_governance_entity_updated (tenant_id, entity_type, updated_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+        """,
+    ),
+    (
+        "121_publication_outbox_v3",
+        """
+        CREATE TABLE IF NOT EXISTS publication_outbox_v3 (
+            tenant_id VARCHAR(255) NOT NULL,
+            operation VARCHAR(320) NOT NULL,
+            idempotency_key VARCHAR(255) NOT NULL,
+            document_id VARCHAR(255) NOT NULL,
+            target_version_id VARCHAR(255) NOT NULL,
+            generation_id VARCHAR(255) NOT NULL,
+            state VARCHAR(32) NOT NULL,
+            attempt_count INT UNSIGNED NOT NULL DEFAULT 1,
+            error_code VARCHAR(128),
+            payload_json JSON NOT NULL,
+            created_at DATETIME(6) NOT NULL,
+            updated_at DATETIME(6) NOT NULL,
+            PRIMARY KEY (tenant_id, operation, idempotency_key),
+            KEY idx_publication_outbox_state (state, updated_at),
+            KEY idx_publication_outbox_document (tenant_id, document_id, state)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
         """,
     ),

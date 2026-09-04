@@ -36,6 +36,10 @@ class CompositeDocumentProjection:
         for projection in self.projections:
             projection.delete_document_projection(document_id)
 
+    def delete_version_projection(self, document_id: str, version_id: str) -> None:
+        for projection in self.projections:
+            projection.delete_version_projection(document_id, version_id)
+
     def set_version_security_projection(
         self,
         document_id: str,

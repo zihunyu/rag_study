@@ -89,7 +89,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: python -m pip install -r requirements.lock
+      - run: python -m pip install --require-hashes -r requirements.lock
       - run: python -m pip install -e . --no-deps
       - name: Bind ephemeral tokenizer path
         run: echo "TOKENIZER_ARTIFACT_PATH=$RUNNER_TEMP/tokenizer.json" >> "$GITHUB_ENV"

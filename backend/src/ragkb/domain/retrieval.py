@@ -116,6 +116,9 @@ class SearchHit:
     valid_to_epoch: int = 0
     permission_revision: int = 0
     current_version: bool = True
+    display_text: str = ""
+    retrieval_text: str = ""
+    generation_context: str = ""
 
 
 @dataclass(frozen=True)

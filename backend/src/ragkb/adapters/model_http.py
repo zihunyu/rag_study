@@ -99,10 +99,32 @@ class HttpxJsonTransport:
     def _success(self) -> None:
         with self._lock:
             self._consecutive_failures = 0
+            self.metrics.last_success_epoch = time.time()
 
     def _metric(self, name: str, amount: int | float = 1) -> None:
         with self._lock:
             setattr(self.metrics, name, getattr(self.metrics, name) + amount)
+
+    def health_snapshot(self) -> dict[str, object]:
+        """Return cached transport health without making a billable provider call."""
+
+        with self._lock:
+            cooldown_remaining = max(
+                0.0,
+                self._settings.model_http_circuit_cooldown_seconds
+                - (time.monotonic() - self._circuit_opened_at),
+            )
+            circuit_open = bool(
+                self._consecutive_failures >= self._settings.model_http_circuit_failure_threshold
+                and cooldown_remaining > 0
+            )
+            return {
+                "state": "circuit_open" if circuit_open else "available_or_unprobed",
+                "circuit_open": circuit_open,
+                "consecutive_failures": self._consecutive_failures,
+                "last_success_epoch": self.metrics.last_success_epoch,
+                "request_count": self.metrics.request_count,
+            }
 
     def _delay(
         self,
@@ -205,6 +227,7 @@ class TransportMetrics:
     rate_limit_count: int = 0
     circuit_open_count: int = 0
     total_latency_seconds: float = 0.0
+    last_success_epoch: float = 0.0
 
 
 class _GuardedModelAdapter:

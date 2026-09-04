@@ -78,10 +78,6 @@ def test_bad_task_is_safely_recorded_and_next_good_task_still_runs(tmp_path: Pat
     components = _components(tmp_path)
     bad = _enqueue_text(components, filename="bad.txt", content=b"bad body", key="bad")
     good = _enqueue_text(components, filename="good.txt", content=b"good body", key="good")
-    with components.database.transaction(immediate=True) as connection:
-        connection.execute(
-            "UPDATE job_queue SET max_attempts = 1 WHERE id = ?", (str(bad["job_id"]),)
-        )
     worker = LocalIngestionWorker(
         components.queue,
         components.repository,
@@ -97,6 +93,7 @@ def test_bad_task_is_safely_recorded_and_next_good_task_still_runs(tmp_path: Pat
     assert bad_iteration.failed is True
     assert good_iteration.failed is False
     assert components.queue.get(str(bad["job_id"])).state.value == "FAILED_FINAL"  # type: ignore[union-attr]
+    assert components.queue.get(str(bad["job_id"])).error_code == "INGEST_UNEXPECTED"  # type: ignore[union-attr]
     assert components.queue.get(str(good["job_id"])).state.value == "SUCCEEDED"  # type: ignore[union-attr]
     assert (
         components.repository.get_version(str(good["document_version_id"]))["processing_state"]

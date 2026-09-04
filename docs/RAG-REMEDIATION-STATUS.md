@@ -59,3 +59,25 @@
 
 本机真实 Zilliz schema、批量写入、检索与清理已通过。MySQL/Redis 本机端口当前不可达；真实
 Gold、独立 Verifier 与正式 tokenizer 未配置前，受保护工作流必须在首次计费请求前失败关闭。
+
+## RAG-046～RAG-055 补充整改
+
+- RAG-046：Production 聚合由“每租户单行 JSON”迁移为按实体独立行的 v3 表，使用实体级
+  revision 做乐观并发；MySQL 连接由有界池复用并在应用关闭时回收。
+- RAG-047：Production 发布先持久化不可见的 `SWITCHING` 意图与 Outbox，再执行外部投影；
+  投影成功后在同一 MySQL 事务中提交 Lifecycle、Upload 当前版本和 Outbox 状态。任一步失败
+  均保持不可 Serving，并允许使用同一幂等键恢复。
+- RAG-048/049：Semantic Chunk 保留节点类型、来源 spans、页/幻灯片/工作表边界和正式
+  tokenizer，并批量预取边界 Embedding；LLM generation context 明确携带标题、结构路径、
+  表头和授权父级上下文。
+- RAG-050：Local ANN 使用单调 generation revision 与完整 manifest hash 失效缓存，并增加
+  内存 LRU、磁盘保留上限和退休 generation 清理。
+- RAG-051：单结果/同分结果使用通道绝对分数校准，不再自动获得 1.0；Embedding 暂时失败时
+  Native Hybrid 仍单独执行 BM25。
+- RAG-052：Worker 将临时 Provider 错误、永久契约/配置错误和未知错误分流；批次间检查取消，
+  取消时幂等清理版本级向量、控制面和本地产物。
+- RAG-054：Liveness/Readiness 返回实际验收状态；Readiness 检查 MySQL、Redis Queue、Release、
+  索引水位和磁盘，Provider 使用非计费的缓存熔断状态，并提供 acceptance/degraded 状态端点。
+- RAG-055：三个基础镜像固定 digest，容器使用非 root、HEALTHCHECK、只读根文件系统、清空
+  Linux capabilities；三种镜像均执行 Trivy 和 CycloneDX SBOM，Python 锁文件包含 hashes，
+  并补充 LICENSE 与 NOTICE。

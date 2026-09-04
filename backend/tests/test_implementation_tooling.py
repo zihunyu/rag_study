@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from ragkb.application.governance import GovernanceService
 
 from scripts.generate_assurance import build_assurance
@@ -19,6 +21,8 @@ def test_operations_assurance_and_final_plan_are_offline_and_fail_closed() -> No
     assert assurance["docker_used"] is False
     assert assurance["python_sbom"]
     assert assurance["npm_sbom"]
+    assert assurance["cyclonedx_sbom"]["bomFormat"] == "CycloneDX"
+    assert assurance["cyclonedx_sbom"]["specVersion"] == "1.6"
     assert final["status"] == "BLOCKED_REAL_EVIDENCE_MISSING"
     assert final["synthetic_evidence_can_unlock"] is False
     assert final["real_acceptance"] is False
@@ -29,3 +33,26 @@ def test_operations_assurance_and_final_plan_are_offline_and_fail_closed() -> No
     assert final["scope"]["real_7_day_observation"] == "deferred_by_user"
     assert canary["simulated"] is True
     assert canary["real_acceptance"] is False
+
+
+def test_containers_are_digest_pinned_non_root_health_checked_and_fully_scanned() -> None:
+    root = Path(__file__).resolve().parents[2]
+    dockerfiles = (
+        root / "Dockerfile.backend",
+        root / "Dockerfile.worker",
+        root / "frontend/Dockerfile",
+    )
+    for path in dockerfiles:
+        text = path.read_text(encoding="utf-8")
+        assert "@sha256:" in text
+        assert "USER " in text
+        assert "HEALTHCHECK " in text
+    workflow = (root / ".github/workflows/container-security.yml").read_text(encoding="utf-8")
+    assert "name: backend" in workflow
+    assert "name: worker" in workflow
+    assert "name: frontend" in workflow
+    assert "format: cyclonedx" in workflow
+    assert "--require-hashes" in (root / "Dockerfile.backend").read_text(encoding="utf-8")
+    assert "--hash=sha256:" in (root / "requirements.lock").read_text(encoding="utf-8")
+    assert (root / "LICENSE").is_file()
+    assert (root / "NOTICE").is_file()

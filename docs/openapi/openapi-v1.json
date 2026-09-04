@@ -1116,6 +1116,18 @@
       "HealthResponse": {
         "additionalProperties": false,
         "properties": {
+          "degraded_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Degraded Reasons",
+            "type": "array"
+          },
+          "dependencies": {
+            "additionalProperties": true,
+            "title": "Dependencies",
+            "type": "object"
+          },
           "real_service_acceptance": {
             "title": "Real Service Acceptance",
             "type": "boolean"
@@ -1650,6 +1662,10 @@
             "title": "Chunk Id",
             "type": "string"
           },
+          "display_text": {
+            "title": "Display Text",
+            "type": "string"
+          },
           "document_id": {
             "title": "Document Id",
             "type": "string"
@@ -1661,6 +1677,10 @@
           "fused_score": {
             "title": "Fused Score",
             "type": "number"
+          },
+          "generation_context": {
+            "title": "Generation Context",
+            "type": "string"
           },
           "locator": {
             "additionalProperties": true,
@@ -1693,6 +1713,10 @@
             "title": "Rerank Position",
             "type": "integer"
           },
+          "retrieval_text": {
+            "title": "Retrieval Text",
+            "type": "string"
+          },
           "text": {
             "title": "Text",
             "type": "string"
@@ -1703,6 +1727,9 @@
           "document_id",
           "document_version_id",
           "text",
+          "display_text",
+          "retrieval_text",
+          "generation_context",
           "locator",
           "fused_score",
           "rerank_position",
@@ -5197,6 +5224,58 @@
           }
         },
         "summary": "Ready",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/status/acceptance": {
+      "get": {
+        "operationId": "acceptance_status_status_acceptance_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Acceptance Status",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/status/degraded": {
+      "get": {
+        "operationId": "degraded_status_status_degraded_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Degraded Status",
         "tags": [
           "health"
         ]

@@ -99,6 +99,7 @@ class EnvSettings(BaseModel):
     local_storage_audit_dir: Path = Path("./data/storage/audit")
     local_storage_backup_dir: Path = Path("./data/storage/backups")
     local_storage_max_gb: int = Field(default=100, gt=0)
+    local_storage_min_free_gb: float = Field(default=1.0, ge=0)
     local_storage_checksum_algorithm: Literal["sha256"] = "sha256"
 
     mysql_host: str = "127.0.0.1"

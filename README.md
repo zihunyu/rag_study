@@ -10,7 +10,8 @@ BM25 + Dense 检索、查询类型感知融合、Rerank、基于证据生成、�
   Embedding、Reranker 与答案生成保持确定性，因此结果始终是 `real_acceptance=false`。
 - `RAG_RUNTIME_PROFILE=production`：装配真实 OpenAI-compatible Embedding、Reranker、LLM、
   独立 Verifier 及 Zilliz/Milvus；上传、生命周期、RAG Run、引用和治理状态使用 MySQL，
-  队列、租约和缓存使用 Redis。生产模式禁止明文 HTTP 和确定性/Fake Provider。
+  且上传/生命周期/治理按实体行存储并使用乐观 revision；队列、租约和缓存使用 Redis。
+  MySQL 使用有界连接池。生产模式禁止明文 HTTP 和确定性/Fake Provider。
 
 `real_acceptance=true` 不能由一个布尔配置打开。只有真实评测生成的验收证据文件，其 Provider、
 模型、Prompt、索引代际、数据集版本和指标均与当前运行时一致，并通过受保护密钥 HMAC 签名、
@@ -32,7 +33,7 @@ BM25 + Dense 检索、查询类型感知融合、Rerank、基于证据生成、�
 Copy-Item config/.env.example config/.env
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.lock
+python -m pip install --require-hashes -r requirements.lock
 python -m pip install -e . --no-deps
 python scripts/check_env.py --gate G0
 ```
@@ -42,7 +43,7 @@ python scripts/check_env.py --gate G0
 cp config/.env.example config/.env
 python3.12 -m venv .venv
 source .venv/bin/activate
-python -m pip install -r requirements.lock
+python -m pip install --require-hashes -r requirements.lock
 python -m pip install -e . --no-deps
 python scripts/check_env.py --gate G0
 ```
@@ -92,6 +93,10 @@ Redis 队列/缓存、真实 MinerU OCR Parser 和外部生命周期写入均可
 在本地磁盘，Production 强制 `single_instance`，不得宣称多实例或高可用。密钥只能放在
 `config/.env`、部署 Secret Store 或进程环境中，禁止写入日志和仓库。
 
+Production 发布使用两阶段 fail-closed 协议：先持久化不可见的 `SWITCHING` 意图和 Outbox，
+再更新外部投影；只有投影成功后，Lifecycle、当前版本和 Outbox 才在一个 MySQL 事务中提交。
+失败或进程中断时 Release 不会被视为可服务，使用同一幂等键可以安全恢复。
+
 向量后端：
 
 - `zilliz` 使用 `ZILLIZ_CLOUD_*`；
@@ -127,11 +132,13 @@ Document；Markdown、HTML、DOCX 和 PPTX 的标题结构则由本地真实解�
 ## 分片与检索
 
 `CHUNK_STRATEGY` 支持 `token`、`structure` 和 `semantic`。Production 使用内容哈希固定的正式
-tokenizer artifact；默认结构化分片保留标题/章节路径，表格行重复携带表头，
+tokenizer artifact；Semantic 路径同样保留节点类型、来源 spans 和 tokenizer，并批量计算边界
+Embedding。默认结构化分片保留标题/章节路径，表格行重复携带表头，
 搜索使用小 Chunk，回答可附带授权后的 Parent Chunk。大小、Overlap、上下限和 Parent 上限均在
 `config/.env` 配置。
 
-检索会并发执行 BM25 与 Embedding/Dense 路径，使用通道内分数归一化和排名稳定项融合。中文
+检索会并发执行 BM25 与 Embedding/Dense 路径，使用绝对分数与排名稳定项融合；单结果不会
+自动成为满置信度，Embedding 暂时失败时仍保留 BM25。中文
 长查询默认按语义查询处理，编号/错误码走 identifier。权限过滤后先 Rerank，再执行近重复及
 单文档、单章节数量限制。
 
@@ -169,13 +176,19 @@ python scripts/run_low_cost_real_acceptance.py --approved --gold <approved-gold.
 docker compose up --build
 ```
 
-Compose 使用同一个持久卷共享本地存储；Zilliz/Milvus 和模型 Provider 仍是外部服务。
+Compose 使用同一个持久卷共享本地存储；Zilliz/Milvus 和模型 Provider 仍是外部服务。三个
+镜像均固定基础镜像 digest、使用非 root 用户和 HEALTHCHECK；Compose 使用只读根文件系统、
+移除 Linux capabilities，并只开放 Backend 8000 与 Frontend 8080（宿主仍映射为 5173）。
 
 ## 可观测性与安全边界
 
 搜索和问答记录 `rag.ask`、evidence build、BM25、Dense、Embedding、fusion、rerank、LLM 与
 citation verify 的嵌套 Span。默认在诊断接口中汇总；安装 `.[observability]` 后可由部署层桥接
 OpenTelemetry SDK/OTLP。依赖已经进入锁文件，生产镜像无需临时安装。
+
+`/health/live` 只表示进程存活；`/health/ready` 检查控制面、队列、Release、索引水位、磁盘和
+缓存的 Provider 熔断状态且不会产生计费调用。`/status/acceptance` 与 `/status/degraded` 分别
+表达签名验收绑定和当前降级原因。
 
 权限过滤在检索与生成前执行，生成后再次复核。索引先以最高密级、空 ACL、非 Serving 状态
 写入；只有审核冻结完整安全投影、Saga 批次对账并发布后才可检索。删除、撤权或索引代际变化

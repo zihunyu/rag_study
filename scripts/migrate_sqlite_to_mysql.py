@@ -14,7 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend/src"))
 
 from ragkb.adapters.mysql_control import MySQLControlPlaneAdapter  # noqa: E402
+from ragkb.adapters.mysql_entity_store import MySQLNormalizedEntityStore  # noqa: E402
 from ragkb.adapters.mysql_lifecycle import MySQLLifecycleStore  # noqa: E402
+from ragkb.adapters.mysql_upload import MySQLUploadRepository  # noqa: E402
 from ragkb.config import build_env_report, load_env  # noqa: E402
 from ragkb.infrastructure.lifecycle_repository import SQLiteLifecycleStore  # noqa: E402
 from ragkb.infrastructure.mysql_migrations import apply_mysql_migrations  # noqa: E402
@@ -161,14 +163,10 @@ def main() -> int:
         if len(tenants) != 1:
             raise ValueError("SQLITE_MIGRATION_REQUIRES_ONE_TENANT")
         tenant_id = next(iter(tenants))
-        cursor.execute(
-            """
-            INSERT INTO upload_state_v2(tenant_id, state_json, updated_at)
-            VALUES (%s, %s, NOW(6)) AS incoming
-            ON DUPLICATE KEY UPDATE state_json=incoming.state_json, updated_at=NOW(6)
-            """,
-            (tenant_id, json.dumps(state, ensure_ascii=False, sort_keys=True)),
-        )
+        normalized_upload = MySQLNormalizedEntityStore("upload_entities_v3", tenant_id)
+        before = normalized_upload.load(cursor)
+        normalized_upload.sync(cursor, before, MySQLUploadRepository._to_entities(state))
+        cursor.execute("DELETE FROM upload_state_v2 WHERE tenant_id=%s", (tenant_id,))
         copied = _copy_rag_and_references(source, target)
         target.commit()
         local_lifecycle = SQLiteLifecycleStore(SQLiteDatabase(source_path))
@@ -189,7 +187,7 @@ def main() -> int:
         **copied,
     }
     report = {
-        "revision": "sqlite-to-mysql:g4-v1",
+        "revision": "sqlite-to-mysql-normalized:g4-v2",
         "backup_sha256": hashlib.sha256(backup_path.read_bytes()).hexdigest(),
         "counts": counts,
         "counts_reconciled": True,

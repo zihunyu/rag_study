@@ -91,10 +91,18 @@ def score_calibrated_fuse(
         raw = [candidate.score for candidate in channel]
         low, high = min(raw), max(raw)
         for rank, candidate in enumerate(channel, start=1):
-            confidence = 1.0 if high == low else (candidate.score - low) / (high - low)
+            if candidate.channel == "dense":
+                absolute = max(0.0, min(1.0, (candidate.score + 1.0) / 2.0))
+            else:
+                positive = max(0.0, candidate.score)
+                absolute = positive / (1.0 + positive)
+            relative = absolute if high == low else (candidate.score - low) / (high - low)
+            confidence = 0.5 * absolute + 0.5 * relative
             rank_confidence = rrf_k / (rrf_k + rank)
             weight = channel_weights.get(candidate.channel, 1.0)
-            scores[candidate.chunk_id] += weight * (0.75 * confidence + 0.25 * rank_confidence)
+            scores[candidate.chunk_id] += weight * (
+                0.75 * confidence + 0.25 * rank_confidence * absolute
+            )
             candidates.setdefault(candidate.chunk_id, candidate)
             seen_channels[candidate.chunk_id].add(candidate.channel)
     ordered = sorted(scores, key=lambda chunk_id: (-scores[chunk_id], chunk_id))
@@ -194,8 +202,13 @@ class HybridSearchService:
                 )
                 return result[0], result[1], warnings
             except TransientProviderError:
-                warnings.extend(("BM25_RETRIEVAL_UNAVAILABLE", "DENSE_RETRIEVAL_UNAVAILABLE"))
-                return (), (), warnings
+                warnings.append("DENSE_RETRIEVAL_UNAVAILABLE")
+                try:
+                    with self.tracer.span("rag.retrieval.bm25"):
+                        return self.index.search_bm25(query, context, self.bm25_top_k), (), warnings
+                except TransientProviderError:
+                    warnings.append("BM25_RETRIEVAL_UNAVAILABLE")
+                    return (), (), warnings
 
         def dense_path() -> Sequence[IndexCandidate]:
             with self.tracer.span("rag.retrieval.embedding"):
@@ -314,12 +327,20 @@ class HybridSearchService:
             )
             if parent is not None and not self._currently_authorized(parent, context):
                 parent = None
+            generation_parts: list[str] = []
+            section_path = str(chunk.locator.get("section_path", "")).strip()
+            if section_path and section_path != "root":
+                generation_parts.append(f"SECTION_PATH: {section_path}")
+            generation_parts.append(chunk.retrieval_text)
+            if parent is not None and parent.retrieval_text != chunk.retrieval_text:
+                generation_parts.append(f"PARENT_CONTEXT: {parent.retrieval_text}")
+            generation_context = "\n".join(generation_parts)
             hits.append(
                 SearchHit(
                     chunk_id=chunk.chunk_id,
                     document_id=chunk.document_id,
                     document_version_id=chunk.document_version_id,
-                    text=chunk.display_text,
+                    text=generation_context,
                     locator=chunk.locator,
                     fused_score=score,
                     rerank_position=len(hits) + 1,
@@ -330,6 +351,9 @@ class HybridSearchService:
                     valid_to_epoch=chunk.valid_to_epoch,
                     permission_revision=chunk.permission_revision,
                     current_version=chunk.current_version,
+                    display_text=chunk.display_text,
+                    retrieval_text=chunk.retrieval_text,
+                    generation_context=generation_context,
                 )
             )
             if len(hits) >= requested:

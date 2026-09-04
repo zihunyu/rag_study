@@ -62,6 +62,46 @@ def test_mysql_adapter_and_migrations_are_explicit_and_secret_safe(tmp_path: Pat
     assert "database" not in captured
 
 
+def test_mysql_pool_reuses_healthy_connections_and_closes_them_explicitly(tmp_path: Path) -> None:
+    class _PoolConnection:
+        def __init__(self) -> None:
+            self.rollbacks = 0
+            self.pings = 0
+            self.closed = 0
+
+        def rollback(self) -> None:
+            self.rollbacks += 1
+
+        def ping(self, *, reconnect: bool) -> None:
+            assert reconnect is True
+            self.pings += 1
+
+        def close(self) -> None:
+            self.closed += 1
+
+    created: list[_PoolConnection] = []
+
+    def factory(**kwargs):
+        del kwargs
+        connection = _PoolConnection()
+        created.append(connection)
+        return connection
+
+    adapter = MySQLControlPlaneAdapter(_settings(tmp_path), connection_factory=factory)
+    first = adapter.connect()
+    first.close()
+    first.close()
+    second = adapter.connect()
+    second.close()
+
+    assert len(created) == 1
+    assert created[0].rollbacks == 2
+    assert created[0].pings == 1
+    assert created[0].closed == 0
+    adapter.close()
+    assert created[0].closed == 1
+
+
 class _FakeRedis:
     def __init__(self) -> None:
         self.values: dict[str, str] = {}

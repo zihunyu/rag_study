@@ -26,6 +26,24 @@ def build_assurance() -> dict[str, object]:
         for path, details in lock.get("packages", {}).items()
         if path
     ]
+    components = [
+        {
+            "type": "library",
+            "group": "pypi",
+            "name": str(item["name"]),
+            "version": str(item["version"]),
+            "purl": f"pkg:pypi/{str(item['name']).casefold()}@{item['version']}",
+        }
+        for item in python_packages
+    ] + [
+        {
+            "type": "library",
+            "group": "npm",
+            "name": str(item["path"]).removeprefix("node_modules/"),
+            "version": str(item["version"]),
+        }
+        for item in npm_packages
+    ]
     return {
         "revision": "offline-assurance:g5-v1",
         "python_sbom": sorted(python_packages, key=lambda item: str(item["name"]).casefold()),
@@ -36,6 +54,13 @@ def build_assurance() -> dict[str, object]:
         "docker_used": False,
         "simulated": True,
         "real_acceptance": False,
+        "cyclonedx_sbom": {
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.6",
+            "version": 1,
+            "metadata": {"component": {"type": "application", "name": "enterprise-rag-kb"}},
+            "components": components,
+        },
     }
 
 
@@ -49,6 +74,12 @@ def main() -> int:
         output = args.output if args.output.is_absolute() else ROOT / args.output
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(rendered, encoding="utf-8")
+        sbom_output = output.with_name("software-bom.cdx.json")
+        sbom_output.write_text(
+            json.dumps(report["cyclonedx_sbom"], ensure_ascii=False, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
     print(
         json.dumps(
             {

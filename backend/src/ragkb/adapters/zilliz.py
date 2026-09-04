@@ -344,6 +344,19 @@ class MilvusHybridAdapter:
         except MilvusException as error:
             raise self._provider_error(error) from error
 
+    def delete_version_projection(self, document_id: str, version_id: str) -> None:
+        try:
+            self._connected().delete(
+                collection_name=vector_collection_name(self._settings),
+                filter=(
+                    f"document_id == {_quoted(document_id)} and "
+                    f"document_version_id == {_quoted(version_id)}"
+                ),
+                timeout=vector_timeout(self._settings),
+            )
+        except MilvusException as error:
+            raise self._provider_error(error) from error
+
     def set_version_security_projection(
         self, document_id: str, version_id: str, projection: SecurityProjection
     ) -> None:

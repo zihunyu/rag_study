@@ -13,7 +13,7 @@ from ragkb.application.tracing import InMemoryTracer, TracerPort
 from ragkb.config import EnvSettings
 from ragkb.contracts.ports import EmbeddingPort, RetrievalProjectionPort
 from ragkb.document_processing.chunking import ChunkingResult
-from ragkb.domain.errors import VectorBatchWriteError
+from ragkb.domain.errors import IngestionCancelled, VectorBatchWriteError
 from ragkb.domain.retrieval import AuthorizedChunk, SecurityProjection
 
 
@@ -204,9 +204,12 @@ class ZillizSafeProjectionWriter:
         records: Sequence[Mapping[str, Any]],
         *,
         on_batch_confirmed: (Callable[[int, Sequence[Mapping[str, Any]]], None] | None) = None,
+        before_batch: Callable[[int], None] | None = None,
     ) -> tuple[str, ...]:
         inserted: list[str] = []
         for batch_number, batch in enumerate(self._batches(records), start=1):
+            if before_batch is not None:
+                before_batch(batch_number)
             self._insert_batch(batch, batch_number)
             if on_batch_confirmed is not None:
                 on_batch_confirmed(batch_number, batch)
@@ -247,9 +250,12 @@ class ZillizChunkIndexingSink:
         space_id: str,
         permission_revision: int = 1,
         security_projection: SecurityProjection | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> None:
         vectors: list[Sequence[float]] = []
         for start in range(0, len(result.chunks), self.settings.embedding_batch_size):
+            if cancel_check is not None and cancel_check():
+                raise IngestionCancelled("INGEST_CANCELLED")
             batch = result.chunks[start : start + self.settings.embedding_batch_size]
             with self.tracer.span(
                 "document.embedding.batch",
@@ -317,8 +323,14 @@ class ZillizChunkIndexingSink:
                 else None
             )
             try:
+
+                def check_cancelled(_batch_number: int) -> None:
+                    if cancel_check is not None and cancel_check():
+                        raise IngestionCancelled("INGEST_CANCELLED")
+
                 writer.insert_records(
                     records,
+                    before_batch=check_cancelled if cancel_check is not None else None,
                     on_batch_confirmed=(
                         (
                             lambda batch_number, batch: saga.confirm_batch(
@@ -333,6 +345,11 @@ class ZillizChunkIndexingSink:
                         else None
                     ),
                 )
+            except IngestionCancelled:
+                self._cleanup_cancelled(document_id, result.chunks[0].version_id)
+                if saga is not None and index_job_id is not None:
+                    saga.fail(index_job_id, "INDEX_CANCELLED")
+                raise
             except Exception:
                 if saga is not None and index_job_id is not None:
                     saga.fail(index_job_id, "VECTOR_BATCH_WRITE_FAILED")
@@ -367,7 +384,13 @@ class ZillizChunkIndexingSink:
                 )
             )
         try:
+            if cancel_check is not None and cancel_check():
+                self._cleanup_cancelled(document_id, result.chunks[0].version_id)
+                raise IngestionCancelled("INGEST_CANCELLED")
             self.control_plane.upsert_chunks(projections)
+            if cancel_check is not None and cancel_check():
+                self._cleanup_cancelled(document_id, result.chunks[0].version_id)
+                raise IngestionCancelled("INGEST_CANCELLED")
             if saga is not None and index_job_id is not None:
                 for batch_number, record_batch in enumerate(writer._batches(records), start=1):
                     saga.confirm_batch(
@@ -378,7 +401,17 @@ class ZillizChunkIndexingSink:
                         control=True,
                     )
                 saga.mark_ready(index_job_id)
+        except IngestionCancelled:
+            if saga is not None and index_job_id is not None:
+                saga.fail(index_job_id, "INDEX_CANCELLED")
+            raise
         except Exception:
             if saga is not None and index_job_id is not None:
                 saga.fail(index_job_id, "CONTROL_PROJECTION_WRITE_FAILED")
             raise
+
+    def _cleanup_cancelled(self, document_id: str, version_id: str) -> None:
+        delete_vector = getattr(self.adapter, "delete_version_projection", None)
+        if callable(delete_vector):
+            delete_vector(document_id, version_id)
+        self.control_plane.delete_version_projection(document_id, version_id)

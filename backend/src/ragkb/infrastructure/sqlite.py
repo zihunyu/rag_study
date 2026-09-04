@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_metadata (
@@ -136,6 +136,14 @@ CREATE TABLE IF NOT EXISTS local_search_index (
 );
 CREATE INDEX IF NOT EXISTS idx_local_search_generation
     ON local_search_index(index_generation_id);
+CREATE TABLE IF NOT EXISTS local_index_generations (
+    generation_id TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL,
+    manifest_sha256 TEXT NOT NULL,
+    snapshot_path TEXT,
+    retired INTEGER NOT NULL DEFAULT 0,
+    updated_at REAL NOT NULL
+);
 CREATE VIRTUAL TABLE IF NOT EXISTS local_search_fts USING fts5(
     chunk_id UNINDEXED,
     retrieval_terms,

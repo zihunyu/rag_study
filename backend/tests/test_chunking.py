@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from ragkb.document_processing.chunking import (
     ChunkingConfig,
+    EmbeddingSemanticBoundaryScorer,
     SemanticChunker,
     TokenAwareChunker,
     TokenizerArtifact,
@@ -134,3 +135,94 @@ def test_table_chunks_repeat_the_reviewed_header_context() -> None:
 
     assert result.chunks
     assert "TABLE_HEADER: 地区 | 住宿上限" in result.chunks[0].retrieval_text
+
+
+def test_semantic_chunker_preserves_types_spans_table_context_and_tokenizer() -> None:
+    class _Tokenizer:
+        revision = "pinned-test-tokenizer:sha256"
+
+        def spans(self, text: str) -> tuple[tuple[int, int], ...]:
+            return tuple(
+                (index, index + 1)
+                for index, character in enumerate(text)
+                if not character.isspace()
+            )
+
+    nodes = (
+        CanonicalNode(
+            "table",
+            None,
+            NodeType.TABLE,
+            "北京 | 600 元",
+            "北京 | 600 元",
+            SourceLocator(page=2),
+            {"table_header": "地区 | 住宿上限"},
+        ),
+        CanonicalNode(
+            "list",
+            None,
+            NodeType.LIST,
+            "需要经理审批",
+            "需要经理审批",
+            SourceLocator(page=3),
+        ),
+    )
+    document = CanonicalDocument(
+        "semantic-structure",
+        "zh",
+        "pdf",
+        nodes,
+        "parser",
+        "normalizer",
+        "b" * 64,
+    )
+    result = SemanticChunker(
+        lambda _left, _right: 1.0,
+        threshold=0.5,
+        config=ChunkingConfig(
+            strategy="semantic", target_tokens=20, overlap_tokens=2, min_tokens=1, max_tokens=20
+        ),
+        tokenizer=_Tokenizer(),
+    ).chunk(document, tenant_id="tenant")
+
+    assert [chunk.kind for chunk in result.chunks] == ["table", "list"]
+    assert result.chunks[0].tokenizer_id == "pinned-test-tokenizer:sha256"
+    assert result.chunks[0].locator.page == 2
+    assert result.chunks[1].locator.page == 3
+    assert result.chunks[0].metadata["source_spans"] == [{"page": 2}]
+    assert "TABLE_HEADER: 地区 | 住宿上限" in result.chunks[0].retrieval_text
+
+
+def test_semantic_boundary_embeddings_are_preloaded_in_one_batch() -> None:
+    class _Embedding:
+        revision = "batch-embedding:v1"
+        dimension = 2
+
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, ...]] = []
+
+        def embed(self, texts):
+            values = tuple(texts)
+            self.calls.append(values)
+            return tuple((1.0, float(index + 1)) for index, _ in enumerate(values))
+
+    document = _document("policy alpha")
+    extra = CanonicalNode(
+        "paragraph-extra",
+        None,
+        NodeType.PARAGRAPH,
+        "policy beta",
+        "policy beta",
+        SourceLocator(page=1),
+    )
+    document = CanonicalDocument(**{**document.__dict__, "nodes": (*document.nodes, extra)})
+    embedding = _Embedding()
+
+    SemanticChunker(
+        EmbeddingSemanticBoundaryScorer(embedding),
+        config=ChunkingConfig(
+            strategy="semantic", target_tokens=20, overlap_tokens=2, min_tokens=1, max_tokens=20
+        ),
+    ).chunk(document, tenant_id="tenant")
+
+    assert embedding.calls == [("policy alpha", "policy beta")]

@@ -242,6 +242,24 @@ class MySQLRetrievalControlPlane:
         finally:
             connection.close()
 
+    def delete_version_projection(self, document_id: str, version_id: str) -> None:
+        connection = self.control.connect()
+        try:
+            cursor = connection.cursor()
+            cursor.execute(
+                """
+                DELETE FROM retrieval_chunk_projections
+                WHERE document_id=%s AND document_version_id=%s
+                """,
+                (document_id, version_id),
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
     def set_version_security_projection(
         self, document_id: str, version_id: str, projection: SecurityProjection
     ) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Iterator
@@ -284,6 +285,10 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
     )
     for provider_transport in runtime.provider_transports:
         app.router.add_event_handler("shutdown", provider_transport.close)
+    mysql_control = getattr(runtime.repository, "control", None)
+    close_mysql_pool = getattr(mysql_control, "close", None)
+    if callable(close_mysql_pool):
+        app.router.add_event_handler("shutdown", close_mysql_pool)
     oidc_decoder = getattr(runtime.authenticator, "verified_decoder", None)
     close_oidc_decoder = getattr(oidc_decoder, "close", None)
     if callable(close_oidc_decoder):
@@ -382,33 +387,101 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
     async def malware(request: Request, error: MalwareRejectedError) -> JSONResponse:
         return _error(request, error.reason_code, "file was rejected by malware policy", 422)
 
+    def cached_runtime_health() -> tuple[dict[str, object], list[str]]:
+        dependencies: dict[str, object] = {}
+        degraded: list[str] = []
+        free_bytes = shutil.disk_usage(runtime.storage.root).free
+        minimum_bytes = int(runtime.settings.local_storage_min_free_gb * 1024**3)
+        dependencies["storage"] = {
+            "state": "ready" if free_bytes >= minimum_bytes else "insufficient_space",
+            "free_bytes": free_bytes,
+            "minimum_free_bytes": minimum_bytes,
+        }
+        if free_bytes < minimum_bytes:
+            degraded.append("LOCAL_STORAGE_FREE_SPACE_LOW")
+        roles = ("embedding", "reranker", "generator", "verifier")
+        providers: dict[str, object] = {}
+        for role, transport in zip(roles, runtime.provider_transports, strict=False):
+            snapshot = transport.health_snapshot()
+            providers[role] = snapshot
+            if snapshot["circuit_open"]:
+                degraded.append(f"{role.upper()}_CIRCUIT_OPEN")
+        dependencies["providers"] = providers or {"state": "local_not_applicable"}
+        return dependencies, degraded
+
     @app.get("/health/live", response_model=HealthResponse, tags=["health"])
     async def live() -> HealthResponse:
         return HealthResponse(
-            status="ok", runtime="g3_native_python", real_service_acceptance=False
+            status="ok",
+            runtime="g3_native_python",
+            real_service_acceptance=runtime.search_service.real_acceptance,
         )
 
     @app.get("/health/ready", response_model=HealthResponse, tags=["health"])
-    async def ready() -> HealthResponse:
+    async def ready(response: Response) -> HealthResponse:
+        dependencies, degraded = cached_runtime_health()
         if runtime.settings.rag_runtime_profile == "production":
-            runtime.repository.list_spaces()
-            runtime.queue.get("__readiness_probe__")
-            release = runtime.retrieval_release.current_release(runtime.tenant_id, runtime.space_id)
-            probe_context = SearchContext(
-                runtime.tenant_id,
-                (runtime.space_id,),
-                (),
-                0,
-                int(time.time()),
-                release.active_generation_id,
-                release.active_permission_revision,
-                release.security_watermark,
-            )
-            runtime.search_service.index.observed_security_watermark(probe_context)
+            try:
+                runtime.repository.list_spaces()
+                dependencies["mysql"] = "ready"
+            except Exception:
+                dependencies["mysql"] = "unavailable"
+                degraded.append("MYSQL_UNAVAILABLE")
+            try:
+                runtime.queue.get("__readiness_probe__")
+                dependencies["queue"] = "ready"
+            except Exception:
+                dependencies["queue"] = "unavailable"
+                degraded.append("REDIS_QUEUE_UNAVAILABLE")
+            try:
+                release = runtime.retrieval_release.current_release(
+                    runtime.tenant_id, runtime.space_id
+                )
+                probe_context = SearchContext(
+                    runtime.tenant_id,
+                    (runtime.space_id,),
+                    (),
+                    0,
+                    int(time.time()),
+                    release.active_generation_id,
+                    release.active_permission_revision,
+                    release.security_watermark,
+                )
+                runtime.search_service.index.observed_security_watermark(probe_context)
+                dependencies["retrieval_release"] = "ready"
+            except Exception:
+                dependencies["retrieval_release"] = "unavailable"
+                degraded.append("RETRIEVAL_RELEASE_UNAVAILABLE")
         else:
             runtime.database.initialize()
+            dependencies["sqlite"] = "ready"
+        if degraded:
+            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return HealthResponse(
-            status="ready", runtime="g3_native_python", real_service_acceptance=False
+            status="ready" if not degraded else "not_ready",
+            runtime="g3_native_python",
+            real_service_acceptance=runtime.search_service.real_acceptance,
+            dependencies=dependencies,
+            degraded_reasons=degraded,
+        )
+
+    @app.get("/status/acceptance", response_model=HealthResponse, tags=["health"])
+    async def acceptance_status() -> HealthResponse:
+        return HealthResponse(
+            status="accepted" if runtime.search_service.real_acceptance else "not_accepted",
+            runtime="g3_native_python",
+            real_service_acceptance=runtime.search_service.real_acceptance,
+        )
+
+    @app.get("/status/degraded", response_model=HealthResponse, tags=["health"])
+    async def degraded_status() -> HealthResponse:
+        dependencies, degraded = cached_runtime_health()
+        return HealthResponse(
+            status="degraded" if degraded else "ok",
+            runtime="g3_native_python",
+            real_service_acceptance=runtime.search_service.real_acceptance,
+            dependencies=dependencies,
+            degraded_reasons=degraded,
         )
 
     @app.get("/api/v1/spaces", response_model=list[SpaceResponse], tags=["spaces"])
@@ -857,6 +930,9 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
                     document_id=hit.document_id,
                     document_version_id=hit.document_version_id,
                     text=hit.text,
+                    display_text=hit.display_text,
+                    retrieval_text=hit.retrieval_text,
+                    generation_context=hit.generation_context,
                     locator=hit.locator,
                     fused_score=hit.fused_score,
                     rerank_position=hit.rerank_position,
@@ -1018,7 +1094,9 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
             trace_id=_request_id(request),
         )
         set_current_version = getattr(runtime.repository, "set_document_current_version", None)
-        if callable(set_current_version):
+        if callable(set_current_version) and not getattr(
+            runtime.lifecycle_store, "durable_publication_intents", False
+        ):
             set_current_version(document_id, version_id)
         return _lifecycle_response(record)
 
@@ -1046,7 +1124,9 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
             trace_id=_request_id(request),
         )
         set_current_version = getattr(runtime.repository, "set_document_current_version", None)
-        if callable(set_current_version):
+        if callable(set_current_version) and not getattr(
+            runtime.lifecycle_store, "durable_publication_intents", False
+        ):
             set_current_version(document_id, body.version_id)
         return _lifecycle_response(record)
 

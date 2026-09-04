@@ -60,3 +60,7 @@ class RetrievalFailClosed(RAGError):
 
 class GenerationUnavailable(TransientProviderError):
     pass
+
+
+class IngestionCancelled(RAGError):
+    """Cooperative cancellation observed between durable ingestion batches."""

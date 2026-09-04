@@ -1,0 +1,10 @@
+Enterprise RAG Knowledge Base
+Copyright (c) 2026 Project contributors. All rights reserved.
+
+This distribution includes third-party software. Dependency names and pinned
+versions are recorded in requirements.lock and frontend/package-lock.json.
+The container assurance workflow generates a CycloneDX SBOM for every built
+image. Third-party components remain subject to their respective licenses.
+
+Model, tokenizer, evaluation-data, and business-document licenses are not
+granted by this repository and must be reviewed before production deployment.

@@ -42,4 +42,4 @@ def test_schema_v1_database_is_migrated_to_revisioned_chunk_contract(tmp_path: P
             "SELECT value FROM schema_metadata WHERE key = 'schema_version'"
         ).fetchone()
     assert {"kind", "chunking_revision", "tokenizer_id"}.issubset(columns)
-    assert int(revision["value"]) == SCHEMA_VERSION == 15
+    assert int(revision["value"]) == SCHEMA_VERSION == 16

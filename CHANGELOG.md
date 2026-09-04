@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-09-04
+
+- Normalize production MySQL aggregate persistence with row-level optimistic concurrency and pooling.
+- Make publication fail closed through durable switching intents and a transactional outbox finalization.
+- Preserve semantic chunk structure/tokenizer context and carry table headers into generation evidence.
+- Add ANN manifest/LRU retirement, calibrated fusion, cooperative Worker cancellation, and truthful health.
+- Harden all containers and supply-chain artifacts with digests, non-root execution, CycloneDX and hashes.
+
 ## Unreleased
 
 - 增加真实本地 BM25/余弦检索、Token/结构化分片和持久索引链路。

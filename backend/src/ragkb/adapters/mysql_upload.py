@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Callable
+from copy import deepcopy
 from typing import Any
 
 from ragkb.adapters.mysql_control import MySQLControlPlaneAdapter
+from ragkb.adapters.mysql_entity_store import EntityMap, EntityRow, MySQLNormalizedEntityStore
 from ragkb.contracts.lifecycle import PublicationReadiness
 from ragkb.domain.ids import new_uuid7
 from ragkb.domain.state_machines import (
@@ -40,7 +43,7 @@ def _empty_state() -> dict[str, Any]:
 
 
 class MySQLUploadRepository:
-    revision = "mysql-upload-aggregate:g4-v1"
+    revision = "mysql-upload-normalized:g4-v3"
     cleanable_partitions = frozenset({"original", "artifacts", "quarantine", "temp"})
 
     def __init__(
@@ -52,14 +55,72 @@ class MySQLUploadRepository:
         self.control = control
         self.tenant_id = tenant_id
         self.generation_id = generation_id
+        self._entities = MySQLNormalizedEntityStore("upload_entities_v3", tenant_id)
 
-    def _load(self, cursor: Any, *, locked: bool = False) -> dict[str, Any]:
-        statement = (
-            "SELECT state_json FROM upload_state_v2 WHERE tenant_id=%s FOR UPDATE"
-            if locked
-            else "SELECT state_json FROM upload_state_v2 WHERE tenant_id=%s"
+    @staticmethod
+    def _hashed_id(kind: str, key: str) -> str:
+        return hashlib.sha256(f"{kind}:{key}".encode()).hexdigest()
+
+    @classmethod
+    def _to_entities(cls, state: dict[str, Any]) -> EntityMap:
+        entities: EntityMap = {}
+        for collection in ("spaces", "sessions", "documents", "versions", "quality", "candidates"):
+            for key, value in state[collection].items():
+                entities[(collection, str(key))] = EntityRow(
+                    str(key),
+                    str(value.get("document_id")) if value.get("document_id") else None,
+                    int(value.get("version_no", 0)),
+                    deepcopy(value),
+                )
+        for version_id, reviews in state["reviews"].items():
+            for ordinal, value in enumerate(reviews):
+                entity_id = str(value["review_id"])
+                entities[("reviews", entity_id)] = EntityRow(
+                    entity_id, str(version_id), ordinal, deepcopy(value)
+                )
+        for document_id, lineage in state["lineage"].items():
+            for ordinal, value in enumerate(lineage):
+                canonical = json.dumps(value, sort_keys=True, separators=(",", ":"))
+                entity_id = cls._hashed_id("lineage", f"{document_id}:{ordinal}:{canonical}")
+                entities[("lineage", entity_id)] = EntityRow(
+                    entity_id, str(document_id), ordinal, deepcopy(value)
+                )
+        for key, value in state["idempotency"].items():
+            entity_id = cls._hashed_id("idempotency", str(key))
+            entities[("idempotency", entity_id)] = EntityRow(str(key), None, 0, deepcopy(value))
+        return entities
+
+    @staticmethod
+    def _from_entities(entities: EntityMap) -> dict[str, Any]:
+        state = _empty_state()
+        for (collection, _), row in entities.items():
+            value = deepcopy(row.payload)
+            if collection in {
+                "spaces",
+                "sessions",
+                "documents",
+                "versions",
+                "quality",
+                "candidates",
+            }:
+                state[collection][row.logical_key] = value
+            elif collection == "reviews" and row.parent_id is not None:
+                state["reviews"].setdefault(row.parent_id, []).append((row.ordinal, value))
+            elif collection == "lineage" and row.parent_id is not None:
+                state["lineage"].setdefault(row.parent_id, []).append((row.ordinal, value))
+            elif collection == "idempotency":
+                state["idempotency"][row.logical_key] = value
+        for collection in ("reviews", "lineage"):
+            state[collection] = {
+                key: [item for _, item in sorted(values, key=lambda pair: pair[0])]
+                for key, values in state[collection].items()
+            }
+        return state
+
+    def _load_legacy(self, cursor: Any) -> dict[str, Any]:
+        cursor.execute(
+            "SELECT state_json FROM upload_state_v2 WHERE tenant_id=%s", (self.tenant_id,)
         )
-        cursor.execute(statement, (self.tenant_id,))
         row = cursor.fetchone()
         if row is None:
             return _empty_state()
@@ -73,17 +134,11 @@ class MySQLUploadRepository:
         connection = self.control.connect()
         try:
             cursor = connection.cursor()
-            state = self._load(cursor, locked=True)
+            before = self._entities.load(cursor)
+            state = self._from_entities(before) if before else self._load_legacy(cursor)
             result = callback(state)
-            payload = json.dumps(state, ensure_ascii=False, sort_keys=True)
-            cursor.execute(
-                """
-                INSERT INTO upload_state_v2(tenant_id, state_json, updated_at)
-                VALUES (%s, %s, NOW(6)) AS incoming
-                ON DUPLICATE KEY UPDATE state_json=incoming.state_json, updated_at=NOW(6)
-                """,
-                (self.tenant_id, payload),
-            )
+            self._entities.sync(cursor, before, self._to_entities(state))
+            cursor.execute("DELETE FROM upload_state_v2 WHERE tenant_id=%s", (self.tenant_id,))
             connection.commit()
             return result
         except Exception:
@@ -95,7 +150,9 @@ class MySQLUploadRepository:
     def _read(self) -> dict[str, Any]:
         connection = self.control.connect()
         try:
-            return self._load(connection.cursor())
+            cursor = connection.cursor()
+            entities = self._entities.load(cursor)
+            return self._from_entities(entities) if entities else self._load_legacy(cursor)
         finally:
             connection.close()
 

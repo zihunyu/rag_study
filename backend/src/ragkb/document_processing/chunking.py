@@ -216,6 +216,7 @@ class TokenAwareChunker:
                         chunking_revision=self.revision,
                         tokenizer_id=self.tokenizer_id,
                         metadata={
+                            **node.metadata,
                             "chunk_index": len(children),
                             "node_id": node.node_id,
                             "section_path": section_path,
@@ -307,20 +308,45 @@ class SemanticChunker(TokenAwareChunker):
         heading = ""
         boundary_indexes: list[int] = []
 
+        preload = getattr(self.boundary_score, "preload", None)
+        if callable(preload):
+            preload(
+                tuple(node.display_text for node in nodes if node.node_type is not NodeType.HEADING)
+            )
+
+        def compatible(left: CanonicalNode, right: CanonicalNode) -> bool:
+            if left.node_type != right.node_type:
+                return False
+            if left.node_type in {NodeType.TABLE, NodeType.IMAGE, NodeType.AUDIO}:
+                return False
+            return bool(
+                left.locator.page == right.locator.page
+                and left.locator.slide == right.locator.slide
+                and left.locator.sheet == right.locator.sheet
+                and left.parent_node_id == right.parent_node_id
+            )
+
         def flush() -> None:
             nonlocal current
             if not current:
                 return
             text = "\n".join(item.original_text for item in current)
+            metadata = {
+                **(current[0].metadata if len(current) == 1 else {}),
+                "section_path": heading or "root",
+                "heading": heading,
+                "source_node_ids": [item.node_id for item in current],
+                "source_spans": [item.locator.to_dict() for item in current],
+            }
             merged_nodes.append(
                 CanonicalNode(
                     node_id=_stable_id("semantic-node", *(item.node_id for item in current)),
-                    parent_node_id=None,
-                    node_type=NodeType.PARAGRAPH,
+                    parent_node_id=current[0].parent_node_id,
+                    node_type=current[0].node_type,
                     original_text=text,
                     display_text=text,
                     locator=current[0].locator,
-                    metadata={"section_path": heading or "root", "heading": heading},
+                    metadata=metadata,
                 )
             )
             current = []
@@ -334,19 +360,24 @@ class SemanticChunker(TokenAwareChunker):
             should_split = bool(
                 current
                 and (
-                    count_tokens(
-                        "\n".join(item.original_text for item in (*current, node)),
-                        self.tokenizer,
+                    not compatible(current[-1], node)
+                    or (
+                        count_tokens(
+                            "\n".join(item.original_text for item in (*current, node)),
+                            self.tokenizer,
+                        )
+                        > self.config.target_tokens
+                        or self.boundary_score(current[-1].display_text, node.display_text)
+                        < self.threshold
                     )
-                    > self.config.target_tokens
-                    or self.boundary_score(current[-1].display_text, node.display_text)
-                    < self.threshold
                 )
             )
             if should_split:
                 flush()
                 boundary_indexes.append(index)
             current.append(node)
+            if node.node_type in {NodeType.TABLE, NodeType.IMAGE, NodeType.AUDIO}:
+                flush()
         flush()
         semantic_document = replace(document, nodes=tuple(merged_nodes))
         delegate = TokenAwareChunker(
@@ -357,10 +388,15 @@ class SemanticChunker(TokenAwareChunker):
                 min_tokens=self.config.min_tokens,
                 max_tokens=self.config.max_tokens,
                 parent_max_tokens=self.config.parent_max_tokens,
-            )
+            ),
+            tokenizer=self.tokenizer,
         )
         result = delegate.chunk(semantic_document, tenant_id=tenant_id)
-        revision = f"semantic:{self.threshold}:v1"
+        scorer_revision = str(getattr(self.boundary_score, "revision", "callable-v1"))
+        revision = (
+            f"semantic:{scorer_revision}:{self.tokenizer.revision}:"
+            f"{self.threshold}:{self.config.target_tokens}:{self.config.max_tokens}:v2"
+        )
         enriched = tuple(
             replace(
                 item,
@@ -378,7 +414,18 @@ class EmbeddingSemanticBoundaryScorer:
 
     def __init__(self, embedding: EmbeddingPort) -> None:
         self.embedding = embedding
+        self.revision = f"embedding-boundary:{embedding.revision}:v2"
         self._cache: dict[str, tuple[float, ...]] = {}
+
+    def preload(self, texts: Sequence[str]) -> None:
+        missing = tuple(dict.fromkeys(text for text in texts if text not in self._cache))
+        if not missing:
+            return
+        vectors = self.embedding.embed(missing)
+        if len(vectors) != len(missing):
+            raise ValueError("semantic scorer embedding count mismatch")
+        for text, vector in zip(missing, vectors, strict=True):
+            self._cache[text] = tuple(map(float, vector))
 
     def _vector(self, text: str) -> tuple[float, ...]:
         cached = self._cache.get(text)

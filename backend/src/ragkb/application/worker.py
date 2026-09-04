@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any, Protocol
 
 from ragkb.application.tracing import InMemoryTracer, TracerPort
 from ragkb.contracts.jobs import PersistentJobQueuePort
 from ragkb.contracts.ports import ChunkerPort, ContentStoragePort, ParserRouterPort, ParsingDeferred
 from ragkb.contracts.uploads import UploadRepositoryPort
+from ragkb.domain.errors import (
+    ConfigurationError,
+    IngestionCancelled,
+    InvalidProviderResponse,
+    SchemaMismatch,
+    TransientProviderError,
+)
 from ragkb.domain.retrieval import SecurityProjection
 from ragkb.domain.state_machines import JobState
 from ragkb.domain.validation import DocumentQualityReport
@@ -24,6 +32,7 @@ class LocalIndexingSinkPort(Protocol):
         space_id: str,
         permission_revision: int = 1,
         security_projection: SecurityProjection | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> None: ...
 
 
@@ -63,6 +72,7 @@ class LocalIngestionWorker:
         version = self.repository.get_version(version_id)
         source_format = str(job.payload["source_format"])
         source = self.storage.path_for("original", str(version["original_key"]))
+        artifact_key: str | None = None
         try:
             with self.tracer.span("document.parse", {"source_format": source_format}):
                 document = self.parser_router.parse(source_format, source, version_id)
@@ -107,6 +117,11 @@ class LocalIngestionWorker:
                         tenant_id=str(job.payload["tenant_id"]),
                         space_id=str(job.payload["space_id"]),
                         security_projection=SecurityProjection.unapproved(permission_revision=1),
+                        cancel_check=lambda: (
+                            self.queue.heartbeat(
+                                job.id, self.worker_id, lease_seconds=self.lease_seconds
+                            ).cancel_requested
+                        ),
                     )
                     mark_index_ready = getattr(self.repository, "mark_index_ready", None)
                     if callable(mark_index_ready):
@@ -116,15 +131,28 @@ class LocalIngestionWorker:
             if completed.state is JobState.CANCELLED:
                 self.storage.delete("artifacts", artifact_key)
                 self.repository.mark_version_cancelled(version_id)
+        except IngestionCancelled:
+            if artifact_key is not None:
+                self.storage.delete("artifacts", artifact_key)
+            self.repository.mark_version_cancelled(version_id)
+            self.queue.acknowledge_cancel(job.id, self.worker_id)
         except ParsingDeferred as error:
             self.repository.mark_version_quarantined(version_id, self.parser_router.revision)
             self.queue.fail(job.id, self.worker_id, error.code, retryable=False)
-        except Exception:
+        except TransientProviderError:
             failed = self.queue.fail(
-                job.id, self.worker_id, "INGEST_INTERNAL", retryable=True, retry_delay=1
+                job.id, self.worker_id, "INGEST_TRANSIENT", retryable=True, retry_delay=1
             )
             if failed.state is JobState.FAILED_FINAL:
                 self.repository.mark_version_failed(version_id, self.parser_router.revision)
+            raise
+        except (InvalidProviderResponse, ConfigurationError, SchemaMismatch, ValueError, KeyError):
+            self.queue.fail(job.id, self.worker_id, "INGEST_PERMANENT", retryable=False)
+            self.repository.mark_version_failed(version_id, self.parser_router.revision)
+            raise
+        except Exception:
+            self.queue.fail(job.id, self.worker_id, "INGEST_UNEXPECTED", retryable=False)
+            self.repository.mark_version_failed(version_id, self.parser_router.revision)
             raise
         return True
 

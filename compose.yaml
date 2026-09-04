@@ -6,6 +6,10 @@ services:
     env_file: config/.env
     ports: ["8000:8000"]
     volumes: ["rag-data:/app/data/storage"]
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp"]
 
   worker:
     build:
@@ -13,10 +17,18 @@ services:
       dockerfile: Dockerfile.worker
     env_file: config/.env
     volumes: ["rag-data:/app/data/storage"]
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp"]
 
   frontend:
     build: frontend
-    ports: ["5173:80"]
+    ports: ["5173:8080"]
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp", "/var/cache/nginx", "/var/run"]
 
 volumes:
   rag-data:

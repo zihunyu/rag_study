@@ -170,6 +170,16 @@ class SQLiteRetrievalControlPlane:
                 "DELETE FROM retrieval_projections WHERE document_id = ?", (document_id,)
             )
 
+    def delete_version_projection(self, document_id: str, version_id: str) -> None:
+        with self.database.transaction(immediate=True) as connection:
+            connection.execute(
+                """
+                DELETE FROM retrieval_projections
+                WHERE document_id = ? AND document_version_id = ?
+                """,
+                (document_id, version_id),
+            )
+
     def set_version_security_projection(
         self, document_id: str, version_id: str, projection: SecurityProjection
     ) -> None:

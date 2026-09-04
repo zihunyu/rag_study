@@ -158,6 +158,9 @@ class SearchHitResponse(StrictModel):
     document_id: str
     document_version_id: str
     text: str
+    display_text: str
+    retrieval_text: str
+    generation_context: str
     locator: dict[str, Any]
     fused_score: float
     rerank_position: int
@@ -258,6 +261,8 @@ class HealthResponse(StrictModel):
     status: str
     runtime: str
     real_service_acceptance: bool
+    dependencies: dict[str, Any] = Field(default_factory=dict)
+    degraded_reasons: list[str] = Field(default_factory=list)
 
 
 class ErrorResponse(StrictModel):

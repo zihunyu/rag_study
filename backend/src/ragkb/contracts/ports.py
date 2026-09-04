@@ -141,6 +141,8 @@ class DocumentProjectionPort(Protocol):
 
     def delete_document_projection(self, document_id: str) -> None: ...
 
+    def delete_version_projection(self, document_id: str, version_id: str) -> None: ...
+
     def set_version_security_projection(
         self,
         document_id: str,

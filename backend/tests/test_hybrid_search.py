@@ -9,7 +9,12 @@ from fastapi.testclient import TestClient
 from ragkb.adapters.retrieval_memory import InMemoryHybridIndex, InMemoryRetrievalControlPlane
 from ragkb.adapters.stubs import DeterministicEmbedding, DeterministicReranker
 from ragkb.api.app import create_app
-from ragkb.application.search import HybridSearchService, classify_query, rrf_fuse
+from ragkb.application.search import (
+    HybridSearchService,
+    classify_query,
+    rrf_fuse,
+    score_calibrated_fuse,
+)
 from ragkb.domain.errors import ProviderUnavailable
 from ragkb.domain.lifecycle import LifecycleState
 from ragkb.domain.retrieval import (
@@ -137,6 +142,40 @@ def test_rrf_dedup_acl_parent_recheck_and_rerank() -> None:
 def test_chinese_natural_language_without_spaces_is_semantic() -> None:
     assert classify_query("劳动合同解除条件") == "semantic"
     assert classify_query("错误码 ERR-2048") == "identifier"
+
+
+def test_single_weak_candidate_is_not_promoted_to_full_confidence() -> None:
+    weak = IndexCandidate("weak", "version", None, "dense", 1, -0.9)
+
+    fused = score_calibrated_fuse(((weak,),), rrf_k=60, channel_weights={"dense": 1.0})
+
+    assert 0 < fused[0][1] < 0.1
+
+
+def test_generation_context_keeps_table_header_for_llm_evidence() -> None:
+    candidate = _candidate("table", "bm25", 1)
+    table = _chunk("table", "北京 | 600 元", "checksum-table")
+    table = replace(
+        table,
+        retrieval_text="差旅制度\nTABLE_HEADER: 地区 | 住宿上限\n北京 | 600 元",
+    )
+    service = HybridSearchService(
+        DeterministicEmbedding(),
+        InMemoryHybridIndex(bm25=(candidate,), security_watermark=10),
+        InMemoryRetrievalControlPlane({"table": table}),
+        DeterministicReranker(),
+        bm25_top_k=10,
+        dense_top_k=10,
+        rrf_k=60,
+        rerank_top_k=10,
+        final_evidence_count=5,
+    )
+
+    hit = service.search("北京住宿上限", _context()).hits[0]
+
+    assert hit.display_text == "北京 | 600 元"
+    assert "TABLE_HEADER: 地区 | 住宿上限" in hit.generation_context
+    assert hit.text == hit.generation_context
 
 
 def test_security_watermark_fails_closed() -> None:

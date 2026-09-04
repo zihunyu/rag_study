@@ -329,10 +329,28 @@ class LifecycleService:
         record.visible = False
         self._audit("publication.switching", document_id, trace_id)
         record.active_version_id = version_id
+        record.row_version += 1
+        durable_intent = bool(getattr(self.store, "durable_publication_intents", False))
+        if durable_intent:
+            self._persist(
+                f"{operation}:intent",
+                event_id,
+                payload,
+                self._record_dict(record),
+                expected_document_row_version=(
+                    readiness.document_row_version if readiness is not None else None
+                ),
+                generation_id=readiness.generation_id if readiness is not None else None,
+            )
+        try:
+            self._project_document(record, lifecycle_projection="SERVING")
+        except Exception as error:
+            mark_failed = getattr(self.store, "mark_publication_projection_failed", None)
+            if callable(mark_failed):
+                mark_failed(operation, event_id, type(error).__name__)
+            raise
         record.lifecycle_state = LifecycleState.ACTIVE
         record.visible = True
-        record.row_version += 1
-        self._project_document(record, lifecycle_projection="SERVING")
         self._audit("publication.projection_swapped", document_id, trace_id)
         self._audit("document.published", document_id, trace_id)
         self._persist(
@@ -380,10 +398,28 @@ class LifecycleService:
         record.visible = False
         self._audit("rollback.switching", document_id, trace_id)
         record.active_version_id = version_id
+        record.row_version += 1
+        durable_intent = bool(getattr(self.store, "durable_publication_intents", False))
+        if durable_intent:
+            self._persist(
+                f"{operation}:intent",
+                event_id,
+                payload,
+                self._record_dict(record),
+                expected_document_row_version=(
+                    readiness.document_row_version if readiness is not None else None
+                ),
+                generation_id=readiness.generation_id if readiness is not None else None,
+            )
+        try:
+            self._project_document(record, lifecycle_projection="SERVING")
+        except Exception as error:
+            mark_failed = getattr(self.store, "mark_publication_projection_failed", None)
+            if callable(mark_failed):
+                mark_failed(operation, event_id, type(error).__name__)
+            raise
         record.lifecycle_state = LifecycleState.ACTIVE
         record.visible = True
-        record.row_version += 1
-        self._project_document(record, lifecycle_projection="SERVING")
         self._audit("rollback.projection_swapped", document_id, trace_id)
         self._audit("document.rolled_back", document_id, trace_id)
         self._persist(
