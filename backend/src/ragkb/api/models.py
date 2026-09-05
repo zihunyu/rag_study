@@ -87,6 +87,8 @@ class DocumentChunkResponse(StrictModel):
     status: str
     text: str
     locator: dict[str, Any]
+    is_parent: bool = False
+    vector_indexed: bool = False
 
 
 class DocumentResponse(StrictModel):
@@ -254,10 +256,7 @@ class RollbackRequest(StrictModel):
 
 
 class PermissionUpdateRequest(StrictModel):
-    target_acl_revision: int = Field(ge=1)
-    required_watermark: int = Field(ge=0)
-    observed_watermark: int = Field(ge=0)
-    projection_ok: bool = True
+    security_projection: SecurityProjectionRequest
 
 
 class LifecycleResponse(StrictModel):

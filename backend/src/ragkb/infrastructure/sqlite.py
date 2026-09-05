@@ -7,9 +7,18 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 17
+from ragkb.infrastructure.ingestion_fencing import check_sqlite_fence
+
+SCHEMA_VERSION = 19
 
 SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS review_projection_outbox (
+    review_id TEXT PRIMARY KEY,
+    version_id TEXT NOT NULL,
+    state TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS schema_metadata (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -572,6 +581,7 @@ class SQLiteDatabase:
                         f"ALTER TABLE upload_sessions ADD COLUMN {definition}"
                     )
             for table, columns in (
+                ("job_queue", {"fence_token": "fence_token INTEGER NOT NULL DEFAULT 0"}),
                 ("uat_cases", UAT_V14_COLUMNS),
                 ("observation_windows", OBSERVATION_V14_COLUMNS),
                 ("governance_defects", DEFECT_V14_COLUMNS),
@@ -610,6 +620,7 @@ class SQLiteDatabase:
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
             try:
+                check_sqlite_fence(connection)
                 yield connection
             except Exception:
                 connection.rollback()

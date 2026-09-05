@@ -52,7 +52,7 @@ def build_acceptance_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=ObservationResponse,
         tags=["acceptance"],
     )
-    async def create_observation(
+    def create_observation(
         body: ObservationCreateRequest,
         request: Request,
         idempotency_key: str = Header(alias="Idempotency-Key", min_length=1),
@@ -75,7 +75,7 @@ def build_acceptance_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=ObservationResponse,
         tags=["acceptance"],
     )
-    async def get_observation(window_id: str, request: Request) -> ObservationResponse:
+    def get_observation(window_id: str, request: Request) -> ObservationResponse:
         principal = _principal(request)
         _require_role(principal, "admin")
         _require_local_tenant(runtime, principal)
@@ -89,7 +89,7 @@ def build_acceptance_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=ObservationResponse,
         tags=["acceptance"],
     )
-    async def observation_metrics(
+    def observation_metrics(
         window_id: str,
         body: ObservationMetricsRequest,
         request: Request,
@@ -115,7 +115,7 @@ def build_acceptance_router(runtime: RuntimeComponents) -> APIRouter:
         return _observation_response(item)
 
     @router.post("/api/v1/governance/observations/{window_id}/signoffs", tags=["acceptance"])
-    async def observation_signoff(
+    def observation_signoff(
         window_id: str,
         body: GovernanceSignoffRequest,
         request: Request,
@@ -152,7 +152,7 @@ def build_acceptance_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=IncidentResponse,
         tags=["acceptance"],
     )
-    async def create_incident(
+    def create_incident(
         window_id: str,
         body: IncidentCreateRequest,
         request: Request,
@@ -182,7 +182,7 @@ def build_acceptance_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=IncidentResponse,
         tags=["acceptance"],
     )
-    async def resolve_incident(
+    def resolve_incident(
         incident_id: str,
         request: Request,
         if_match: str = Header(alias="If-Match"),
@@ -211,7 +211,7 @@ def build_acceptance_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=ObservationResponse,
         tags=["acceptance"],
     )
-    async def close_observation(
+    def close_observation(
         window_id: str,
         request: Request,
         if_match: str = Header(alias="If-Match"),
@@ -242,7 +242,7 @@ def build_acceptance_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=ReadinessResponse,
         tags=["acceptance"],
     )
-    async def evaluate_observation(
+    def evaluate_observation(
         window_id: str,
         request: Request,
         if_match: str = Header(alias="If-Match"),
@@ -275,7 +275,7 @@ def build_acceptance_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=FinalAcceptanceResponse,
         tags=["acceptance"],
     )
-    async def final_acceptance_report(window_id: str, request: Request) -> FinalAcceptanceResponse:
+    def final_acceptance_report(window_id: str, request: Request) -> FinalAcceptanceResponse:
         principal = _principal(request)
         _require_role(principal, "admin")
         _require_local_tenant(runtime, principal)

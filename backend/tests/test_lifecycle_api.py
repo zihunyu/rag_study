@@ -80,13 +80,10 @@ def test_publish_permissions_delete_and_audit_api_are_fail_closed(tmp_path: Path
     )
     transition = client.put(
         f"/api/v1/resources/document/{document_id}/permissions",
-        headers={"Idempotency-Key": "acl-2", "X-Request-ID": "trace-acl"},
-        json={
-            "target_acl_revision": 2,
-            "required_watermark": 10,
-            "observed_watermark": 9,
-            "projection_ok": True,
-        },
+        headers={"Idempotency-Key": "acl-2", "X-Request-ID": "trace-acl",
+                 "If-Match": f'"{published.json()["row_version"]}"'},
+        json={"security_projection": {"visibility": "RESTRICTED", "classification_level": 2,
+                                     "acl_scope_tokens": ["group:legal"]}},
     )
     deleted = client.delete(
         f"/api/v1/documents/{document_id}",
@@ -95,8 +92,9 @@ def test_publish_permissions_delete_and_audit_api_are_fail_closed(tmp_path: Path
     audit = client.get("/api/v1/admin/audit-events")
 
     assert published.status_code == 200
-    assert transition.json()["lifecycle_state"] == "SECURITY_TRANSITION"
-    assert transition.json()["visible"] is False
+    assert transition.status_code == 200, transition.text
+    assert transition.json()["lifecycle_state"] == "ACTIVE"
+    assert transition.json()["acl_revision"] == published.json()["acl_revision"] + 1
     assert deleted.status_code == 200
     assert deleted.json()["lifecycle_state"] == "DELETED"
     assert set(deleted.json()["cleanup"]) == {

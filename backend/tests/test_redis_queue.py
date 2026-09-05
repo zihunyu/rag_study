@@ -11,6 +11,59 @@ from ragkb.domain.state_machines import JobState
 class _Client:
     def __init__(self) -> None:
         self.hashes: dict[str, dict[str, str]] = {}
+        self.sorted_sets = {}
+        self.strings = {}
+        self.fail_transaction = False
+
+    def pipeline(self, transaction=True):
+        assert transaction
+        client = self
+
+        class Pipeline:
+            def __init__(self):
+                self.operations = []
+
+            def __getattr__(self, method):
+                def command(*args, **kwargs):
+                    self.operations.append((method, args, kwargs))
+                    return self
+
+                return command
+
+            def execute(self):
+                if client.fail_transaction:
+                    raise ConnectionError("transaction disconnected before EXEC")
+                return [
+                    getattr(client, method)(*args, **kwargs)
+                    for method, args, kwargs in self.operations
+                ]
+
+        return Pipeline()
+
+    def get(self, key):
+        return self.strings.get(key)
+
+    def set(self, key, value):
+        self.strings[key] = value
+
+    def hscan_iter(self, name, **kwargs):
+        yield from tuple(self.hashes.get(name, {}).items())
+
+    def zadd(self, name, values):
+        self.sorted_sets.setdefault(name, {}).update(values)
+
+    def zrem(self, name, key):
+        self.sorted_sets.get(name, {}).pop(key, None)
+
+    def zrangebyscore(self, name, minimum, maximum, start=0, num=128):
+        rows = sorted(self.sorted_sets.get(name, {}).items(), key=lambda p: (p[1], p[0]))
+        return [key for key, value in rows if float(minimum) <= value <= float(maximum)][
+            start : start + num
+        ]
+
+    def zrevrange(self, name, start, end):
+        rows = sorted(self.sorted_sets.get(name, {}).items(), key=lambda p: p[1], reverse=True)
+        return [key for key, _ in rows][start : end + 1]
 
     @contextmanager
     def lock(self, name, **kwargs):

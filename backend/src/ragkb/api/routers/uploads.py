@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Header, Request, Response, status
+from starlette.concurrency import run_in_threadpool
 
+from ragkb.adapters.auth import AuthorizationError
 from ragkb.api.models import (
     AbortUploadResponse,
     CompleteUploadResponse,
@@ -12,6 +14,7 @@ from ragkb.api.models import (
     UploadSessionResponse,
     UploadSessionStatusResponse,
 )
+from ragkb.api.support import document_manager, require_document_manager
 from ragkb.api.support import (
     ensure_document_readable as _ensure_document_readable,
 )
@@ -49,7 +52,7 @@ def build_uploads_router(runtime: RuntimeComponents) -> APIRouter:
         responses={409: {"model": ErrorResponse}, 422: {"model": ErrorResponse}},
         tags=["ingestion"],
     )
-    async def create_upload_session(
+    def create_upload_session(
         space_id: str,
         body: CreateUploadSessionRequest,
         request: Request,
@@ -59,6 +62,8 @@ def build_uploads_router(runtime: RuntimeComponents) -> APIRouter:
         principal = _principal(request)
         _require_role(principal, "knowledge_maintainer", "admin")
         _require_local_tenant(runtime, principal)
+        if not document_manager(principal, space_id):
+            raise AuthorizationError("SPACE_MANAGE_SCOPE_REQUIRED")
         session = runtime.uploads.create_session(
             space_id=space_id,
             idempotency_key=idempotency_key,
@@ -79,13 +84,15 @@ def build_uploads_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=UploadSessionStatusResponse,
         tags=["ingestion"],
     )
-    async def upload_session_status(
+    def upload_session_status(
         session_id: str, response: Response, request: Request
     ) -> UploadSessionStatusResponse:
         principal = _principal(request)
         _require_role(principal, "knowledge_maintainer", "admin")
         _require_local_tenant(runtime, principal)
         session = runtime.repository.get_session(session_id)
+        if not document_manager(principal, session.space_id):
+            raise AuthorizationError("SPACE_MANAGE_SCOPE_REQUIRED")
         response.headers["ETag"] = _etag(session.row_version)
         return UploadSessionStatusResponse(
             upload_session_id=session.id,
@@ -102,7 +109,7 @@ def build_uploads_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=UploadSessionResponse,
         tags=["ingestion"],
     )
-    async def create_version_upload_session(
+    def create_version_upload_session(
         document_id: str,
         body: CreateUploadSessionRequest,
         response: Response,
@@ -114,10 +121,11 @@ def build_uploads_router(runtime: RuntimeComponents) -> APIRouter:
         _require_role(principal, "knowledge_maintainer", "admin")
         _require_local_tenant(runtime, principal)
         _ensure_document_readable(runtime, document_id, principal)
+        require_document_manager(runtime, principal, document_id)
         session = runtime.uploads.create_version_session(
             document_id=document_id,
             expected_document_row_version=_if_match(if_match),
-            space_id=runtime.space_id,
+            space_id=runtime.repository.get_document_space(document_id),
             idempotency_key=idempotency_key,
             **body.model_dump(),
         )
@@ -154,6 +162,9 @@ def build_uploads_router(runtime: RuntimeComponents) -> APIRouter:
         _require_role(principal, "knowledge_maintainer", "admin")
         _require_local_tenant(runtime, principal)
         raw_content_length = request.headers.get("content-length")
+        source_session = await run_in_threadpool(runtime.repository.get_session, session_id)
+        if not document_manager(principal, source_session.space_id):
+            raise AuthorizationError("SPACE_MANAGE_SCOPE_REQUIRED")
         try:
             content_length = int(raw_content_length) if raw_content_length is not None else None
         except ValueError as error:
@@ -179,7 +190,7 @@ def build_uploads_router(runtime: RuntimeComponents) -> APIRouter:
         status_code=status.HTTP_202_ACCEPTED,
         tags=["ingestion"],
     )
-    async def complete_upload(
+    def complete_upload(
         session_id: str,
         request: Request,
         if_match: str = Header(alias="If-Match"),
@@ -188,6 +199,9 @@ def build_uploads_router(runtime: RuntimeComponents) -> APIRouter:
         principal = _principal(request)
         _require_role(principal, "knowledge_maintainer", "admin")
         _require_local_tenant(runtime, principal)
+        source_session = runtime.repository.get_session(session_id)
+        if not document_manager(principal, source_session.space_id):
+            raise AuthorizationError("SPACE_MANAGE_SCOPE_REQUIRED")
         result = runtime.uploads.complete(
             session_id,
             expected_row_version=_if_match(if_match),
@@ -207,7 +221,7 @@ def build_uploads_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=AbortUploadResponse,
         tags=["ingestion"],
     )
-    async def abort_upload(
+    def abort_upload(
         session_id: str,
         response: Response,
         request: Request,
@@ -217,6 +231,9 @@ def build_uploads_router(runtime: RuntimeComponents) -> APIRouter:
         principal = _principal(request)
         _require_role(principal, "knowledge_maintainer", "admin")
         _require_local_tenant(runtime, principal)
+        source_session = runtime.repository.get_session(session_id)
+        if not document_manager(principal, source_session.space_id):
+            raise AuthorizationError("SPACE_MANAGE_SCOPE_REQUIRED")
         session = runtime.uploads.abort(
             session_id,
             expected_row_version=_if_match(if_match),

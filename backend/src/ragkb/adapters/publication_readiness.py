@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ragkb.contracts.lifecycle import PublicationReadiness
+from ragkb.domain.publication_policy import review_quality_error
 from ragkb.infrastructure.sqlite import SQLiteDatabase
 
 
@@ -36,8 +37,11 @@ class SQLitePublicationReadiness:
             ).fetchone()
             review = connection.execute(
                 """
-                SELECT * FROM document_reviews WHERE version_id = ?
-                ORDER BY created_at DESC, review_id DESC LIMIT 1
+                SELECT r.*, CASE WHEN o.state='PENDING' THEN 0 ELSE 1 END AS projection_applied
+                FROM document_reviews r
+                LEFT JOIN review_projection_outbox o ON o.review_id=r.review_id
+                WHERE r.version_id = ?
+                ORDER BY r.created_at DESC, r.review_id DESC LIMIT 1
                 """,
                 (version_id,),
             ).fetchone()
@@ -49,22 +53,15 @@ class SQLitePublicationReadiness:
         observed = int(candidate["observed_watermark"]) if candidate is not None else 0
         observed_checksum = str(candidate["observed_checksum"]) if candidate is not None else ""
         error_code: str | None = None
+        policy_error = review_quality_error(
+            dict(quality) if quality else None, dict(review) if review else None
+        )
         if document is None or version is None:
             error_code = "PUBLICATION_TARGET_NOT_FOUND"
         elif str(version["processing_state"]) != "VALIDATED":
             error_code = "PUBLICATION_VERSION_NOT_VALIDATED"
-        elif quality is None:
-            error_code = "PUBLICATION_QUALITY_REPORT_MISSING"
-        elif str(quality["disposition"]) == "BLOCKED_REAL_VALIDATION":
-            error_code = "PUBLICATION_QUALITY_BLOCKED_REAL_VALIDATION"
-        elif review is None:
-            error_code = "PUBLICATION_REVIEW_REQUIRED"
-        elif str(review["decision"]) != "APPROVED":
-            error_code = "PUBLICATION_REVIEW_NOT_APPROVED"
-        elif review["security_revision"] is None or review["security_projection_json"] is None:
-            error_code = "PUBLICATION_SECURITY_REVIEW_REQUIRED"
-        elif str(review["quality_revision"]) != str(quality["parser_revision"]):
-            error_code = "PUBLICATION_REVIEW_REVISION_MISMATCH"
+        elif policy_error:
+            error_code = policy_error
         elif candidate is None:
             error_code = "PUBLICATION_CANDIDATE_MISSING"
         elif projection_state != ("RETIRED" if rollback else "STAGED"):

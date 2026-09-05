@@ -51,7 +51,7 @@ def build_pilots_router(runtime: RuntimeComponents) -> APIRouter:
     router = APIRouter()
 
     @router.post("/api/v1/governance/pilots", response_model=PilotResponse, tags=["pilot"])
-    async def create_pilot(
+    def create_pilot(
         body: PilotCreateRequest,
         request: Request,
         idempotency_key: str = Header(alias="Idempotency-Key", min_length=1),
@@ -72,7 +72,7 @@ def build_pilots_router(runtime: RuntimeComponents) -> APIRouter:
     @router.get(
         "/api/v1/governance/pilots/{pilot_id}", response_model=PilotResponse, tags=["pilot"]
     )
-    async def get_pilot(pilot_id: str, request: Request) -> PilotResponse:
+    def get_pilot(pilot_id: str, request: Request) -> PilotResponse:
         principal = _principal(request)
         _require_role(principal, "admin")
         _require_local_tenant(runtime, principal)
@@ -82,7 +82,7 @@ def build_pilots_router(runtime: RuntimeComponents) -> APIRouter:
             raise ResourceNotFoundError(pilot_id) from error
 
     @router.post("/api/v1/governance/pilots/{pilot_id}/signoffs", tags=["pilot"])
-    async def pilot_signoff(
+    def pilot_signoff(
         pilot_id: str,
         body: GovernanceSignoffRequest,
         request: Request,
@@ -114,7 +114,7 @@ def build_pilots_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=ReadinessResponse,
         tags=["pilot"],
     )
-    async def evaluate_pilot(
+    def evaluate_pilot(
         pilot_id: str,
         request: Request,
         if_match: str = Header(alias="If-Match"),
@@ -145,7 +145,7 @@ def build_pilots_router(runtime: RuntimeComponents) -> APIRouter:
         return ReadinessResponse.model_validate(item)
 
     @router.post("/api/v1/governance/pilots/{pilot_id}:canary", tags=["pilot"])
-    async def canary_pilot(
+    def canary_pilot(
         pilot_id: str,
         request: Request,
         seed: int = 20260901,
@@ -185,7 +185,7 @@ def build_pilots_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=list[RolloutBatchResponse],
         tags=["pilot"],
     )
-    async def rollout_pilot(
+    def rollout_pilot(
         pilot_id: str,
         request: Request,
         if_match: str = Header(alias="If-Match"),
@@ -219,7 +219,7 @@ def build_pilots_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=PilotResponse,
         tags=["pilot"],
     )
-    async def rollback_pilot(
+    def rollback_pilot(
         pilot_id: str,
         body: PilotRollbackRequest,
         request: Request,
@@ -245,7 +245,7 @@ def build_pilots_router(runtime: RuntimeComponents) -> APIRouter:
             raise ResourceNotFoundError(pilot_id) from error
 
     @router.post("/api/v1/governance/uat-cases", response_model=UATCaseResponse, tags=["uat"])
-    async def create_uat(
+    def create_uat(
         body: UATCaseCreateRequest,
         request: Request,
         idempotency_key: str = Header(alias="Idempotency-Key", min_length=1),
@@ -274,7 +274,7 @@ def build_pilots_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=UATCaseResponse,
         tags=["uat"],
     )
-    async def update_uat(
+    def update_uat(
         case_id: str,
         body: UATResultRequest,
         request: Request,
@@ -316,7 +316,7 @@ def build_pilots_router(runtime: RuntimeComponents) -> APIRouter:
         return UATCaseResponse.model_validate(item)
 
     @router.post("/api/v1/governance/defects", response_model=DefectResponse, tags=["governance"])
-    async def create_defect(
+    def create_defect(
         body: DefectCreateRequest,
         request: Request,
         idempotency_key: str = Header(alias="Idempotency-Key", min_length=1),
@@ -341,7 +341,7 @@ def build_pilots_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=DefectResponse,
         tags=["governance"],
     )
-    async def resolve_defect(
+    def resolve_defect(
         defect_id: str,
         request: Request,
         if_match: str = Header(alias="If-Match"),

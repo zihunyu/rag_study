@@ -19,6 +19,23 @@ OPENAPI_VERSION = "1.0.0"
 def build_health_router(runtime: RuntimeComponents) -> APIRouter:
     router = APIRouter()
 
+    @router.get("/api/v1/capabilities", tags=["health"])
+    def capabilities() -> dict[str, object]:
+        production = runtime.settings.rag_runtime_profile == "production"
+        scanner = runtime.uploads.malware_scanner
+        return {
+            "profile": runtime.settings.rag_runtime_profile,
+            "scanner_mode": "production" if production else "development",
+            "scanner_available": bool(getattr(scanner, "executable", None)) if production else True,
+            "scanner_certified": False,
+            "native_parser_isolated": production,
+            "audio_available": False,
+            "audio_reason": "ASR_PROVIDER_NOT_CONFIGURED"
+            if production
+            else "LOCAL_ASR_PLACEHOLDER",
+            "mineru_configured": bool(runtime.settings.mineru_tokens),
+        }
+
     def cached_runtime_health() -> tuple[dict[str, object], list[str]]:
         dependencies: dict[str, object] = {}
         degraded: list[str] = []
@@ -42,7 +59,7 @@ def build_health_router(runtime: RuntimeComponents) -> APIRouter:
         return dependencies, degraded
 
     @router.get("/health/live", response_model=HealthResponse, tags=["health"])
-    async def live() -> HealthResponse:
+    def live() -> HealthResponse:
         return HealthResponse(
             status="ok",
             runtime="g3_native_python",
@@ -50,7 +67,7 @@ def build_health_router(runtime: RuntimeComponents) -> APIRouter:
         )
 
     @router.get("/health/ready", response_model=HealthResponse, tags=["health"])
-    async def ready(response: Response) -> HealthResponse:
+    def ready(response: Response) -> HealthResponse:
         dependencies, degraded = cached_runtime_health()
         if runtime.settings.rag_runtime_profile == "production":
             try:
@@ -98,7 +115,7 @@ def build_health_router(runtime: RuntimeComponents) -> APIRouter:
         )
 
     @router.get("/status/acceptance", response_model=HealthResponse, tags=["health"])
-    async def acceptance_status() -> HealthResponse:
+    def acceptance_status() -> HealthResponse:
         return HealthResponse(
             status="accepted" if runtime.search_service.real_acceptance else "not_accepted",
             runtime="g3_native_python",
@@ -106,7 +123,7 @@ def build_health_router(runtime: RuntimeComponents) -> APIRouter:
         )
 
     @router.get("/status/degraded", response_model=HealthResponse, tags=["health"])
-    async def degraded_status() -> HealthResponse:
+    def degraded_status() -> HealthResponse:
         dependencies, degraded = cached_runtime_health()
         return HealthResponse(
             status="degraded" if degraded else "ok",

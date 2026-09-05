@@ -13,6 +13,8 @@ from typing import Any, Protocol
 
 import httpx
 
+from ragkb.adapters.deadline_http import DeadlineHttpClient
+from ragkb.application.deadlines import bounded_slot, remaining_timeout, request_deadline
 from ragkb.config import EnvSettings
 from ragkb.domain.claim_coverage import (
     extract_answer_clauses,
@@ -69,7 +71,7 @@ class HttpxJsonTransport:
             max_connections=self._settings.model_http_max_connections,
             max_keepalive_connections=self._settings.model_http_max_keepalive_connections,
         )
-        self._client = httpx.Client(timeout=timeout, limits=limits)
+        self._client = DeadlineHttpClient(timeout=timeout, limits=limits)
         self._semaphore = threading.BoundedSemaphore(self._settings.llm_max_concurrency)
         self._lock = threading.Lock()
         self._consecutive_failures = 0
@@ -159,8 +161,8 @@ class HttpxJsonTransport:
     ) -> Mapping[str, Any]:
         self._before_request()
         started = time.monotonic()
-        deadline = started + timeout
-        with self._semaphore:
+        deadline = started + remaining_timeout(timeout)
+        with bounded_slot(self._semaphore, deadline - started):
             for attempt in range(self._settings.model_http_max_retries + 1):
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -172,10 +174,12 @@ class HttpxJsonTransport:
                         headers=dict(headers),
                         json=dict(payload),
                         timeout=httpx.Timeout(
-                            connect=self._settings.model_http_connect_timeout_seconds,
+                            connect=min(
+                                remaining, self._settings.model_http_connect_timeout_seconds
+                            ),
                             read=remaining,
                             write=remaining,
-                            pool=self._settings.model_http_pool_timeout_seconds,
+                            pool=min(remaining, self._settings.model_http_pool_timeout_seconds),
                         ),
                     )
                 except httpx.TimeoutException as error:
@@ -209,6 +213,8 @@ class HttpxJsonTransport:
                     self._delay(attempt, response, remaining=deadline - time.monotonic())
                     continue
                 try:
+                    if time.monotonic() >= deadline:
+                        raise ProviderTimeout("MODEL_PROVIDER_DEADLINE_EXCEEDED")
                     response.raise_for_status()
                 except httpx.HTTPStatusError as error:
                     raise InvalidProviderResponse("MODEL_PROVIDER_HTTP_ERROR") from error
@@ -260,8 +266,10 @@ class _GuardedModelAdapter:
         payload: Mapping[str, Any],
         timeout: float,
     ) -> Mapping[str, Any]:
-        with self._operation_semaphore:
-            return self._transport.post_json(url, headers=headers, payload=payload, timeout=timeout)
+        with request_deadline(timeout), bounded_slot(self._operation_semaphore, timeout):
+            return self._transport.post_json(
+                url, headers=headers, payload=payload, timeout=remaining_timeout(timeout)
+            )
 
 
 class OpenAICompatibleEmbeddingAdapter(_GuardedModelAdapter):

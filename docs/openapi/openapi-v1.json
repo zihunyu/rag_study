@@ -494,6 +494,11 @@
             "title": "Document Version Id",
             "type": "string"
           },
+          "is_parent": {
+            "default": false,
+            "title": "Is Parent",
+            "type": "boolean"
+          },
           "kind": {
             "title": "Kind",
             "type": "string"
@@ -536,6 +541,11 @@
               }
             ],
             "title": "Token Count"
+          },
+          "vector_indexed": {
+            "default": false,
+            "title": "Vector Indexed",
+            "type": "boolean"
           }
         },
         "required": [
@@ -1609,31 +1619,12 @@
       "PermissionUpdateRequest": {
         "additionalProperties": false,
         "properties": {
-          "observed_watermark": {
-            "minimum": 0.0,
-            "title": "Observed Watermark",
-            "type": "integer"
-          },
-          "projection_ok": {
-            "default": true,
-            "title": "Projection Ok",
-            "type": "boolean"
-          },
-          "required_watermark": {
-            "minimum": 0.0,
-            "title": "Required Watermark",
-            "type": "integer"
-          },
-          "target_acl_revision": {
-            "minimum": 1.0,
-            "title": "Target Acl Revision",
-            "type": "integer"
+          "security_projection": {
+            "$ref": "#/components/schemas/SecurityProjectionRequest"
           }
         },
         "required": [
-          "target_acl_revision",
-          "required_watermark",
-          "observed_watermark"
+          "security_projection"
         ],
         "title": "PermissionUpdateRequest",
         "type": "object"
@@ -2678,6 +2669,34 @@
         ]
       }
     },
+    "/api/v1/capabilities": {
+      "get": {
+        "operationId": "capabilities_api_v1_capabilities_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Capabilities Api V1 Capabilities Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Capabilities",
+        "tags": [
+          "health"
+        ]
+      }
+    },
     "/api/v1/document-versions/{version_id}/chunks": {
       "get": {
         "operationId": "chunks_api_v1_document_versions__version_id__chunks_get",
@@ -2689,6 +2708,29 @@
             "schema": {
               "title": "Version Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
             }
           }
         ],
@@ -3067,6 +3109,50 @@
         "tags": [
           "lifecycle"
         ]
+      }
+    },
+    "/api/v1/documents/{document_id}/lifecycle": {
+      "get": {
+        "operationId": "get_lifecycle_api_v1_documents__document_id__lifecycle_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LifecycleResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Get Lifecycle"
       }
     },
     "/api/v1/documents/{document_id}/versions": {
@@ -4949,6 +5035,15 @@
           },
           {
             "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "title": "If-Match",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
             "name": "Idempotency-Key",
             "required": true,
             "schema": {
@@ -5142,6 +5237,29 @@
             "schema": {
               "title": "Space Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
             }
           }
         ],

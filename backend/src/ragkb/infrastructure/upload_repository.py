@@ -23,6 +23,7 @@ from ragkb.domain.uploads import (
     UploadSession,
 )
 from ragkb.domain.validation import DocumentQualityReport
+from ragkb.infrastructure.ingestion_fencing import sqlite_ingestion_scope
 from ragkb.infrastructure.sqlite import SQLiteDatabase
 
 
@@ -34,10 +35,14 @@ class SQLiteUploadRepository:
         self.database = database
         self.database.initialize()
 
+    def ingestion_scope(self, job: Any) -> Any:
+        return sqlite_ingestion_scope(job)
+
     @staticmethod
     def _session(row: sqlite3.Row) -> UploadSession:
         return UploadSession(
             id=str(row["id"]),
+            created_at=float(row["created_at"]),
             tenant_id=str(row["tenant_id"]),
             space_id=str(row["space_id"]),
             filename=str(row["filename"]),
@@ -185,7 +190,20 @@ class SQLiteUploadRepository:
                 "status": "ACTIVE",
             }
 
-    def list_documents(self, space_id: str) -> list[dict[str, Any]]:
+    def get_document_space(self, document_id: str) -> str:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT c.space_id FROM documents d JOIN sources s ON s.id=d.source_id "
+                "JOIN corpora c ON c.id=s.corpus_id WHERE d.id=?",
+                (document_id,),
+            ).fetchone()
+        if row is None:
+            raise ResourceNotFoundError(document_id)
+        return str(row["space_id"])
+
+    def list_documents(
+        self, space_id: str, *, limit: int = 100, offset: int = 0, current_only: bool = False
+    ) -> list[dict[str, Any]]:
         with self.database.connect() as connection:
             space = connection.execute(
                 "SELECT tenant_id FROM knowledge_spaces WHERE id = ?", (space_id,)
@@ -194,21 +212,21 @@ class SQLiteUploadRepository:
                 raise ResourceNotFoundError(space_id)
             documents = connection.execute(
                 """
-                SELECT d.id, d.external_key
+                SELECT d.id, d.external_key, d.current_version_id
                 FROM documents d
                 JOIN sources src ON src.id = d.source_id
                 JOIN corpora c ON c.id = src.corpus_id
                 WHERE c.space_id = ? AND d.state != 'DELETED'
-                ORDER BY d.created_at DESC
+                ORDER BY d.created_at DESC, d.id LIMIT ? OFFSET ?
                 """,
-                (space_id,),
+                (space_id, limit, offset),
             ).fetchall()
             results: list[dict[str, Any]] = []
             for document in documents:
                 version = connection.execute(
                     "SELECT * FROM document_versions WHERE document_id = ? "
-                    "ORDER BY version_no DESC LIMIT 1",
-                    (str(document["id"]),),
+                    "AND (? = 0 OR id = ?) ORDER BY version_no DESC LIMIT 1",
+                    (str(document["id"]), current_only, document["current_version_id"]),
                 ).fetchone()
                 if version is None:
                     continue
@@ -219,7 +237,8 @@ class SQLiteUploadRepository:
                 ).fetchone()
                 chunk_count = int(
                     connection.execute(
-                        "SELECT COUNT(*) AS count FROM chunks WHERE version_id = ?",
+                        "SELECT COUNT(*) AS count FROM chunks "
+                        "WHERE version_id = ? AND kind != 'parent'",
                         (str(version["id"]),),
                     ).fetchone()["count"]
                 )
@@ -247,7 +266,9 @@ class SQLiteUploadRepository:
                 )
             return results
 
-    def list_chunks(self, version_id: str) -> list[dict[str, Any]]:
+    def list_chunks(
+        self, version_id: str, *, limit: int = 100, offset: int = 0
+    ) -> list[dict[str, Any]]:
         with self.database.connect() as connection:
             version = connection.execute(
                 "SELECT id FROM document_versions WHERE id = ?", (version_id,)
@@ -256,9 +277,10 @@ class SQLiteUploadRepository:
                 raise ResourceNotFoundError(version_id)
             rows = connection.execute(
                 "SELECT id, parent_chunk_id, ordinal, kind, token_count, status, "
-                "display_text, locator_json FROM chunks WHERE version_id = ? "
-                "ORDER BY ordinal, id",
-                (version_id,),
+                "display_text, locator_json, EXISTS(SELECT 1 FROM local_search_index i "
+                "WHERE i.chunk_id=chunks.id) AS vector_indexed FROM chunks WHERE version_id = ? "
+                "ORDER BY ordinal, id LIMIT ? OFFSET ?",
+                (version_id, limit, offset),
             ).fetchall()
             return [
                 {
@@ -270,6 +292,8 @@ class SQLiteUploadRepository:
                     "ordinal": int(row["ordinal"]),
                     "kind": str(row["kind"]),
                     "token_count": int(row["token_count"]),
+                    "is_parent": str(row["kind"]) == "parent",
+                    "vector_indexed": bool(row["vector_indexed"]),
                     "status": str(row["status"]),
                     "text": str(row["display_text"]),
                     "locator": json.loads(str(row["locator_json"])),
@@ -362,6 +386,8 @@ class SQLiteUploadRepository:
             if space is None:
                 raise ResourceNotFoundError(space_id)
             if target_document_id is not None:
+                if self.get_document_space(target_document_id) != space_id:
+                    raise ResourceNotFoundError(target_document_id)
                 document = connection.execute(
                     "SELECT tenant_id, row_version, state FROM documents WHERE id = ?",
                     (target_document_id,),
@@ -430,6 +456,18 @@ class SQLiteUploadRepository:
     def get_session(self, session_id: str) -> UploadSession:
         with self.database.connect() as connection:
             return self._get_session_in(connection, session_id)
+
+    def pending_promoted_sessions(self, limit: int = 100) -> list[UploadSession]:
+        with self.database.connect() as connection:
+            return [
+                self._session(row)
+                for row in connection.execute(
+                    "SELECT s.* FROM upload_sessions s WHERE s.state='PROMOTED' OR "
+                    "(s.state='COMPLETED' AND NOT EXISTS (SELECT 1 FROM lifecycle_records l "
+                    "WHERE l.document_id=s.document_id)) ORDER BY s.updated_at LIMIT ?",
+                    (limit,),
+                ).fetchall()
+            ]
 
     def update_session(
         self,
@@ -763,6 +801,16 @@ class SQLiteUploadRepository:
                 "real_acceptance": False,
             }
             connection.execute(
+                "INSERT INTO review_projection_outbox VALUES (?, ?, ?, ?, ?)",
+                (
+                    review_id,
+                    version_id,
+                    "PENDING" if security_projection else "APPLIED",
+                    time.time(),
+                    time.time(),
+                ),
+            )
+            connection.execute(
                 """
                 INSERT INTO document_reviews(
                     review_id, version_id, reviewer_id, decision, comment,
@@ -801,6 +849,36 @@ class SQLiteUploadRepository:
                 ),
             )
             return result
+
+    def get_latest_review(self, version_id: str) -> dict[str, Any] | None:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT r.*, o.state AS projection_state FROM document_reviews r "
+                "LEFT JOIN review_projection_outbox o ON o.review_id=r.review_id "
+                "WHERE r.version_id=? ORDER BY r.created_at DESC, r.review_id DESC LIMIT 1",
+                (version_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        value = dict(row)
+        value["security_projection"] = json.loads(value["security_projection_json"] or "null")
+        value["projection_applied"] = value["projection_state"] in (None, "APPLIED")
+        return value
+
+    def mark_review_applied(self, version_id: str, review_id: str) -> None:
+        with self.database.transaction(immediate=True) as connection:
+            latest = connection.execute(
+                "SELECT review_id FROM document_reviews WHERE version_id=? "
+                "ORDER BY created_at DESC, review_id DESC LIMIT 1",
+                (version_id,),
+            ).fetchone()
+            if latest is None or str(latest[0]) != review_id:
+                raise OptimisticConcurrencyError(version_id)
+            connection.execute(
+                "UPDATE review_projection_outbox SET state='APPLIED', "
+                "updated_at=? WHERE review_id=?",
+                (time.time(), review_id),
+            )
 
     def list_local_content_lineage(self, document_id: str) -> tuple[tuple[str, str], ...]:
         with self.database.connect() as connection:

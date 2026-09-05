@@ -5,13 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from collections import Counter
 from collections.abc import Callable
 from copy import deepcopy
 from typing import Any
 
 from ragkb.adapters.mysql_control import MySQLControlPlaneAdapter
 from ragkb.adapters.mysql_entity_store import EntityMap, EntityRow, MySQLNormalizedEntityStore
+from ragkb.adapters.mysql_lazy_state import LazyAggregateState
 from ragkb.domain.ids import new_uuid7
 from ragkb.domain.uploads import IdempotencyConflictError, OptimisticConcurrencyError
 
@@ -40,6 +40,7 @@ class MySQLGovernanceRepository:
         self.control = control
         self.tenant_id = tenant_id
         self._entities = MySQLNormalizedEntityStore("governance_entities_v3", tenant_id)
+        self._legacy_checked = False
 
     @staticmethod
     def _hashed_id(kind: str, key: str) -> str:
@@ -69,7 +70,12 @@ class MySQLGovernanceRepository:
                 )
         for ordinal, value in enumerate(state["events"]):
             entity_id = str(value["event_id"])
-            entities[("events", entity_id)] = EntityRow(entity_id, None, ordinal, deepcopy(value))
+            entities[("events", entity_id)] = EntityRow(
+                entity_id,
+                None,
+                int(float(value.get("created_at", 0)) * 1_000_000) or ordinal,
+                deepcopy(value),
+            )
         for ordinal, value in enumerate(state["signoffs"]):
             entity_id = str(value["signoff_id"])
             entities[("signoffs", entity_id)] = EntityRow(
@@ -132,14 +138,20 @@ class MySQLGovernanceRepository:
         return loaded
 
     def _mutate[Result](self, callback: Callable[[dict[str, Any]], Result]) -> Result:
+        self._ensure_legacy_migrated()
         connection = self.control.connect()
         try:
             cursor = connection.cursor()
-            before = self._entities.load(cursor)
-            state = self._from_entities(before) if before else self._load_legacy(cursor)
+            before: EntityMap = {}
+
+            def load(kind: str) -> Any:
+                rows = self._entities.load(cursor, entity_type=kind)
+                before.update(rows)
+                return self._from_entities(rows)[kind]
+
+            state = LazyAggregateState(_empty, load)
             result = callback(state)
-            self._entities.sync(cursor, before, self._to_entities(state))
-            cursor.execute("DELETE FROM governance_state_v2 WHERE tenant_id=%s", (self.tenant_id,))
+            self._entities.sync(cursor, before, self._to_entities(state.snapshot()))
             connection.commit()
             return result
         except Exception:
@@ -149,11 +161,36 @@ class MySQLGovernanceRepository:
             connection.close()
 
     def _read(self) -> dict[str, Any]:
+        self._ensure_legacy_migrated()
+
+        def load(kind: str) -> Any:
+            connection = self.control.connect()
+            try:
+                entities = self._entities.load(connection.cursor(), entity_type=kind)
+                return self._from_entities(entities)[kind]
+            finally:
+                connection.close()
+
+        return LazyAggregateState(_empty, load)
+
+    def _ensure_legacy_migrated(self) -> None:
+        if self._legacy_checked:
+            return
         connection = self.control.connect()
         try:
             cursor = connection.cursor()
-            entities = self._entities.load(cursor)
-            return self._from_entities(entities) if entities else self._load_legacy(cursor)
+            state = self._load_legacy(cursor)
+            if any(state.values()):
+                before = self._entities.load(cursor)
+                self._entities.sync(cursor, before, {**self._to_entities(state), **before})
+                cursor.execute(
+                    "DELETE FROM governance_state_v2 WHERE tenant_id=%s", (self.tenant_id,)
+                )
+            connection.commit()
+            self._legacy_checked = True
+        except Exception:
+            connection.rollback()
+            raise
         finally:
             connection.close()
 
@@ -161,25 +198,55 @@ class MySQLGovernanceRepository:
         self, trace_id: str, event_type: str, severity: str, payload: dict[str, object]
     ) -> str:
         event_id = new_uuid7()
-        self._mutate(
-            lambda state: state["events"].append(
+        created = time.time()
+        payload_row = {
+            "event_id": event_id,
+            "trace_id": trace_id,
+            "event_type": event_type,
+            "severity": severity,
+            "payload": payload,
+            "created_at": created,
+        }
+        connection = self.control.connect()
+        try:
+            self._entities.sync(
+                connection.cursor(),
+                {},
                 {
-                    "event_id": event_id,
-                    "trace_id": trace_id,
-                    "event_type": event_type,
-                    "severity": severity,
-                    "payload": payload,
-                    "created_at": time.time(),
-                }
+                    ("events", event_id): EntityRow(
+                        event_id, None, int(created * 1_000_000), payload_row
+                    )
+                },
             )
-        )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
         return event_id
 
     def diagnostics(self) -> dict[str, object]:
-        events = self._read()["events"]
+        connection = self.control.connect()
+        try:
+            cursor = connection.cursor()
+            cursor.execute(
+                "SELECT JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.severity')) AS severity, "
+                "COUNT(*) AS total FROM governance_entities_v3 "
+                "WHERE tenant_id=%s AND entity_type='events' GROUP BY severity",
+                (self.tenant_id,),
+            )
+            counts = {
+                str(row["severity"] if isinstance(row, dict) else row[0]): int(
+                    row["total"] if isinstance(row, dict) else row[1]
+                )
+                for row in cursor.fetchall()
+            }
+        finally:
+            connection.close()
         return {
-            "event_count": len(events),
-            "events_by_severity": dict(Counter(item["severity"] for item in events)),
+            "event_count": sum(counts.values()),
+            "events_by_severity": counts,
             "queue_by_state": {},
             "adapter": self.revision,
             "otel_export_performed": False,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 
 from fastapi import Request
@@ -21,6 +22,7 @@ from ragkb.contracts.jobs import QueueJob
 from ragkb.domain.auth import RequestPrincipal
 from ragkb.domain.lifecycle import LifecycleRecord
 from ragkb.domain.rag import AskResult
+from ragkb.domain.retrieval import SearchContext
 from ragkb.domain.uploads import OptimisticConcurrencyError, ResourceNotFoundError
 from ragkb.runtime_components import RuntimeComponents
 
@@ -131,14 +133,63 @@ def ensure_document_readable(
     runtime: RuntimeComponents,
     document_id: str,
     principal: RequestPrincipal,
+    version_id: str | None = None,
 ) -> None:
     runtime.lifecycle_store.reload()
     record = runtime.lifecycle_store.documents.get(document_id)
     if record is None or runtime.lifecycle_store.is_tombstoned(document_id):
         raise ResourceNotFoundError(document_id)
-    if principal.has_role("knowledge_maintainer", "admin"):
+    space_id = runtime.repository.get_document_space(document_id)
+    if document_manager(principal, space_id):
         return
     ensure_document_visible(runtime, document_id)
+    if version_id is not None and record.active_version_id != version_id:
+        raise ResourceNotFoundError(document_id)
+    active = record.active_version_id
+    if active is None:
+        raise ResourceNotFoundError(document_id)
+    rows = runtime.repository.list_chunks(active)
+    context = document_search_context(runtime, principal, space_id)
+    allowed = runtime.search_service.control_plane.authorize_chunks(
+        tuple(str(row["chunk_id"]) for row in rows), context
+    )
+    if not any(
+        runtime.lifecycle_store.authorizes_chunk(chunk, context) for chunk in allowed.values()
+    ):
+        raise ResourceNotFoundError(document_id)
+
+
+def document_manager(value: RequestPrincipal, space_id: str) -> bool:
+    return value.has_role("admin") or (
+        value.has_role("knowledge_maintainer") and f"space:{space_id}:manage" in value.scope_tokens
+    )
+
+
+def require_document_manager(
+    runtime: RuntimeComponents, principal: RequestPrincipal, document_id: str
+) -> None:
+    if principal.has_role("admin"):
+        return
+    if not document_manager(principal, runtime.repository.get_document_space(document_id)):
+        raise AuthorizationError("DOCUMENT_MANAGE_SCOPE_REQUIRED")
+
+
+def document_search_context(
+    runtime: RuntimeComponents,
+    value: RequestPrincipal,
+    space_id: str,
+) -> SearchContext:
+    release = runtime.retrieval_release.current_release(value.tenant_id, space_id)
+    return SearchContext(
+        value.tenant_id,
+        (space_id,),
+        value.scope_tokens,
+        value.clearance_level,
+        int(time.time()),
+        release.active_generation_id,
+        release.active_permission_revision,
+        release.security_watermark,
+    )
 
 
 def principal(request: Request) -> RequestPrincipal:

@@ -294,7 +294,10 @@ class TrustedQAService:
         return result
 
     def _permission_recheck(
-        self, package: EvidencePackage, subject_scope_tokens: tuple[str, ...]
+        self,
+        package: EvidencePackage,
+        subject_scope_tokens: tuple[str, ...],
+        clearance_level: int = 0,
     ) -> bool:
         return self.permission.recheck(
             package.evidence,
@@ -303,6 +306,8 @@ class TrustedQAService:
             subject_scope_tokens=subject_scope_tokens,
             permission_revision=package.permission_revision,
             at_epoch=int(time.time()),
+            clearance_level=clearance_level,
+            generation_id=package.index_generation_id,
         )
 
     def _ask(
@@ -375,7 +380,7 @@ class TrustedQAService:
                 AnswerStatus.SYSTEM_ERROR,
                 warnings=("EVIDENCE_VALIDATION_FAILED",),
             )
-        if not self._permission_recheck(package, subject_scope_tokens):
+        if not self._permission_recheck(package, subject_scope_tokens, clearance_level):
             return self._save(
                 package,
                 AnswerStatus.SYSTEM_ERROR,
@@ -421,7 +426,7 @@ class TrustedQAService:
                 warnings=("CLAIM_CITATION_VALIDATION_FAILED",),
             )
         cited = tuple(available[evidence_id] for evidence_id in claim_citation_ids)
-        if not self._permission_recheck(package, subject_scope_tokens):
+        if not self._permission_recheck(package, subject_scope_tokens, clearance_level):
             return self._save(
                 package,
                 AnswerStatus.SYSTEM_ERROR,
@@ -441,6 +446,12 @@ class TrustedQAService:
                 package,
                 AnswerStatus.INSUFFICIENT_EVIDENCE,
                 warnings=tuple(item.reason_code for item in verification.verdicts),
+            )
+        if not self._permission_recheck(package, subject_scope_tokens, clearance_level):
+            return self._save(
+                package,
+                AnswerStatus.SYSTEM_ERROR,
+                warnings=("POST_VERIFIER_PERMISSION_RECHECK_FAILED",),
             )
         verified_draft = DraftAnswer(
             render_verified_claims(draft.claims),
@@ -557,6 +568,8 @@ class InMemoryVerifiedAnswerCache:
 
 def verified_answer_cache_key(package: EvidencePackage) -> str:
     payload = {
+        "verifier_revision": package.verifier_revision,
+        "permission_policy_revision": "projection-recheck:v2",
         "tenant_id": package.tenant_id,
         "user_id": package.user_id,
         "permission_revision": package.permission_revision,

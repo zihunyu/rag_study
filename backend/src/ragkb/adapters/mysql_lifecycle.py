@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from copy import deepcopy
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Any
 
 from ragkb.adapters.mysql_control import MySQLControlPlaneAdapter
@@ -31,6 +31,7 @@ class MySQLLifecycleStore(InMemoryLifecycleStore):
         self.control = control
         self.tenant_id = tenant_id
         self._entities = MySQLNormalizedEntityStore("lifecycle_entities_v3", tenant_id)
+        self._loaded_entities: EntityMap = {}
         self._committed_state = self.snapshot_state()
 
     @staticmethod
@@ -175,16 +176,15 @@ class MySQLLifecycleStore(InMemoryLifecycleStore):
         }
 
     def reload(self) -> None:
-        self.documents.clear()
-        self.transitions.clear()
-        self.tombstones.clear()
-        self.audit_events.clear()
-        self.processed_events.clear()
-        self.idempotency.clear()
+        with self.lock:
+            self._reload_locked()
+
+    def _reload_locked(self) -> None:
         connection = self.control.connect()
         try:
             cursor = connection.cursor()
             entities = self._entities.load(cursor)
+            self._loaded_entities = entities
             if entities:
                 loaded = self._from_entities(entities)
             else:
@@ -194,6 +194,7 @@ class MySQLLifecycleStore(InMemoryLifecycleStore):
                 )
                 row = cursor.fetchone()
                 if row is None:
+                    self._apply_loaded({})
                     self._committed_state = self.snapshot_state()
                     return
                 value = row["state_json"] if isinstance(row, dict) else row[0]
@@ -275,9 +276,10 @@ class MySQLLifecycleStore(InMemoryLifecycleStore):
                 else {"entity_id": raw[0], "payload_json": raw[1], "entity_revision": raw[2]}
             )
             version = self._json_object(item["payload_json"])
-            target_state = "SERVING" if str(item["entity_id"]) == version_id else "SUPERSEDED"
-            if version.get("publication_state") == target_state:
+            item_id = str(item["entity_id"])
+            if item_id not in {version_id, previous}:
                 continue
+            target_state = "SERVING" if item_id == version_id else "SUPERSEDED"
             version["publication_state"] = target_state
             cursor.execute(
                 """
@@ -295,6 +297,26 @@ class MySQLLifecycleStore(InMemoryLifecycleStore):
             )
             if cursor.rowcount != 1:
                 raise ValueError("PUBLICATION_VERSION_CONCURRENT_UPDATE")
+            cursor.execute(
+                "SELECT payload_json, entity_revision FROM upload_entities_v3 "
+                "WHERE tenant_id=%s AND entity_type='candidates' AND entity_id=%s FOR UPDATE",
+                (self.tenant_id, item_id),
+            )
+            candidate_row = cursor.fetchone()
+            if candidate_row is None:
+                raise ValueError("PUBLICATION_CANDIDATE_MISSING")
+            candidate = self._json_object(
+                candidate_row["payload_json"]
+                if isinstance(candidate_row, dict)
+                else candidate_row[0]
+            )
+            candidate["projection_state"] = "SERVING" if item_id == version_id else "RETIRED"
+            cursor.execute(
+                "UPDATE upload_entities_v3 SET payload_json=%s, entity_revision=entity_revision+1, "
+                "updated_at=NOW(6) WHERE tenant_id=%s "
+                "AND entity_type='candidates' AND entity_id=%s",
+                (json.dumps(candidate, sort_keys=True), self.tenant_id, item_id),
+            )
 
     def persist_state(
         self,
@@ -314,8 +336,11 @@ class MySQLLifecycleStore(InMemoryLifecycleStore):
         connection = self.control.connect()
         try:
             cursor = connection.cursor()
-            before = self._entities.load(cursor)
-            self._entities.sync(cursor, before, self._to_entities(self._serialized()))
+            before = self._loaded_entities
+            after = self._to_entities(self._serialized())
+            # Absence from a stale in-memory snapshot is never a deletion command.
+            after = {**before, **after}
+            self._entities.sync(cursor, before, after)
             cursor.execute("DELETE FROM lifecycle_state_v2 WHERE tenant_id=%s", (tenant_id,))
             base_operation = operation.removesuffix(":intent") if operation else None
             if operation and operation.endswith(":intent") and key and response is not None:
@@ -366,6 +391,18 @@ class MySQLLifecycleStore(InMemoryLifecycleStore):
                 if cursor.rowcount != 1:
                     raise ValueError("PUBLICATION_OUTBOX_NOT_PENDING")
             connection.commit()
+            self._loaded_entities = {
+                identity: replace(
+                    row,
+                    revision=(
+                        before[identity].revision
+                        + int(before[identity].canonical_payload() != row.canonical_payload())
+                        if identity in before
+                        else 1
+                    ),
+                )
+                for identity, row in after.items()
+            }
         except Exception:
             connection.rollback()
             self.restore_state(self._committed_state)

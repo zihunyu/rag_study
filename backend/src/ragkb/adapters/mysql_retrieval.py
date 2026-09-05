@@ -19,8 +19,11 @@ from ragkb.domain.retrieval import (
 class MySQLRetrievalControlPlane:
     revision = "mysql-retrieval-control:v1"
 
-    def __init__(self, control: MySQLControlPlaneAdapter) -> None:
+    def __init__(
+        self, control: MySQLControlPlaneAdapter, generation_id: str = "legacy-unbound"
+    ) -> None:
         self.control = control
+        self.generation_id = generation_id
 
     @staticmethod
     def _chunk(row: Mapping[str, Any]) -> AuthorizedChunk:
@@ -51,6 +54,7 @@ class MySQLRetrievalControlPlane:
             valid_to_epoch=int(row["valid_to_epoch"]),
             permission_revision=int(row["permission_revision"]),
             current_version=bool(row["current_version"]),
+            index_generation_id=str(row.get("index_generation_id", "legacy-unbound")),
         )
 
     @staticmethod
@@ -63,6 +67,7 @@ class MySQLRetrievalControlPlane:
         )
         return bool(
             chunk.tenant_id == context.tenant_id
+            and chunk.index_generation_id == context.active_generation_id
             and chunk.space_id in context.space_ids
             and chunk.lifecycle_projection == "SERVING"
             and chunk.current_version
@@ -98,8 +103,9 @@ class MySQLRetrievalControlPlane:
             SELECT * FROM retrieval_chunk_projections
             WHERE tenant_id = %s AND space_id IN ({",".join("%s" for _ in context.space_ids)})
               AND chunk_id IN ({placeholders})
+              AND index_generation_id = %s
             """,  # noqa: S608 - placeholders only, values remain parameterized
-            (context.tenant_id, *context.space_ids, *chunk_ids),
+            (context.tenant_id, *context.space_ids, *chunk_ids, context.active_generation_id),
         )
         chunks = (self._chunk(row) for row in rows)
         return {chunk.chunk_id: chunk for chunk in chunks if self._allowed(chunk, context)}
@@ -122,10 +128,11 @@ class MySQLRetrievalControlPlane:
                     parent_chunk_id, display_text, retrieval_text, locator_json,
                     content_checksum, visibility, acl_scope_tokens_json,
                     classification_level, lifecycle_projection, valid_from_epoch,
-                    valid_to_epoch, permission_revision, current_version, updated_at
+                    valid_to_epoch, permission_revision, current_version, index_generation_id,
+                    updated_at
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(6)
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(6)
                 ) AS incoming
                 ON DUPLICATE KEY UPDATE
                     tenant_id=incoming.tenant_id, space_id=incoming.space_id,
@@ -163,6 +170,7 @@ class MySQLRetrievalControlPlane:
                         chunk.valid_to_epoch,
                         chunk.permission_revision,
                         chunk.current_version,
+                        chunk.index_generation_id or self.generation_id,
                     )
                     for chunk in chunks
                 ],
@@ -193,13 +201,14 @@ class MySQLRetrievalControlPlane:
                 UPDATE retrieval_chunk_projections
                 SET lifecycle_projection=%s, permission_revision=%s,
                     current_version=(document_version_id=%s), updated_at=NOW(6)
-                WHERE document_id=%s
+                WHERE document_id=%s AND index_generation_id=%s
                 """,
                 (
                     lifecycle_projection,
                     permission_revision,
                     active_version_id or "",
                     document_id,
+                    self.generation_id,
                 ),
             )
             cursor.execute(
@@ -207,10 +216,12 @@ class MySQLRetrievalControlPlane:
                 UPDATE retrieval_release_state release_state
                 JOIN (
                     SELECT DISTINCT tenant_id, space_id
-                    FROM retrieval_chunk_projections WHERE document_id=%s
+                    FROM retrieval_chunk_projections
+                    WHERE document_id=%s AND index_generation_id=%s
                 ) projection_scope
                   ON release_state.tenant_id=projection_scope.tenant_id
                  AND release_state.space_id=projection_scope.space_id
+                 AND release_state.active_generation_id=%s
                 SET release_state.active_permission_revision=GREATEST(
                         release_state.active_permission_revision, %s
                     ),
@@ -219,7 +230,13 @@ class MySQLRetrievalControlPlane:
                     ),
                     release_state.updated_at=NOW(6)
                 """,
-                (document_id, permission_revision, permission_revision),
+                (
+                    document_id,
+                    self.generation_id,
+                    self.generation_id,
+                    permission_revision,
+                    permission_revision,
+                ),
             )
             connection.commit()
         except Exception:
@@ -249,9 +266,9 @@ class MySQLRetrievalControlPlane:
             cursor.execute(
                 """
                 DELETE FROM retrieval_chunk_projections
-                WHERE document_id=%s AND document_version_id=%s
+                WHERE document_id=%s AND document_version_id=%s AND index_generation_id=%s
                 """,
-                (document_id, version_id),
+                (document_id, version_id, self.generation_id),
             )
             connection.commit()
         except Exception:
@@ -272,7 +289,7 @@ class MySQLRetrievalControlPlane:
                 SET visibility=%s, acl_scope_tokens_json=%s, classification_level=%s,
                     lifecycle_projection=%s, valid_from_epoch=%s, valid_to_epoch=%s,
                     permission_revision=%s, current_version=FALSE, updated_at=NOW(6)
-                WHERE document_id=%s AND document_version_id=%s
+                WHERE document_id=%s AND document_version_id=%s AND index_generation_id=%s
                 """,
                 (
                     projection.visibility,
@@ -284,6 +301,7 @@ class MySQLRetrievalControlPlane:
                     projection.permission_revision,
                     document_id,
                     version_id,
+                    self.generation_id,
                 ),
             )
             if cursor.rowcount < 1:

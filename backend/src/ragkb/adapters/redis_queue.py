@@ -23,6 +23,11 @@ class RedisPersistentJobQueue:
         self.idempotency_key = redis._key("queue", "idempotency")
         self.dead_letters_key = redis._key("queue", "dead-letters")
         self.lock_key = redis._key("queue", "mutation-lock")
+        self.due_keys = tuple(redis._key("queue", kind) for kind in ("fresh", "retry", "leased"))
+        self.index_marker = redis._key("queue", "indexed-v3")
+        self.dead_index = redis._key("queue", "dead-index")
+        self.terminal_index = redis._key("queue", "terminal-index")
+        self._indexed = False
 
     @property
     def client(self) -> Any:
@@ -59,6 +64,7 @@ class RedisPersistentJobQueue:
             ),
             cancel_requested=bool(data.get("cancel_requested")),
             error_code=str(data["error_code"]) if data.get("error_code") else None,
+            fence_token=int(data.get("fence_token", 0)),
         )
 
     def _load_record(self, job_id: str) -> dict[str, Any] | None:
@@ -76,12 +82,63 @@ class RedisPersistentJobQueue:
             raise KeyError(job_id)
         return record
 
-    def _save(self, record: Mapping[str, Any]) -> QueueJob:
+    def _save(self, record: Mapping[str, Any], *, identity: str | None = None) -> QueueJob:
         encoded = json.dumps(
             dict(record), ensure_ascii=False, sort_keys=True, separators=(",", ":")
         )
-        self.client.hset(self.jobs_key, str(record["id"]), encoded)
+        job_id = str(record["id"])
+        # One Redis transaction: a job cannot exist without its deduplication entry
+        # or disappear from the runnable index during a state transition.
+        pipe = self.client.pipeline(transaction=True)
+        pipe.hset(self.jobs_key, job_id, encoded)
+        if identity is not None:
+            pipe.hset(self.idempotency_key, identity, job_id)
+        for key in self.due_keys:
+            pipe.zrem(key, job_id)
+        state = str(record["state"])
+        pipe.zrem(self.terminal_index, job_id)
+        if state in {JobState.RUNNING.value, JobState.CANCEL_REQUESTED.value}:
+            pipe.zadd(self.due_keys[2], {job_id: float(record["lease_expires_at"])})
+        elif state in {JobState.QUEUED.value, JobState.RETRY_WAIT.value}:
+            due = record.get("next_retry_at") or record["available_at"]
+            pipe.zadd(self.due_keys[int(record["attempt"] > 0)], {job_id: float(due)})
+        elif state in {
+            JobState.SUCCEEDED.value,
+            JobState.CANCELLED.value,
+            JobState.FAILED_FINAL.value,
+        }:
+            retention = 30 if state == JobState.FAILED_FINAL.value else 7
+            pipe.zadd(
+                self.terminal_index, {job_id: float(record["updated_at"]) + retention * 86400}
+            )
+            if state == JobState.FAILED_FINAL.value:
+                payload = {
+                    "job_id": job_id,
+                    "error_code": record.get("error_code"),
+                    "attempt": record["attempt"],
+                    "payload": record["payload"],
+                    "failed_at": record["updated_at"],
+                }
+                pipe.hset(self.dead_letters_key, job_id, json.dumps(payload))
+                pipe.zadd(self.dead_index, {job_id: float(record["updated_at"])})
+        pipe.execute()
         return self._job(record)
+
+    def _prune_terminal(self, now: float) -> int:
+        expired = self.client.zrangebyscore(self.terminal_index, "-inf", now, start=0, num=128)
+        for job_id in expired:
+            record = self._load_record(str(job_id))
+            pipe = self.client.pipeline(transaction=True)
+            if record:
+                identity = f"{record['operation']}:{record['idempotency_key']}"
+                if self.client.hget(self.idempotency_key, identity) == job_id:
+                    pipe.hdel(self.idempotency_key, identity)
+            pipe.hdel(self.jobs_key, job_id)
+            pipe.hdel(self.dead_letters_key, job_id)
+            pipe.zrem(self.dead_index, job_id)
+            pipe.zrem(self.terminal_index, job_id)
+            pipe.execute()
+        return len(expired)
 
     def _save_dead_letter(self, record: Mapping[str, Any]) -> None:
         payload = {
@@ -96,13 +153,25 @@ class RedisPersistentJobQueue:
             payload["job_id"],
             json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
         )
+        self.client.zadd(self.dead_index, {str(payload["job_id"]): payload["failed_at"]})
 
-    def _records(self) -> list[dict[str, Any]]:
+    def _records(self, now: float) -> list[dict[str, Any]]:
+        if not self._indexed:
+            if not self.client.get(self.index_marker):
+                # One-time, restartable upgrade; never load historical jobs into RAM.
+                for _, raw in self.client.hscan_iter(self.jobs_key, count=128):
+                    self._save(json.loads(raw))
+                self.client.set(self.index_marker, "1")
+            self._indexed = True
+        self._prune_terminal(now)
         records: list[dict[str, Any]] = []
-        for raw in self.client.hgetall(self.jobs_key).values():
-            loaded = json.loads(str(raw))
-            if isinstance(loaded, dict):
-                records.append(loaded)
+        for key in self.due_keys:
+            for job_id in self.client.zrangebyscore(key, "-inf", now, start=0, num=128):
+                loaded = self._load_record(str(job_id))
+                if loaded is not None:
+                    records.append(loaded)
+                else:
+                    self.client.zrem(key, job_id)
         return records
 
     def enqueue(
@@ -121,10 +190,11 @@ class RedisPersistentJobQueue:
         with self._lock():
             existing_id = self.client.hget(self.idempotency_key, identity)
             if existing_id is not None:
-                existing = self._required(str(existing_id))
-                if str(existing["request_hash"]) != request_hash:
+                existing = self._load_record(str(existing_id))
+                if existing is not None and str(existing["request_hash"]) != request_hash:
                     raise QueueConflictError("idempotency key reused with a different request hash")
-                return self._job(existing)
+                if existing is not None:
+                    return self._job(existing)
             now = time.time()
             record = {
                 "id": new_uuid7(),
@@ -145,8 +215,7 @@ class RedisPersistentJobQueue:
                 "created_at": now,
                 "updated_at": now,
             }
-            self.client.hset(self.idempotency_key, identity, record["id"])
-            return self._save(record)
+            return self._save(record, identity=identity)
 
     @staticmethod
     def _recover_record(record: dict[str, Any], now: float) -> bool:
@@ -177,7 +246,7 @@ class RedisPersistentJobQueue:
         timestamp = time.time() if now is None else now
         recovered = 0
         with self._lock():
-            for record in self._records():
+            for record in self._records(timestamp):
                 if self._recover_record(record, timestamp):
                     self._save(record)
                     if record["state"] == JobState.FAILED_FINAL.value:
@@ -192,7 +261,7 @@ class RedisPersistentJobQueue:
             raise ValueError("worker_id and lease_seconds are required")
         timestamp = time.time() if now is None else now
         with self._lock():
-            records = self._records()
+            records = self._records(timestamp)
             for record in records:
                 if self._recover_record(record, timestamp):
                     self._save(record)
@@ -227,6 +296,7 @@ class RedisPersistentJobQueue:
             record.update(
                 state=JobState.RUNNING.value,
                 attempt=int(record["attempt"]) + 1,
+                fence_token=int(record.get("fence_token", 0)) + 1,
                 lease_owner=worker_id,
                 lease_expires_at=timestamp + lease_seconds,
                 heartbeat_at=timestamp,
@@ -252,6 +322,7 @@ class RedisPersistentJobQueue:
                     JobState.CANCEL_REQUESTED.value,
                 }
                 or record.get("lease_owner") != worker_id
+                or float(record.get("lease_expires_at") or 0) <= timestamp
             ):
                 raise QueueLeaseError("job is not leased by this worker")
             if not record.get("cancel_requested"):
@@ -373,6 +444,7 @@ class RedisPersistentJobQueue:
                 updated_at=timestamp,
             )
             self.client.hdel(self.dead_letters_key, job_id)
+            self.client.zrem(self.dead_index, job_id)
             return self._save(record)
 
     def get(self, job_id: str) -> QueueJob | None:
@@ -383,7 +455,10 @@ class RedisPersistentJobQueue:
         if limit < 1:
             raise ValueError("dead-letter limit must be positive")
         values: list[dict[str, Any]] = []
-        for raw in self.client.hgetall(self.dead_letters_key).values():
+        for job_id in self.client.zrevrange(self.dead_index, 0, min(limit, 1000) - 1):
+            raw = self.client.hget(self.dead_letters_key, job_id)
+            if raw is None:
+                continue
             loaded = json.loads(str(raw))
             if isinstance(loaded, dict):
                 values.append(loaded)

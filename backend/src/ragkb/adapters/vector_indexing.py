@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from collections.abc import Callable, Mapping, Sequence
+from functools import partial
 from typing import Any, Protocol
 
 from pymilvus.exceptions import MilvusException
 
 from ragkb.application.tracing import InMemoryTracer, TracerPort
 from ragkb.config import EnvSettings
+from ragkb.contracts.jobs import QueueLeaseError
 from ragkb.contracts.ports import EmbeddingPort, RetrievalProjectionPort
 from ragkb.document_processing.chunking import ChunkingResult
 from ragkb.domain.errors import IngestionCancelled, VectorBatchWriteError
 from ragkb.domain.retrieval import AuthorizedChunk, SecurityProjection
+from ragkb.infrastructure.ingestion_fencing import current_fence
 
 
 def vector_collection_name(settings: EnvSettings) -> str:
@@ -119,6 +123,28 @@ class ZillizSafeProjectionWriter:
 
     revision = "zilliz-batch-writer:g2-v2"
 
+    @staticmethod
+    def _matches(expected: Any, actual: Any) -> bool:
+        if isinstance(expected, Mapping):
+            return isinstance(actual, Mapping) and all(
+                key in actual and ZillizSafeProjectionWriter._matches(value, actual[key])
+                for key, value in expected.items()
+            )
+        if isinstance(expected, (list, tuple)):
+            return (
+                isinstance(actual, (list, tuple))
+                and len(expected) == len(actual)
+                and all(
+                    ZillizSafeProjectionWriter._matches(a, b)
+                    for a, b in zip(expected, actual, strict=True)
+                )
+            )
+        if isinstance(expected, float):
+            return isinstance(actual, (int, float)) and math.isclose(
+                expected, actual, rel_tol=1e-6, abs_tol=1e-8
+            )
+        return bool(expected == actual)
+
     def __init__(
         self,
         client: Any,
@@ -162,8 +188,15 @@ class ZillizSafeProjectionWriter:
             batches.append(tuple(current))
         return tuple(batches)
 
-    def _insert_batch(self, batch: Sequence[Mapping[str, Any]], batch_number: int) -> None:
+    def _insert_batch(
+        self,
+        batch: Sequence[Mapping[str, Any]],
+        batch_number: int,
+        before_attempt: Callable[[], None] | None = None,
+    ) -> None:
         for attempt in range(self._settings.zilliz_write_max_retries + 1):
+            if before_attempt is not None:
+                before_attempt()
             try:
                 response = self._client.upsert(
                     collection_name=vector_collection_name(self._settings),
@@ -176,6 +209,8 @@ class ZillizSafeProjectionWriter:
                         raise ValueError("ZILLIZ_BATCH_INSERT_COUNT_MISMATCH")
                 return
             except (MilvusException, TimeoutError, ConnectionError) as error:
+                if before_attempt is not None:
+                    before_attempt()
                 try:
                     primary_keys = [str(record["zilliz_pk"]) for record in batch]
                     confirmed = self._client.query(
@@ -185,10 +220,15 @@ class ZillizSafeProjectionWriter:
                             + ",".join(json.dumps(key) for key in primary_keys)
                             + "]"
                         ),
-                        output_fields=["zilliz_pk"],
+                        output_fields=list(batch[0]),
+                        consistency_level=vector_security_consistency(self._settings),
                         timeout=vector_timeout(self._settings),
                     )
-                    if {str(item["zilliz_pk"]) for item in confirmed} == set(primary_keys):
+                    by_key = {str(item["zilliz_pk"]): item for item in confirmed}
+                    if len(confirmed) == len(batch) and all(
+                        self._matches(record, by_key.get(str(record["zilliz_pk"])))
+                        for record in batch
+                    ):
                         return
                 except Exception:
                     confirmed = ()
@@ -212,7 +252,9 @@ class ZillizSafeProjectionWriter:
         for batch_number, batch in enumerate(self._batches(records), start=1):
             if before_batch is not None:
                 before_batch(batch_number)
-            self._insert_batch(batch, batch_number)
+            self._insert_batch(
+                batch, batch_number, partial(before_batch, batch_number) if before_batch else None
+            )
             if on_batch_confirmed is not None:
                 on_batch_confirmed(batch_number, batch)
             inserted.extend(str(record["zilliz_pk"]) for record in batch)
@@ -272,10 +314,12 @@ class ZillizChunkIndexingSink:
             now=now,
         )
         records: list[dict[str, Any]] = []
+        fence = current_fence.get()
+        suffix = f":f{fence.token}" if fence else ""
         for chunk, vector in zip(result.chunks, vectors, strict=True):
             records.append(
                 {
-                    "zilliz_pk": f"{tenant_id}:{self.generation_id}:{chunk.id}",
+                    "zilliz_pk": f"{tenant_id}:{self.generation_id}:{chunk.id}{suffix}",
                     "tenant_id": tenant_id,
                     "space_id": space_id,
                     "corpus_id": space_id,
@@ -347,8 +391,15 @@ class ZillizChunkIndexingSink:
                         else None
                     ),
                 )
+            except QueueLeaseError:
+                # Never fail or clean up the new owner's ledger/projections.
+                raise
             except IngestionCancelled:
-                self._cleanup_cancelled(document_id, result.chunks[0].version_id)
+                self._cleanup_cancelled(
+                    document_id,
+                    result.chunks[0].version_id,
+                    [str(record["zilliz_pk"]) for record in records],
+                )
                 if saga is not None and index_job_id is not None:
                     saga.fail(index_job_id, "INDEX_CANCELLED")
                 raise
@@ -373,6 +424,18 @@ class ZillizChunkIndexingSink:
                         "section_id": chunk.section_id,
                         "section_path": chunk.metadata.get("section_path", "root"),
                         "heading": chunk.metadata.get("heading", ""),
+                        "ordinal": chunk.ordinal,
+                        "kind": chunk.kind,
+                        "token_count": chunk.token_count,
+                        "is_parent": chunk in result.parent_chunks,
+                        "vector_indexed": chunk not in result.parent_chunks,
+                        "tokenizer_id": chunk.tokenizer_id,
+                        "chunking_revision": chunk.chunking_revision,
+                        **(
+                            {"vector_pk": f"{tenant_id}:{self.generation_id}:{chunk.id}{suffix}"}
+                            if fence and chunk not in result.parent_chunks
+                            else {}
+                        ),
                     },
                     content_checksum=chunk.content_sha256,
                     visibility=security.visibility,
@@ -383,15 +446,24 @@ class ZillizChunkIndexingSink:
                     valid_to_epoch=security.valid_to_epoch,
                     permission_revision=security.permission_revision,
                     current_version=False,
+                    index_generation_id=self.generation_id,
                 )
             )
         try:
             if cancel_check is not None and cancel_check():
-                self._cleanup_cancelled(document_id, result.chunks[0].version_id)
+                self._cleanup_cancelled(
+                    document_id,
+                    result.chunks[0].version_id,
+                    [str(record["zilliz_pk"]) for record in records],
+                )
                 raise IngestionCancelled("INGEST_CANCELLED")
             self.control_plane.upsert_chunks(projections)
             if cancel_check is not None and cancel_check():
-                self._cleanup_cancelled(document_id, result.chunks[0].version_id)
+                self._cleanup_cancelled(
+                    document_id,
+                    result.chunks[0].version_id,
+                    [str(record["zilliz_pk"]) for record in records],
+                )
                 raise IngestionCancelled("INGEST_CANCELLED")
             if saga is not None and index_job_id is not None:
                 for batch_number, record_batch in enumerate(writer._batches(records), start=1):
@@ -405,6 +477,8 @@ class ZillizChunkIndexingSink:
                 saga.mark_ready(index_job_id)
                 if not saga.is_ready(index_job_id):
                     raise RuntimeError("INDEX_SAGA_READY_CONFIRMATION_FAILED")
+        except QueueLeaseError:
+            raise
         except IngestionCancelled:
             if saga is not None and index_job_id is not None:
                 saga.fail(index_job_id, "INDEX_CANCELLED")
@@ -415,7 +489,18 @@ class ZillizChunkIndexingSink:
             raise
         return True
 
-    def _cleanup_cancelled(self, document_id: str, version_id: str) -> None:
+    def _cleanup_cancelled(
+        self, document_id: str, version_id: str, primary_keys: Sequence[str]
+    ) -> None:
+        fence = current_fence.get()
+        if fence:
+            self.adapter._connected().delete(
+                collection_name=vector_collection_name(self.settings),
+                ids=list(primary_keys),
+                timeout=vector_timeout(self.settings),
+            )
+            self.control_plane.delete_version_projection(document_id, version_id)
+            return
         delete_vector = getattr(self.adapter, "delete_version_projection", None)
         if callable(delete_vector):
             delete_vector(document_id, version_id)

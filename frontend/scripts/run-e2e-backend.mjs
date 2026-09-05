@@ -6,7 +6,7 @@ const executable = process.env.RAGKB_E2E_BACKEND || "ragkb-backend";
 const logDirectory = path.resolve("../artifacts/frontend-e2e");
 mkdirSync(logDirectory, { recursive: true });
 const log = createWriteStream(path.join(logDirectory, "backend.log"), { flags: "a" });
-const backend = spawn(executable, ["--host", "127.0.0.1", "--port", "8000"], {
+const backend = spawn(executable, ["--host", "127.0.0.1", "--port", process.env.RAGKB_E2E_API_PORT || "8000"], {
   env: process.env,
   stdio: ["ignore", "pipe", "pipe"],
 });

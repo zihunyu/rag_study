@@ -8,7 +8,6 @@ from collections.abc import Iterator
 
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
-from starlette.concurrency import run_in_threadpool
 
 from ragkb.api.models import (
     AskRequest,
@@ -36,6 +35,7 @@ from ragkb.api.support import (
 from ragkb.api.support import (
     require_role as _require_role,
 )
+from ragkb.application.deadlines import request_deadline
 from ragkb.domain.retrieval import SearchContext
 from ragkb.domain.uploads import (
     ResourceNotFoundError,
@@ -63,7 +63,8 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
         responses={503: {"model": ErrorResponse}},
         tags=["retrieval"],
     )
-    async def search(request: Request, body: SearchRequest) -> SearchResponse:
+    @request_deadline()
+    def search(request: Request, body: SearchRequest) -> SearchResponse:
         principal = _principal(request)
         _require_role(principal, "reader", "knowledge_maintainer", "admin")
         _require_local_tenant(runtime, principal)
@@ -80,9 +81,7 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
             active_permission_revision=release.active_permission_revision,
             required_security_watermark=release.security_watermark,
         )
-        result = await run_in_threadpool(
-            runtime.search_service.search, body.query, context, limit=body.limit
-        )
+        result = runtime.search_service.search(body.query, context, limit=body.limit)
         return SearchResponse(
             request_id=_request_id(request),
             observed_security_watermark=result.observed_security_watermark,
@@ -114,14 +113,14 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=AskResponse,
         tags=["trusted-qa"],
     )
-    async def ask(request: Request, body: AskRequest) -> AskResponse:
+    @request_deadline()
+    def ask(request: Request, body: AskRequest) -> AskResponse:
         principal = _principal(request)
         _require_role(principal, "reader", "knowledge_maintainer", "admin")
         _require_local_tenant(runtime, principal)
         space_id = selected_space(principal.tenant_id, body.space_id)
         runtime.lifecycle_store.reload()
-        result = await run_in_threadpool(
-            runtime.qa_service.ask,
+        result = runtime.qa_service.ask(
             body.question,
             principal.tenant_id,
             principal.user_id,
@@ -136,7 +135,7 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
         response_class=StreamingResponse,
         tags=["trusted-qa"],
     )
-    async def ask_stream(request: Request, body: AskRequest) -> StreamingResponse:
+    def ask_stream(request: Request, body: AskRequest) -> StreamingResponse:
         principal = _principal(request)
         _require_role(principal, "reader", "knowledge_maintainer", "admin")
         _require_local_tenant(runtime, principal)
@@ -146,14 +145,15 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
         def stream() -> Iterator[str]:
             for stage in ("retrieval_started", "evidence_validation_started"):
                 yield f"event: progress\ndata: {json.dumps({'stage': stage})}\n\n"
-            result = runtime.qa_service.ask(
-                body.question,
-                principal.tenant_id,
-                principal.user_id,
-                subject_scope_tokens=principal.scope_tokens,
-                clearance_level=principal.clearance_level,
-                space_id=space_id,
-            )
+            with request_deadline():
+                result = runtime.qa_service.ask(
+                    body.question,
+                    principal.tenant_id,
+                    principal.user_id,
+                    subject_scope_tokens=principal.scope_tokens,
+                    clearance_level=principal.clearance_level,
+                    space_id=space_id,
+                )
             verification = "verified" if result.verified else "verification_failed"
             yield f"event: progress\ndata: {json.dumps({'stage': verification})}\n\n"
             payload = _ask_response(result).model_dump(mode="json")
@@ -166,7 +166,7 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=EvidenceSourceResponse,
         tags=["trusted-qa"],
     )
-    async def evidence_source(
+    def evidence_source(
         run_token: str, evidence_token: str, request: Request
     ) -> EvidenceSourceResponse:
         principal = _principal(request)
@@ -180,6 +180,7 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
         )
         evidence = runtime.rag_repository.get_evidence(run_id, evidence_id)
         package = runtime.rag_repository.get_package(run_id)
+        runtime.lifecycle_store.reload()
         if (
             evidence is None
             or package is None
@@ -194,6 +195,8 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
                 subject_scope_tokens=principal.scope_tokens,
                 permission_revision=package.permission_revision,
                 at_epoch=int(time.time()),
+                clearance_level=principal.clearance_level,
+                generation_id=package.index_generation_id,
             )
         ):
             raise ResourceNotFoundError(evidence_id)
@@ -208,9 +211,7 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=FeedbackResponse,
         tags=["trusted-qa"],
     )
-    async def feedback(
-        rag_run_id: str, body: FeedbackRequest, request: Request
-    ) -> FeedbackResponse:
+    def feedback(rag_run_id: str, body: FeedbackRequest, request: Request) -> FeedbackResponse:
         principal = _principal(request)
         _require_role(principal, "reader", "knowledge_maintainer", "admin")
         _require_local_tenant(runtime, principal)

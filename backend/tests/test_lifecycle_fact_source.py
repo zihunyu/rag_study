@@ -81,6 +81,8 @@ def _process_next(components, client: TestClient, version_id: str) -> None:
         components.storage,
         ParserRouter(),
         "fact-source-worker",
+        chunker=components.chunker,
+        indexing_sink=components.indexing_sink,
     ).run_once()
     assert (
         client.post(
@@ -105,7 +107,9 @@ def _client_for_roles(components, *roles: str) -> TestClient:
         tenant_id=components.tenant_id,
         user_id="test-user",
         roles=tuple(roles),
-        scope_tokens=tuple(f"role:{role}" for role in roles),
+        scope_tokens=tuple(f"role:{role}" for role in roles) + (
+            (f"space:{components.space_id}:manage",) if "knowledge_maintainer" in roles else ()
+        ),
         auth_mode="test",
     )
     return TestClient(
@@ -254,13 +258,9 @@ def test_draft_delete_is_irreversible_and_repeated_delete_preserves_cleanup(
         ),
         client.put(
             f"/api/v1/resources/document/{document_id}/permissions",
-            headers={"Idempotency-Key": "acl-after-delete"},
-            json={
-                "target_acl_revision": 2,
-                "required_watermark": 1,
-                "observed_watermark": 1,
-                "projection_ok": True,
-            },
+            headers={"Idempotency-Key": "acl-after-delete", "If-Match": '"1"'},
+            json={"security_projection": {"visibility": "TENANT", "classification_level": 0,
+                                          "acl_scope_tokens": []}},
         ),
         client.post(
             f"/api/v1/documents/{document_id}:revoke",

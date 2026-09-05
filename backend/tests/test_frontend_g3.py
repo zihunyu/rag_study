@@ -45,6 +45,6 @@ def test_g3_frontend_exposes_qa_admin_feedback_and_retrieval_debug_contracts() -
     assert "final-acceptance-report" in script
     assert "真实证据缺失时必须保持 BLOCKED" in script
     assert "space_id: selectedSpaceId.value" in script
-    assert "/document-versions/${item.version_id}/chunks" in script
+    assert "/document-versions/${versionId}/chunks" in script
     assert "cleanup/${store}:complete" not in script
     assert "说明卡片" not in script

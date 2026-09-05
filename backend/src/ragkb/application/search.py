@@ -253,6 +253,21 @@ class HybridSearchService:
         ):
             bm25, dense, warnings = self._retrieve(normalized, context)
         query_type = classify_query(normalized)
+        # Discard late writes from a retired ingestion attempt before score fusion.
+        if any(item.vector_pk for item in (*bm25, *dense)):
+            projected = self.control_plane.authorize_chunks(
+                [item.chunk_id for item in (*bm25, *dense)], context
+            )
+
+            def current_attempt(item: IndexCandidate) -> bool:
+                chunk = projected.get(item.chunk_id)
+                return chunk is not None and (
+                    not chunk.locator.get("vector_pk")
+                    or chunk.locator["vector_pk"] == item.vector_pk
+                )
+
+            bm25 = tuple(item for item in bm25 if current_attempt(item))
+            dense = tuple(item for item in dense if current_attempt(item))
         with self.tracer.span("rag.retrieval.fusion", {"query_type": query_type}):
             fused = score_calibrated_fuse(
                 (bm25, dense),

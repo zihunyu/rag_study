@@ -8,6 +8,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ragkb.config import EnvSettings
+from ragkb.infrastructure.ingestion_fencing import check_mysql_fence
 from ragkb.infrastructure.mysql_migrations import MYSQL_MIGRATION_REVISION, migration_plan
 
 
@@ -81,6 +82,7 @@ class MySQLControlPlaneAdapter:
     def connect(self) -> Any:
         if not self._leases.acquire(timeout=self._settings.mysql_connect_timeout_seconds):
             raise TimeoutError("MYSQL_CONNECTION_POOL_EXHAUSTED")
+        lease_returned = False
         try:
             with self._lock:
                 if self._closed:
@@ -103,9 +105,17 @@ class MySQLControlPlaneAdapter:
                 connection = self._connect(include_database=True)
                 with self._lock:
                     self._created_connections += 1
-            return _PooledConnection(connection, self._release)
+            pooled = _PooledConnection(connection, self._release)
+            try:
+                check_mysql_fence(pooled)
+            except Exception:
+                pooled.close()
+                lease_returned = True
+                raise
+            return pooled
         except Exception:
-            self._leases.release()
+            if not lease_returned:
+                self._leases.release()
             raise
 
     def connect_server(self) -> Any:

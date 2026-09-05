@@ -90,14 +90,10 @@ class SQLiteLifecycleStore(InMemoryLifecycleStore):
                 )
 
     def reload(self) -> None:
-        self.documents.clear()
-        self.transitions.clear()
-        self.tombstones.clear()
-        self.audit_events.clear()
-        self.processed_events.clear()
-        self.idempotency.clear()
-        self._load()
-        self._committed_state = self.snapshot_state()
+        with self.lock:
+            refreshed = SQLiteLifecycleStore(self.database)
+            self.restore_state(refreshed.snapshot_state())
+            self._committed_state = self.snapshot_state()
 
     @staticmethod
     def _sync_local_fact_source(

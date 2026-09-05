@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
+import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
 from copy import deepcopy
@@ -24,6 +26,7 @@ from ragkb.domain.lifecycle import (
     SecurityTransitionStatus,
 )
 from ragkb.domain.retrieval import AuthorizedChunk, SearchContext, SecurityProjection
+from ragkb.domain.uploads import OptimisticConcurrencyError
 
 CLEANUP_STORES = ("local_file", "mysql", "redis", "zilliz_projection")
 EXTERNAL_CLEANUP_STORES = frozenset({"mysql", "redis", "zilliz_projection"})
@@ -46,6 +49,7 @@ def atomic_lifecycle_mutation[Service: _AtomicLifecycleService, **P, R](
 
 class InMemoryLifecycleStore:
     def __init__(self) -> None:
+        self.lock = threading.RLock()
         self.documents: dict[str, LifecycleRecord] = {}
         self.transitions: dict[str, SecurityTransition] = {}
         self.tombstones: dict[str, DeletionTombstone] = {}
@@ -194,12 +198,15 @@ class LifecycleService:
 
     @contextmanager
     def _atomic(self) -> Iterator[None]:
-        snapshot = self.store.snapshot_state()
-        try:
-            yield
-        except Exception:
-            self.store.restore_state(snapshot)
-            raise
+        with self.store.lock:
+            snapshot = self.store.snapshot_state()
+            try:
+                yield
+            except Exception:
+                # A persisted transition is a safety barrier, not a rollback candidate.
+                # Restore the last committed snapshot rather than resurrecting SERVING.
+                self.store.restore_state(getattr(self.store, "_committed_state", snapshot))
+                raise
 
     @staticmethod
     def _hash(payload: Mapping[str, object]) -> str:
@@ -432,6 +439,83 @@ class LifecycleService:
             ),
             generation_id=readiness.generation_id if readiness is not None else None,
         )
+        return record
+
+    @atomic_lifecycle_mutation
+    def replace_permissions(
+        self,
+        document_id: str,
+        policy: dict[str, Any],
+        *,
+        expected_row_version: int,
+        event_id: str,
+        trace_id: str,
+    ) -> LifecycleRecord:
+        self.store.reload()
+        operation = f"permissions:{document_id}"
+        payload = {
+            "document_id": document_id,
+            "policy": policy,
+            "expected_row_version": expected_row_version,
+        }
+        replay = self._replay(operation, event_id, payload)
+        if replay is not None:
+            return self._record_from(replay)
+        record = self.store.documents[document_id]
+        if record.tombstoned or record.active_version_id is None:
+            raise LifecycleStateConflict("DOCUMENT_NOT_AVAILABLE")
+        pending_operation = f"security-policy-pending:{document_id}"
+        pending = self._replay(pending_operation, event_id, payload)
+        if pending is None:
+            if record.row_version != expected_row_version:
+                raise OptimisticConcurrencyError(document_id)
+            if not self.store.is_accessible(document_id):
+                raise LifecycleStateConflict("DOCUMENT_NOT_PUBLISHED")
+            projection = SecurityProjection(
+                visibility=policy["visibility"],
+                classification_level=policy["classification_level"],
+                acl_scope_tokens=tuple(policy["acl_scope_tokens"]),
+                lifecycle_projection="STAGED",
+                permission_revision=record.acl_revision + 1,
+                valid_from_epoch=int(time.time()),
+                valid_to_epoch=policy.get("valid_to_epoch", 0),
+            )
+            record.lifecycle_state = LifecycleState.SECURITY_TRANSITION
+            record.visible = False
+            record.row_version += 1
+            pending = {
+                "projection": asdict(projection),
+                "version_id": record.active_version_id,
+                "versions": sorted(set([record.active_version_id, *record.version_history])),
+            }
+            self._audit("acl.policy_pending", document_id, trace_id)
+            self._persist(pending_operation, event_id, payload, pending)
+        if self.retrieval_projection is None:
+            raise LifecycleStateConflict("RETRIEVAL_PROJECTION_UNAVAILABLE")
+        if pending["version_id"] != record.active_version_id:
+            raise LifecycleStateConflict("SECURITY_TARGET_VERSION_CHANGED")
+        projection = SecurityProjection(
+            **{
+                **pending["projection"],
+                "acl_scope_tokens": tuple(pending["projection"]["acl_scope_tokens"]),
+            }
+        )
+        try:
+            # Document permissions must survive rollback to any retained version.
+            for version_id in pending.get("versions", [record.active_version_id]):
+                self.retrieval_projection.set_version_security_projection(
+                    document_id, version_id, projection
+                )
+            record.acl_revision = projection.permission_revision
+            self._project_document(record, lifecycle_projection="SERVING")
+            record.visible = True
+            record.lifecycle_state = LifecycleState.ACTIVE
+            record.row_version += 1
+            self._audit("acl.policy_applied", document_id, trace_id)
+            self._persist(operation, event_id, payload, self._record_dict(record))
+        except Exception:
+            self.store.reload()
+            raise
         return record
 
     @atomic_lifecycle_mutation

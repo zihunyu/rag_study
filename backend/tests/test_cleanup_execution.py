@@ -135,7 +135,11 @@ def test_local_cleanup_removes_worker_artifacts_tracked_residue_and_multiple_ver
     assert worker.run_once() is True
     original_key = str(components.repository.get_version(version_id)["original_key"])
     prefix, _, _ = original_key.rpartition("/original/")
-    canonical_key = f"{prefix}/artifacts/canonical-document-v1.json"
+    canonical_key = next(
+        key
+        for partition, key in components.repository.list_local_content_lineage(document_id)
+        if partition == "artifacts" and "canonical-document-f" in key
+    )
     media_key = f"{prefix}/artifacts/images/page-1.png"
     temp_key = f"{prefix}/temp/parser.partial"
     quarantine_key = components.repository.get_session(document_id).quarantine_key

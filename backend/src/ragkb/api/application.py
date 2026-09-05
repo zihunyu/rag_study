@@ -9,6 +9,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from ragkb.adapters.auth import AuthenticationError, AuthorizationError
 from ragkb.api.routers.documents import build_documents_router
@@ -19,6 +20,7 @@ from ragkb.api.routers.rag import build_rag_router
 from ragkb.api.routers.spaces import build_spaces_router
 from ragkb.api.routers.uploads import build_uploads_router
 from ragkb.api.support import error_response as _error
+from ragkb.application.access_telemetry import AccessTelemetry
 from ragkb.application.lifecycle import (
     CleanupApprovalRequired,
     LifecycleIdempotencyConflict,
@@ -48,6 +50,9 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
         docs_url="/docs",
         debug=runtime.settings.app_debug,
     )
+    access_metrics = AccessTelemetry()
+    app.state.access_metrics = access_metrics
+    app.router.add_event_handler("shutdown", access_metrics.close)
     for provider_transport in runtime.provider_transports:
         app.router.add_event_handler("shutdown", provider_transport.close)
     mysql_control = getattr(runtime.repository, "control", None)
@@ -58,12 +63,6 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
     close_oidc_decoder = getattr(oidc_decoder, "close", None)
     if callable(close_oidc_decoder):
         app.router.add_event_handler("shutdown", close_oidc_decoder)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=list(runtime.settings.cors_origins),
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
     app.state.components = runtime
 
     @app.middleware("http")
@@ -73,8 +72,8 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
         request.state.request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
         if request.url.path not in {"/health/live", "/health/ready", "/docs", "/openapi.json"}:
             try:
-                request.state.principal = runtime.authenticator.authenticate(
-                    request.headers.get("Authorization")
+                request.state.principal = await run_in_threadpool(
+                    runtime.authenticator.authenticate, request.headers.get("Authorization")
                 )
             except AuthenticationError:
                 return _error(
@@ -84,11 +83,25 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
                     401,
                 )
         response = await call_next(request)
-        runtime.observability.request_completed(
-            request.state.request_id, request.method, request.url.path, response.status_code
-        )
+        if not request.url.path.startswith("/health/"):
+            access_metrics.submit(
+                runtime.observability.request_completed,
+                request.state.request_id,
+                request.method,
+                request.url.path,
+                response.status_code,
+            )
         response.headers["X-Request-ID"] = request.state.request_id
         return response
+
+    # Outermost middleware handles unauthenticated browser preflight and error responses.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(runtime.settings.cors_origins),
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["ETag", "X-Request-ID"],
+    )
 
     @app.exception_handler(ResourceNotFoundError)
     async def not_found(request: Request, error: ResourceNotFoundError) -> JSONResponse:
@@ -119,6 +132,10 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
 
     app.add_exception_handler(QueueLeaseError, state_conflict)
     app.add_exception_handler(QueueStateError, state_conflict)
+
+    @app.exception_handler(TimeoutError)
+    async def request_timeout(request: Request, error: TimeoutError) -> JSONResponse:
+        return _error(request, "REQUEST_TIMEOUT", "request deadline exceeded", 408)
 
     @app.exception_handler(FileValidationError)
     async def invalid_file(request: Request, error: FileValidationError) -> JSONResponse:

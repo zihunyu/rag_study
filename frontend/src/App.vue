@@ -19,9 +19,11 @@ const spaceBusy = ref(false);
 const spaceError = ref("");
 const documents = ref([]);
 const documentsBusy = ref(false);
+const documentsHasMore = ref(false);
 const selectedDocument = ref(null);
 const chunks = ref([]);
 const chunksBusy = ref(false);
+const chunksHasMore = ref(false);
 const lifecycle = ref({ documentId: "", versionId: "", targetRevision: 2, watermark: 1 });
 const versionUpload = ref({ documentRowVersion: "", file: null, sha256: "", hashProgress: 0, status: null });
 const upload = ref({
@@ -50,10 +52,17 @@ const pilot = ref({ id: "", name: "Synthetic Pilot", flag: "pilot.synthetic", re
 const uat = ref({ id: "", title: "Synthetic UAT", rowVersion: 0, evidence: null, result: null });
 const observation = ref({ id: "", name: "Synthetic optional window", rowVersion: 0, result: null });
 const acceptance = ref(null);
+const capabilities = ref(null);
 const authenticatedUser = ref(null);
 let uploadHashRevision = 0;
 let versionHashRevision = 0;
 let uploadWorkflowRevision = 0;
+let selectionRevision = 0;
+let documentListRevision = 0;
+let spaceListRevision = 0;
+let answerRevision = 0;
+let searchRevision = 0;
+const citationSource = ref(null);
 const terminalJobStates = new Set(["SUCCEEDED", "FAILED_FINAL", "CANCELLED"]);
 const uploadPhaseText = computed(() => ({
   EMPTY: "请选择文件",
@@ -84,6 +93,7 @@ const selectedSpace = computed(() =>
 onMounted(async () => {
   try {
     authenticatedUser.value = await initializeAuth();
+    request("/capabilities").then((value) => { capabilities.value = value; }).catch(() => {});
     await loadSpaces();
   } catch (cause) {
     error.value = `INITIALIZATION_FAILED:${cause.message}`;
@@ -91,12 +101,15 @@ onMounted(async () => {
 });
 
 async function loadSpaces(preferredSpaceId = selectedSpaceId.value) {
+  const revision = ++spaceListRevision;
+  const priorSpace = selectedSpaceId.value;
   spaceError.value = "";
   const loaded = await request("/spaces");
+  if (revision !== spaceListRevision || priorSpace !== selectedSpaceId.value) return;
   spaces.value = loaded;
   const preferredExists = loaded.some((item) => item.id === preferredSpaceId);
   selectedSpaceId.value = preferredExists ? preferredSpaceId : (loaded[0]?.id ?? "");
-  await loadDocuments();
+  await changeSpace();
 }
 
 async function createSpace() {
@@ -123,61 +136,116 @@ async function createSpace() {
 }
 
 function resetDocumentSelection() {
+  selectionRevision += 1;
+  uploadWorkflowRevision += 1;
+  versionHashRevision += 1;
+  lifecycle.value = { documentId: "", versionId: "" };
+  versionUpload.value = { documentRowVersion: "", file: null, sha256: "", hashProgress: 0, status: null };
   selectedDocument.value = null;
   chunks.value = [];
+  chunksHasMore.value = false;
   quality.value = null;
   documentReview.value.result = null;
 }
 
 async function changeSpace() {
+  spaceListRevision += 1;
   resetDocumentSelection();
+  answerRevision += 1;
+  searchRevision += 1;
+  result.value = null;
+  searchResult.value = null;
+  citationSource.value = null;
+  upload.value.status = null;
+  upload.value.job = null;
+  upload.value.busy = false;
+  upload.value.phase = upload.value.file ? "READY_TO_UPLOAD" : "EMPTY";
   upload.value.error = "";
   await loadDocuments();
 }
 
-async function loadDocuments() {
+async function loadDocuments(append = false) {
+  append = append === true;
+  const revision = ++documentListRevision;
+  const spaceId = selectedSpaceId.value;
+  const offset = append ? documents.value.length : 0;
   if (!selectedSpaceId.value) {
     documents.value = [];
     return;
   }
   documentsBusy.value = true;
   try {
-    documents.value = await request(`/spaces/${selectedSpaceId.value}/documents`);
+    const loaded = await request(`/spaces/${spaceId}/documents${offset ? `?limit=100&offset=${offset}` : ""}`);
+    if (revision === documentListRevision && spaceId === selectedSpaceId.value) {
+      documents.value = append ? [...documents.value, ...loaded] : loaded;
+      documentsHasMore.value = loaded.length === 100;
+    }
   } catch (cause) {
+    if (revision !== documentListRevision) return;
     spaceError.value = cause.message;
     documents.value = [];
   } finally {
-    documentsBusy.value = false;
+    if (revision === documentListRevision) documentsBusy.value = false;
   }
 }
 
 async function openDocument(item) {
+  resetDocumentSelection();
+  const revision = selectionRevision;
   selectedDocument.value = item;
   lifecycle.value.documentId = item.document_id;
   lifecycle.value.versionId = item.version_id;
+  await loadChunks(item.version_id, revision);
+  if (revision === selectionRevision && item.processing_state === "VALIDATED") await loadQuality();
+}
+
+async function loadChunks(versionId, revision = selectionRevision, append = false) {
+  const offset = append ? chunks.value.length : 0;
   chunksBusy.value = true;
-  chunks.value = [];
+  if (!append) chunks.value = [];
   try {
-    chunks.value = await request(`/document-versions/${item.version_id}/chunks`);
+    const loaded = await request(`/document-versions/${versionId}/chunks${offset ? `?limit=100&offset=${offset}` : ""}`);
+    if (revision === selectionRevision) {
+      chunks.value = append ? [...chunks.value, ...loaded] : loaded;
+      chunksHasMore.value = loaded.length === 100;
+    }
   } catch (cause) {
+    if (revision !== selectionRevision) return;
     spaceError.value = cause.message;
   } finally {
-    chunksBusy.value = false;
+    if (revision === selectionRevision) chunksBusy.value = false;
   }
 }
 
 async function ask() {
   if (!question.value.trim() || !selectedSpaceId.value) return;
   error.value = ""; stage.value = "检索、生成缓冲与验证中"; result.value = null;
+  const revision = ++answerRevision;
+  const spaceId = selectedSpaceId.value;
   try {
-    result.value = await askStream(
+    const answer = await askStream(
       question.value,
-      (current) => { stage.value = current; },
+      (current) => { if (revision === answerRevision) stage.value = current; },
       fetch,
-      selectedSpaceId.value,
+      spaceId,
     );
+    if (revision !== answerRevision) return;
+    result.value = answer;
     stage.value = result.value.verified ? "已验证" : "验证失败";
-  } catch (cause) { error.value = cause.message; stage.value = "system_error"; }
+  } catch (cause) { if (revision === answerRevision) { error.value = cause.message; stage.value = "system_error"; } }
+}
+
+async function openCitation(citation) {
+  const revision = answerRevision;
+  try {
+    const path = new URL(citation.href, window.location.href);
+    const base = new URL(apiUrl("/"), window.location.href);
+    if (path.origin !== base.origin || !path.pathname.startsWith(base.pathname)) throw new Error("UNTRUSTED_CITATION_URL");
+    const response = await authorizedFetch(path.toString());
+    if (!response.ok) throw new Error(`SOURCE_UNAVAILABLE_HTTP_${response.status}`);
+    const source = await response.json();
+    if (revision === answerRevision) citationSource.value = source;
+  } catch (cause) { if (revision === answerRevision) error.value = cause.message; }
 }
 
 async function submitFeedback() {
@@ -190,38 +258,68 @@ async function submitFeedback() {
 }
 
 async function search() {
-  searchResult.value = await request("/search", {
+  const revision = ++searchRevision;
+  const found = await request("/search", {
     method: "POST",
     body: JSON.stringify({ query: searchQuery.value, space_id: selectedSpaceId.value }),
   });
+  if (revision === searchRevision) searchResult.value = found;
 }
 
 const idempotency = (action) => `${action}-${crypto.randomUUID()}`;
 async function publish() {
+  const revision = selectionRevision;
+  const versionId = lifecycle.value.versionId;
   upload.value.error = "";
   try {
-    cleanup.value = await request(`/document-versions/${lifecycle.value.versionId}:publish`, { method: "POST", headers: { "Idempotency-Key": idempotency("publish") } });
+    const publishedState = await request(`/document-versions/${versionId}:publish`, { method: "POST", headers: { "Idempotency-Key": idempotency("publish") } });
+    if (revision !== selectionRevision) return;
+    cleanup.value = publishedState;
     upload.value.phase = "PUBLISHED";
     await loadDocuments();
+    if (revision !== selectionRevision) return;
     const published = documents.value.find(
       (item) => item.version_id === lifecycle.value.versionId,
     );
     if (published) await openDocument(published);
   } catch (cause) {
+    if (revision !== selectionRevision) return;
     upload.value.error = cause.message;
   }
 }
 async function rollback() {
-  cleanup.value = await request(`/documents/${lifecycle.value.documentId}:rollback`, { method: "POST", headers: { "Idempotency-Key": idempotency("rollback") }, body: JSON.stringify({ version_id: lifecycle.value.versionId }) });
+  await documentCommand(`/documents/${lifecycle.value.documentId}:rollback`, { method: "POST", headers: { "Idempotency-Key": idempotency("rollback") }, body: JSON.stringify({ version_id: lifecycle.value.versionId }) });
+}
+async function documentCommand(path, options) {
+  const revision = selectionRevision;
+  try {
+    const updated = await request(path, options);
+    if (revision === selectionRevision) { cleanup.value = updated; await loadDocuments(); }
+  } catch (cause) { if (revision === selectionRevision) upload.value.error = cause.message; }
 }
 async function permissions() {
-  cleanup.value = await request(`/resources/document/${lifecycle.value.documentId}/permissions`, { method: "PUT", headers: { "Idempotency-Key": idempotency("acl") }, body: JSON.stringify({ target_acl_revision: Number(lifecycle.value.targetRevision), required_watermark: Number(lifecycle.value.watermark), observed_watermark: Number(lifecycle.value.watermark), projection_ok: true }) });
+  const documentId = lifecycle.value.documentId;
+  const revision = selectionRevision;
+  try {
+    const policy = {
+      visibility: documentReview.value.visibility,
+      classification_level: Number(documentReview.value.classificationLevel),
+      acl_scope_tokens: documentReview.value.aclScopeTokens.split(",").map((v) => v.trim()).filter(Boolean),
+    };
+    const current = await request(`/documents/${documentId}/lifecycle`);
+    if (revision !== selectionRevision) return;
+    const updated = await request(`/resources/document/${documentId}/permissions`, {
+      method: "PUT", headers: { "Idempotency-Key": idempotency("acl"), "If-Match": `"${current.row_version}"` },
+      body: JSON.stringify({ security_projection: policy }),
+    });
+    if (revision === selectionRevision) cleanup.value = updated;
+  } catch (cause) { if (revision === selectionRevision) upload.value.error = cause.message; }
 }
 async function revoke() {
-  cleanup.value = await request(`/documents/${lifecycle.value.documentId}:revoke`, { method: "POST", headers: { "Idempotency-Key": idempotency("revoke") } });
+  await documentCommand(`/documents/${lifecycle.value.documentId}:revoke`, { method: "POST", headers: { "Idempotency-Key": idempotency("revoke") } });
 }
 async function removeDocument() {
-  cleanup.value = await request(`/documents/${lifecycle.value.documentId}`, { method: "DELETE", headers: { "Idempotency-Key": idempotency("delete") } });
+  await documentCommand(`/documents/${lifecycle.value.documentId}`, { method: "DELETE", headers: { "Idempotency-Key": idempotency("delete") } });
 }
 async function selectVersionFile(event) {
   const file = event.target.files?.[0] ?? null;
@@ -272,11 +370,12 @@ async function selectUploadFile(event) {
 
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
-async function monitorIngestionJob(jobId, workflowRevision) {
+async function monitorIngestionJob(jobId, workflowRevision, versionId = upload.value.status?.document_version_id) {
   try {
     for (let poll = 0; poll < 300; poll += 1) {
       if (workflowRevision !== uploadWorkflowRevision) return;
       const job = await request(`/ingestion-jobs/${jobId}`);
+      if (workflowRevision !== uploadWorkflowRevision) return;
       upload.value.job = job;
       upload.value.status = { ...upload.value.status, job_state: job.state, attempt: job.attempt };
       if (terminalJobStates.has(job.state)) {
@@ -286,15 +385,16 @@ async function monitorIngestionJob(jobId, workflowRevision) {
           upload.value.error = job.error_code || `INGESTION_${job.state}`;
           return;
         }
-        quality.value = await request(
-          `/document-versions/${lifecycle.value.versionId}/quality-report`,
-        );
+        const report = await request(`/document-versions/${versionId}/quality-report`);
+        if (workflowRevision !== uploadWorkflowRevision) return;
+        quality.value = report;
         upload.value.phase = "READY_FOR_REVIEW";
         await loadDocuments();
+        if (workflowRevision !== uploadWorkflowRevision) return;
         const ingested = documents.value.find(
-          (item) => item.version_id === lifecycle.value.versionId,
+          (item) => item.version_id === versionId,
         );
-        if (ingested) await openDocument(ingested);
+        if (ingested) { await openDocument(ingested); if (lifecycle.value.versionId === versionId) quality.value = report; }
         return;
       }
       await wait(1000);
@@ -321,6 +421,7 @@ async function refreshIngestionJob() {
 }
 
 async function uploadDocument() {
+  if (spaceBusy.value) return;
   const file = upload.value.file;
   if (!file) {
     upload.value.error = "UPLOAD_FILE_REQUIRED";
@@ -334,6 +435,8 @@ async function uploadDocument() {
   upload.value.busy = true;
   upload.value.phase = "UPLOADING";
   const workflowRevision = ++uploadWorkflowRevision;
+  const spaceId = selectedSpaceId.value;
+  const digest = upload.value.sha256;
   try {
     if (!selectedSpaceId.value) throw new Error("SPACE_NOT_AVAILABLE");
     upload.value.status = {
@@ -343,16 +446,17 @@ async function uploadDocument() {
       expected_size: file.size,
       declared_mime: file.type || "application/octet-stream",
     };
-    const created = await request(`/spaces/${selectedSpaceId.value}/upload-sessions`, {
+    const created = await request(`/spaces/${spaceId}/upload-sessions`, {
       method: "POST",
       headers: { "Idempotency-Key": idempotency("upload-create") },
       body: JSON.stringify({
         filename: file.name,
         expected_size: file.size,
-        expected_sha256: upload.value.sha256,
+        expected_sha256: digest,
         declared_mime: file.type || "application/octet-stream",
       }),
     });
+    if (workflowRevision !== uploadWorkflowRevision) return;
     upload.value.status = {
       stage: "UPLOADING_CONTENT",
       upload_session_id: created.upload_session_id,
@@ -364,36 +468,45 @@ async function uploadDocument() {
     });
     if (!uploadedResponse.ok) throw new Error("UPLOAD_CONTENT_FAILED");
     const uploaded = await uploadedResponse.json();
+    if (workflowRevision !== uploadWorkflowRevision) return;
     upload.value.status = {
       stage: "COMPLETING_UPLOAD",
       upload_session_id: created.upload_session_id,
     };
-    upload.value.status = await request(`/upload-sessions/${created.upload_session_id}:complete`, {
+    const completed = await request(`/upload-sessions/${created.upload_session_id}:complete`, {
       method: "POST",
       headers: {
         "If-Match": `"${uploaded.row_version}"`,
         "Idempotency-Key": idempotency("upload-complete"),
       },
     });
-    lifecycle.value.documentId = upload.value.status.document_id;
+    if (workflowRevision !== uploadWorkflowRevision) return;
+    upload.value.status = completed;
+    lifecycle.value.documentId = completed.document_id;
     lifecycle.value.versionId = upload.value.status.document_version_id;
     upload.value.phase = "PROCESSING";
     void monitorIngestionJob(upload.value.status.job_id, workflowRevision);
   } catch (cause) {
+    if (workflowRevision !== uploadWorkflowRevision) return;
     upload.value.busy = false;
     upload.value.phase = "FAILED";
     upload.value.error = cause.message;
   }
 }
 async function loadDocumentVersionEtag() {
-  const document = await request(`/documents/${lifecycle.value.documentId}`);
+  const revision = selectionRevision;
+  const documentId = lifecycle.value.documentId;
+  const document = await request(`/documents/${documentId}`);
+  if (revision !== selectionRevision) return;
   versionUpload.value.documentRowVersion = String(document.row_version);
 }
 async function uploadNewVersion() {
+  const revision = selectionRevision;
+  const documentId = lifecycle.value.documentId;
   const file = versionUpload.value.file;
   if (!file || !versionUpload.value.documentRowVersion) return;
   const createdResponse = await authorizedFetch(
-    apiUrl(`/documents/${lifecycle.value.documentId}/versions/upload-sessions`),
+    apiUrl(`/documents/${documentId}/versions/upload-sessions`),
     {
       method: "POST",
       headers: {
@@ -411,6 +524,7 @@ async function uploadNewVersion() {
   );
   if (!createdResponse.ok) throw new Error("VERSION_SESSION_CREATE_FAILED");
   const created = await createdResponse.json();
+  if (revision !== selectionRevision) return;
   const uploadedResponse = await authorizedFetch(sourceUrl(created.upload_path), {
     method: "PUT",
     headers: { "If-Match": `"${created.row_version}"` },
@@ -418,7 +532,8 @@ async function uploadNewVersion() {
   });
   if (!uploadedResponse.ok) throw new Error("VERSION_UPLOAD_FAILED");
   const uploaded = await uploadedResponse.json();
-  versionUpload.value.status = await request(
+  if (revision !== selectionRevision) return;
+  const completed = await request(
     `/upload-sessions/${created.upload_session_id}:complete`,
     {
       method: "POST",
@@ -428,26 +543,38 @@ async function uploadNewVersion() {
       },
     },
   );
-  lifecycle.value.versionId = versionUpload.value.status.document_version_id;
+  if (revision !== selectionRevision) return;
+  versionUpload.value.status = completed;
+  lifecycle.value.versionId = completed.document_version_id;
+  selectionRevision += 1;
+  quality.value = null;
+  documentReview.value.result = null;
 }
 async function runLocalCleanup() {
-  cleanup.value = await request(`/documents/${lifecycle.value.documentId}/cleanup/local_file:run`, { method: "POST", headers: { "Idempotency-Key": idempotency("cleanup-local") } });
+  await documentCommand(`/documents/${lifecycle.value.documentId}/cleanup/local_file:run`, { method: "POST", headers: { "Idempotency-Key": idempotency("cleanup-local") } });
 }
 async function loadAudit() { auditEvents.value = await request("/admin/audit-events"); }
 async function loadQuality() {
+  const revision = selectionRevision;
+  const versionId = lifecycle.value.versionId;
   upload.value.error = "";
   try {
-    quality.value = await request(`/document-versions/${lifecycle.value.versionId}/quality-report`);
+    const loadedQuality = await request(`/document-versions/${versionId}/quality-report`);
+    if (revision !== selectionRevision) return;
+    quality.value = loadedQuality;
     upload.value.phase = "READY_FOR_REVIEW";
   } catch (cause) {
+    if (revision !== selectionRevision) return;
     upload.value.error = cause.message;
   }
 }
 async function submitDocumentReview() {
+  const revision = selectionRevision;
+  const versionId = lifecycle.value.versionId;
   upload.value.error = "";
   try {
-    documentReview.value.result = await request(
-      `/document-versions/${lifecycle.value.versionId}/review`,
+    const reviewed = await request(
+      `/document-versions/${versionId}/review`,
       {
         method: "POST",
         headers: { "Idempotency-Key": idempotency("document-review") },
@@ -468,8 +595,11 @@ async function submitDocumentReview() {
         }),
       },
     );
+    if (revision !== selectionRevision) return;
+    documentReview.value.result = reviewed;
     upload.value.phase = documentReview.value.result.decision === "APPROVED" ? "REVIEWED" : "READY_FOR_REVIEW";
   } catch (cause) {
+    if (revision !== selectionRevision) return;
     upload.value.error = cause.message;
   }
 }
@@ -570,17 +700,22 @@ async function generateAcceptance() {
       <header><div><span>KNOWLEDGE BASE WORKSPACE</span><h2>企业知识库</h2></div><div class="session"><label>当前知识库</label><select v-model="selectedSpaceId" data-testid="global-space-select" @change="changeSpace"><option v-if="!spaces.length" value="">尚未创建</option><option v-for="item in spaces" :key="item.id" :value="item.id">{{ item.name }}</option></select><button v-if="oidcEnabled && !authenticatedUser" @click="signIn">OIDC 登录</button><button v-if="oidcEnabled && authenticatedUser" @click="signOut">退出 {{ authenticatedUser.profile?.name ?? authenticatedUser.profile?.sub }}</button></div></header>
       <section v-if="tab==='ask'">
         <article class="hero-card"><span class="eyebrow">在指定知识库中检索</span><h3>{{ selectedSpace?.name ?? '请先创建知识库' }}</h3><label>问答知识库</label><select v-model="selectedSpaceId" @change="changeSpace"><option v-for="item in spaces" :key="item.id" :value="item.id">{{ item.name }}</option></select><label>问题</label><textarea v-model="question" rows="5" placeholder="例如：这份制度的有效期是多久？"/><button class="primary" :disabled="!selectedSpaceId || !question.trim()" @click="ask">从此知识库回答</button><span class="stage">{{ stage }}</span></article>
-        <article><h3>{{ result?.status ?? '尚未运行' }}</h3><p class="answer">{{ result?.answer ?? '答案仅在引用与权限复核后显示。' }}</p><a v-for="citation in citations" :key="citation.evidence_id" :href="citation.href" target="_blank">{{ citation.evidence_id }} · 签名来源</a><form v-if="result" @submit.prevent="submitFeedback"><select v-model="feedback.rating"><option :value="5">有帮助</option><option :value="1">无帮助</option></select><input v-model="feedback.comment" placeholder="反馈说明"><button>提交反馈</button></form><p class="error">{{ error }}</p></article>
+        <article><h3>{{ result?.status ?? '尚未运行' }}</h3><p class="answer">{{ result?.answer ?? '答案仅在引用与权限复核后显示。' }}</p><a v-for="citation in citations" :key="citation.evidence_id" :href="citation.href" @click.prevent="openCitation(citation)">{{ citation.evidence_id }} · 签名来源</a><pre v-if="citationSource" class="source-content">{{ citationSource }}</pre><form v-if="result" @submit.prevent="submitFeedback"><select v-model="feedback.rating"><option :value="5">有帮助</option><option :value="1">无帮助</option></select><input v-model="feedback.comment" placeholder="反馈说明"><button>提交反馈</button></form><p class="error">{{ error }}</p></article>
       </section>
       <section v-if="tab==='admin'">
+        <p v-if="capabilities" class="muted" data-testid="parser-capabilities">
+          文件扫描：{{ capabilities.scanner_mode === 'production' ? (capabilities.scanner_available ? '系统查毒引擎（逐文件检查）' : '引擎不可用，上传将被阻止') : '开发测试扫描，非生产查毒' }}；
+          原生解析：{{ capabilities.native_parser_isolated ? '受资源限制的独立进程' : '本地开发模式' }}；
+          MinerU：{{ capabilities.mineru_configured ? '已配置' : '未配置' }}；音频：{{ capabilities.audio_available ? '可用' : '未接入真实 ASR，不可作为正式知识发布' }}。
+        </p>
         <article><div class="section-title"><div><span class="eyebrow">KNOWLEDGE BASES</span><h3>创建和选择知识库</h3></div><span class="badge">{{ spaces.length }} 个</span></div><div class="inline-form"><input v-model="newSpaceName" data-testid="new-space-name" placeholder="知识库名称，例如：产品手册" @keyup.enter="createSpace"><button class="primary" data-testid="create-space-submit" :disabled="spaceBusy || !newSpaceName.trim()" @click="createSpace">{{ spaceBusy ? '创建中…' : '创建知识库' }}</button></div><div class="space-grid" data-testid="space-list"><button v-for="item in spaces" :key="item.id" class="space-card" :class="{selected:selectedSpaceId===item.id}" @click="selectedSpaceId=item.id;changeSpace()"><b>{{ item.name }}</b><small>{{ item.status }} · {{ item.id }}</small></button></div><p class="error">{{ spaceError }}</p></article>
         <article class="workflow"><h3>文档解析入库流程</h3><ol><li :class="{done: upload.status}">上传文件并创建任务</li><li :class="{done: upload.job?.state==='SUCCEEDED'}">Worker 解析、切块、Embedding、写入 Zilliz</li><li :class="{done: documentReview.result?.decision==='APPROVED'}">检查质量并提交安全复核</li><li :class="{done: upload.phase==='PUBLISHED'}">发布到检索空间</li><li :class="{done: upload.phase==='PUBLISHED'}">进入可信问答</li></ol><p class="workflow-status" :data-phase="upload.phase">{{ uploadPhaseText }}</p></article>
-        <article><h3>1. 上传到“{{ selectedSpace?.name ?? '-' }}”并解析入库</h3><input data-testid="initial-upload-file" type="file" @change="selectUploadFile"><button class="primary" data-testid="initial-upload-submit" :disabled="!selectedSpaceId || !upload.sha256 || upload.busy" @click="uploadDocument">{{ upload.busy ? '处理中…' : '上传并开始解析入库' }}</button><button v-if="upload.status?.job_id && !upload.busy && upload.job?.state!=='SUCCEEDED'" @click="refreshIngestionJob">刷新解析状态</button><progress :value="upload.hashProgress" max="1"/><code data-testid="initial-upload-hash">{{ upload.sha256 || '等待选择文件' }}</code><p class="error" data-testid="initial-upload-error">{{ upload.error }}</p><dl v-if="upload.status" class="result-grid" data-testid="initial-upload-result"><dt>当前阶段</dt><dd>{{ upload.status.stage ?? 'INGESTION_JOB' }}</dd><dt>Document ID</dt><dd>{{ upload.status.document_id ?? '-' }}</dd><dt>Version ID</dt><dd>{{ upload.status.document_version_id ?? '-' }}</dd><dt>Job ID</dt><dd>{{ upload.status.job_id ?? '-' }}</dd><dt>任务状态</dt><dd>{{ upload.job?.state ?? upload.status.status ?? '-' }}</dd><dt>尝试次数</dt><dd>{{ upload.job?.attempt ?? 0 }}</dd></dl><p v-else data-testid="initial-upload-result" class="empty-result">选择文件并点击“上传并开始解析入库”后，这里会显示任务进度。</p></article>
-        <article><div class="section-title"><div><span class="eyebrow">DOCUMENTS</span><h3>2. 已入库文件</h3></div><button :disabled="documentsBusy || !selectedSpaceId" @click="loadDocuments">{{ documentsBusy ? '刷新中…' : '刷新列表' }}</button></div><div v-if="documents.length" class="table-wrap"><table data-testid="document-list"><thead><tr><th>文件</th><th>解析状态</th><th>发布状态</th><th>分块</th><th>版本</th><th></th></tr></thead><tbody><tr v-for="item in documents" :key="item.document_id"><td><b>{{ item.filename }}</b><small>{{ item.document_id }}</small></td><td><span class="badge" :class="item.processing_state==='VALIDATED'?'success':'warning'">{{ item.processing_state }}</span></td><td><span class="badge">{{ item.publication_state }}</span></td><td>{{ item.chunk_count }}</td><td>v{{ item.version_no }}</td><td><button data-testid="view-chunks" @click="openDocument(item)">查看分块</button></td></tr></tbody></table></div><p v-else class="empty-result">该知识库还没有文档。</p></article>
-        <article v-if="selectedDocument" data-testid="chunk-panel"><div class="section-title"><div><span class="eyebrow">CHUNKS</span><h3>{{ selectedDocument.filename }} · 分块状态</h3></div><span class="badge">{{ chunks.length }} 个分块</span></div><p v-if="chunksBusy">正在读取分块…</p><div v-else-if="chunks.length" class="chunk-list"><details v-for="chunk in chunks" :key="chunk.chunk_id" class="chunk-card"><summary><span>#{{ chunk.ordinal+1 }} · {{ chunk.kind }}</span><span><b>{{ chunk.status }}</b> · {{ chunk.token_count ?? '-' }} tokens</span></summary><p>{{ chunk.text }}</p><code>{{ JSON.stringify(chunk.locator) }}</code></details></div><p v-else class="empty-result">解析任务尚未生成分块。</p></article>
+        <article><h3>1. 上传到“{{ selectedSpace?.name ?? '-' }}”并解析入库</h3><input data-testid="initial-upload-file" type="file" @change="selectUploadFile"><button class="primary" data-testid="initial-upload-submit" :disabled="spaceBusy || !selectedSpaceId || !upload.sha256 || upload.busy" @click="uploadDocument">{{ upload.busy ? '处理中…' : '上传并开始解析入库' }}</button><button v-if="upload.status?.job_id && !upload.busy && upload.job?.state!=='SUCCEEDED'" @click="refreshIngestionJob">刷新解析状态</button><progress :value="upload.hashProgress" max="1"/><code data-testid="initial-upload-hash">{{ upload.sha256 || '等待选择文件' }}</code><p class="error" data-testid="initial-upload-error">{{ upload.error }}</p><dl v-if="upload.status" class="result-grid" data-testid="initial-upload-result"><dt>当前阶段</dt><dd>{{ upload.status.stage ?? 'INGESTION_JOB' }}</dd><dt>Document ID</dt><dd>{{ upload.status.document_id ?? '-' }}</dd><dt>Version ID</dt><dd>{{ upload.status.document_version_id ?? '-' }}</dd><dt>Job ID</dt><dd>{{ upload.status.job_id ?? '-' }}</dd><dt>任务状态</dt><dd>{{ upload.job?.state ?? upload.status.status ?? '-' }}</dd><dt>尝试次数</dt><dd>{{ upload.job?.attempt ?? 0 }}</dd></dl><p v-else data-testid="initial-upload-result" class="empty-result">选择文件并点击“上传并开始解析入库”后，这里会显示任务进度。</p></article>
+        <article><div class="section-title"><div><span class="eyebrow">DOCUMENTS</span><h3>2. 已入库文件</h3></div><button :disabled="documentsBusy || !selectedSpaceId" @click="loadDocuments">{{ documentsBusy ? '刷新中…' : '刷新列表' }}</button></div><div v-if="documents.length" class="table-wrap"><table data-testid="document-list"><thead><tr><th>文件</th><th>解析状态</th><th>发布状态</th><th>分块</th><th>版本</th><th></th></tr></thead><tbody><tr v-for="item in documents" :key="item.document_id"><td><b>{{ item.filename }}</b><small>{{ item.document_id }}</small></td><td><span class="badge" :class="item.processing_state==='VALIDATED'?'success':'warning'">{{ item.processing_state }}</span></td><td><span class="badge">{{ item.publication_state }}</span></td><td>{{ item.chunk_count }}</td><td>v{{ item.version_no }}</td><td><button data-testid="view-chunks" @click="openDocument(item)">查看分块</button></td></tr></tbody></table></div><p v-else class="empty-result">该知识库还没有文档。</p><button v-if="documentsHasMore" :disabled="documentsBusy" @click="loadDocuments(true)">加载更多文件</button></article>
+        <article v-if="selectedDocument" data-testid="chunk-panel"><div class="section-title"><div><span class="eyebrow">CHUNKS</span><h3>{{ selectedDocument.filename }} · 分块状态</h3></div><span class="badge">已加载 {{ chunks.length }} 个分块</span></div><p v-if="chunksBusy">正在读取分块…</p><div v-else-if="chunks.length" class="chunk-list"><details v-for="chunk in chunks" :key="chunk.chunk_id" class="chunk-card"><summary><span>#{{ chunk.ordinal+1 }} · {{ chunk.kind }}</span><span><b>{{ chunk.status }}</b> · {{ chunk.token_count ?? '-' }} tokens</span></summary><p>{{ chunk.text }}</p><code>{{ JSON.stringify(chunk.locator) }}</code></details></div><p v-else class="empty-result">解析任务尚未生成分块。</p><button v-if="chunksHasMore" :disabled="chunksBusy" @click="loadChunks(lifecycle.versionId, selectionRevision, true)">加载更多分块</button></article>
         <article><h3>2. 检查质量并提交复核</h3><button :disabled="!lifecycle.versionId" @click="loadQuality">读取质量报告</button><select v-model="documentReview.decision"><option>APPROVED</option><option>NEEDS_REWORK</option><option>REJECTED</option></select><select v-model="documentReview.visibility"><option>TENANT</option><option>RESTRICTED</option></select><input v-model.number="documentReview.classificationLevel" type="number" min="0" max="3" placeholder="密级 0-3"><input v-model="documentReview.aclScopeTokens" placeholder="ACL scopes，普通本机文档可留空"><input v-model="documentReview.comment" placeholder="复核说明"><button class="primary" :disabled="!canReview" @click="submitDocumentReview">提交复核</button><p v-if="!quality" class="hint">解析成功后会自动加载质量报告；也可以点击上方按钮手动读取。</p><pre v-else>{{ JSON.stringify({quality,review:documentReview.result},null,2) }}</pre></article>
-        <article><h3>3. 发布并开始问答</h3><input v-model="lifecycle.documentId" placeholder="Document ID"><input v-model="lifecycle.versionId" placeholder="Version ID"><div class="actions"><button class="primary" :disabled="!canPublish" @click="publish">发布文档</button><button :disabled="upload.phase!=='PUBLISHED'" @click="tab='ask'">进入可信问答</button></div><p class="hint">只有质量复核通过并发布后，文档才会参与检索和回答。</p><pre v-if="cleanup">{{ JSON.stringify(cleanup,null,2) }}</pre></article>
-        <article><h3>高级生命周期操作</h3><input v-model="lifecycle.targetRevision" type="number" placeholder="ACL revision"><input v-model="lifecycle.watermark" type="number" placeholder="Watermark"><div class="actions"><button @click="rollback">回滚</button><button @click="permissions">权限转换</button><button @click="revoke">撤权</button><button class="danger" @click="removeDocument">删除</button></div></article>
+        <article><h3>3. 发布并开始问答</h3><input v-model="lifecycle.documentId" @input="selectionRevision++; uploadWorkflowRevision++; quality=null; documentReview.result=null" placeholder="Document ID"><input v-model="lifecycle.versionId" @input="selectionRevision++; uploadWorkflowRevision++; quality=null; documentReview.result=null" placeholder="Version ID"><div class="actions"><button class="primary" :disabled="!canPublish" @click="publish">发布文档</button><button :disabled="upload.phase!=='PUBLISHED'" @click="tab='ask'">进入可信问答</button></div><p class="hint">只有质量复核通过并发布后，文档才会参与检索和回答。</p><pre v-if="cleanup">{{ JSON.stringify(cleanup,null,2) }}</pre></article>
+        <article><h3>高级生命周期操作</h3><p>权限转换使用上方复核表单中的可见性、密级与 ACL，版本号由服务端校验。</p><div class="actions"><button @click="rollback">回滚</button><button @click="permissions">权限转换</button><button @click="revoke">撤权</button><button class="danger" @click="removeDocument">删除</button></div></article>
         <article><h3>既有文档新版本</h3><button @click="loadDocumentVersionEtag">读取 Document row version</button><input v-model="versionUpload.documentRowVersion" placeholder="If-Match row version"><input type="file" @change="selectVersionFile"><progress :value="versionUpload.hashProgress" max="1"/><button :disabled="!versionUpload.sha256" @click="uploadNewVersion">上传不可变新版本</button><p>PROCESSING 不可发布；Worker 验证为 STAGED 后再使用上方“发布”。</p><pre>{{ JSON.stringify(versionUpload.status,null,2) }}</pre></article>
         <article><h3>清理 Outbox 状态</h3><button @click="runLocalCleanup">运行受控本地清理</button><p>MySQL / Redis / Zilliz 需要外部授权，保持 PENDING_APPROVAL。</p><pre>{{ JSON.stringify(cleanup,null,2) }}</pre></article>
         <article><h3>追加式审计</h3><button @click="loadAudit">刷新</button><pre>{{ JSON.stringify(auditEvents,null,2) }}</pre></article>

@@ -47,7 +47,7 @@ from ragkb.document_processing.chunking import (
 )
 from ragkb.document_processing.parsers import ParserRouter
 from ragkb.engineering_security.file_validation import UploadFileValidator
-from ragkb.engineering_security.malware import SignatureMalwareScanner
+from ragkb.engineering_security.malware import SignatureMalwareScanner, SystemMalwareScanner
 from ragkb.engineering_security.references import HMACReferenceSigner, ReferenceStorePort
 from ragkb.infrastructure.governance_repository import SQLiteGovernanceRepository
 from ragkb.infrastructure.sqlite import SQLiteDatabase
@@ -160,11 +160,14 @@ def build_runtime_components(
         queue,
         storage,
         validator,
-        SignatureMalwareScanner(),
+        SystemMalwareScanner()
+        if profile_factory.name == "production"
+        else SignatureMalwareScanner(),
         tenant_id,
         queue_max_attempts=settings.queue_max_retries + 1,
         quarantine_max_bytes=int(settings.upload_quarantine_max_gb * 1024**3),
         max_concurrent_streams=settings.upload_max_concurrent_streams,
+        unsupported_formats=("wav", "mp3", "m4a") if profile_factory.name == "production" else (),
     )
     retrieval = profile_factory.build_retrieval(settings, database, persistence, tracer)
     control_plane = retrieval.control_plane
@@ -306,7 +309,13 @@ def build_runtime_components(
     qa_service = TrustedQAService(
         evidence_provider,
         generator,
-        LifecycleAwareFinalPermission(lifecycle_store, tenant_id),
+        LifecycleAwareFinalPermission(
+            lifecycle_store,
+            tenant_id,
+            control_plane=control_plane,
+            document_space=repository.get_document_space,
+            release=retrieval_release,
+        ),
         reference_signer,
         rag_repository,
         answer_cache,

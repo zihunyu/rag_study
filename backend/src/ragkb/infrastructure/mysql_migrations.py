@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Protocol
 
-MYSQL_MIGRATION_REVISION = "mysql-control-plane:g4-v4"
+MYSQL_MIGRATION_REVISION = "mysql-control-plane:g4-v5"
 MYSQL_MIGRATION_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
     migration_id VARCHAR(128) PRIMARY KEY,
@@ -152,6 +152,21 @@ MYSQL_MIGRATIONS: tuple[tuple[str, str], ...] = (
             PRIMARY KEY (tenant_id, space_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
         """,
+    ),
+)
+
+# Existing unbound rows are retained for recovery, but never guessed to belong to
+# a release. Reindex those versions before publishing them into a named generation.
+MYSQL_MIGRATIONS += (
+    (
+        "008_projection_generation",
+        "ALTER TABLE retrieval_chunk_projections ADD COLUMN index_generation_id "
+        "VARCHAR(128) CHARACTER SET ascii NOT NULL DEFAULT 'legacy-unbound'",
+    ),
+    (
+        "009_projection_generation_identity",
+        "ALTER TABLE retrieval_chunk_projections DROP PRIMARY KEY, "
+        "ADD PRIMARY KEY (tenant_id, index_generation_id, chunk_id)",
     ),
 )
 
@@ -539,6 +554,36 @@ MYSQL_G3_MIGRATIONS: tuple[tuple[str, str], ...] = (
             CONSTRAINT fk_index_batch_v3_job FOREIGN KEY (index_job_id)
                 REFERENCES index_jobs_v3(index_job_id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+        """,
+    ),
+    (
+        "124_ingestion_fences",
+        """
+        CREATE TABLE IF NOT EXISTS ingestion_fences (
+            tenant_id VARCHAR(191) NOT NULL,
+            version_id VARCHAR(191) NOT NULL,
+            job_id VARCHAR(191) NOT NULL,
+            fence_token BIGINT UNSIGNED NOT NULL,
+            PRIMARY KEY (tenant_id, version_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+        """,
+    ),
+    (
+        "125_repair_legacy_publication_candidates",
+        """
+        UPDATE upload_entities_v3 AS candidate
+        JOIN upload_entities_v3 AS version
+          ON version.tenant_id=candidate.tenant_id AND version.entity_type='versions'
+          AND version.entity_id=candidate.entity_id
+        SET candidate.payload_json=JSON_SET(candidate.payload_json, '$.projection_state',
+              IF(JSON_UNQUOTE(JSON_EXTRACT(version.payload_json, '$.publication_state'))='SERVING',
+                 'SERVING', 'RETIRED')),
+            candidate.entity_revision=candidate.entity_revision+1,
+            candidate.updated_at=NOW(6)
+        WHERE candidate.entity_type='candidates'
+          AND JSON_UNQUOTE(JSON_EXTRACT(candidate.payload_json, '$.projection_state'))='STAGED'
+          AND JSON_UNQUOTE(JSON_EXTRACT(version.payload_json, '$.publication_state'))
+              IN ('SERVING', 'SUPERSEDED')
         """,
     ),
 )

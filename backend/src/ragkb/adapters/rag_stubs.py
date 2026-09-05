@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from typing import Any
 
+from ragkb.contracts.ports import RetrievalControlPlanePort, RetrievalReleasePort
 from ragkb.domain.errors import GenerationUnavailable
 from ragkb.domain.ids import new_uuid7
 from ragkb.domain.rag import (
@@ -14,6 +16,7 @@ from ragkb.domain.rag import (
     EvidencePackage,
     QuestionDisposition,
 )
+from ragkb.domain.retrieval import SearchContext
 
 
 class SyntheticEvidenceProvider:
@@ -98,6 +101,8 @@ class StaticFinalPermission:
         subject_scope_tokens: tuple[str, ...],
         permission_revision: int,
         at_epoch: int,
+        clearance_level: int = 0,
+        generation_id: str = "",
     ) -> bool:
         del subject_scope_tokens
         return bool(
@@ -116,9 +121,20 @@ class StaticFinalPermission:
 
 
 class LifecycleAwareFinalPermission:
-    def __init__(self, lifecycle_store: Any, tenant_id: str) -> None:
+    def __init__(
+        self,
+        lifecycle_store: Any,
+        tenant_id: str,
+        *,
+        control_plane: RetrievalControlPlanePort | None = None,
+        document_space: Callable[[str], str] | None = None,
+        release: RetrievalReleasePort | None = None,
+    ) -> None:
         self.lifecycle_store = lifecycle_store
         self.tenant_id = tenant_id
+        self.control_plane = control_plane
+        self.document_space = document_space
+        self.release = release
 
     def recheck(
         self,
@@ -129,8 +145,32 @@ class LifecycleAwareFinalPermission:
         subject_scope_tokens: tuple[str, ...],
         permission_revision: int,
         at_epoch: int,
+        clearance_level: int = 0,
+        generation_id: str = "",
     ) -> bool:
-        del subject_scope_tokens
+        self.lifecycle_store.reload()
+        if self.control_plane is not None:
+            if self.document_space is None or self.release is None:
+                return False
+            for item in evidence:
+                space_id = self.document_space(item.document_id)
+                release = self.release.current_release(tenant_id, space_id)
+                if generation_id and release.active_generation_id != generation_id:
+                    return False
+                context = SearchContext(
+                    tenant_id,
+                    (space_id,),
+                    subject_scope_tokens,
+                    clearance_level,
+                    at_epoch,
+                    release.active_generation_id,
+                    release.active_permission_revision,
+                    release.security_watermark,
+                )
+                allowed = self.control_plane.authorize_chunks((item.chunk_id,), context)
+                chunk = allowed.get(item.chunk_id)
+                if chunk is None or not self.lifecycle_store.authorizes_chunk(chunk, context):
+                    return False
         return bool(
             tenant_id == self.tenant_id
             and user_id

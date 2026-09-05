@@ -6,9 +6,13 @@ import asyncio
 import hashlib
 import json
 import re
+import time
 from collections.abc import AsyncIterable
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any
+
+from starlette.concurrency import run_in_threadpool
 
 from ragkb.contracts.jobs import PersistentJobQueuePort
 from ragkb.contracts.ports import ContentStoragePort, StorageIntegrityError
@@ -43,6 +47,10 @@ class UploadService:
         queue_max_attempts: int = 3,
         quarantine_max_bytes: int | None = None,
         max_concurrent_streams: int = 4,
+        stream_timeout_seconds: float = 300,
+        stream_idle_timeout_seconds: float = 30,
+        unsupported_formats: tuple[str, ...] = (),
+        session_ttl_seconds: float = 86400,
     ) -> None:
         if max_concurrent_streams < 1:
             raise ValueError("UPLOAD_STREAM_CONCURRENCY_INVALID")
@@ -55,6 +63,23 @@ class UploadService:
         self.queue_max_attempts = queue_max_attempts
         self.quarantine_max_bytes = quarantine_max_bytes or validator.max_size_bytes * 10
         self._stream_slots = asyncio.Semaphore(max_concurrent_streams)
+        self.stream_timeout_seconds = stream_timeout_seconds
+        self.stream_idle_timeout_seconds = stream_idle_timeout_seconds
+        self.unsupported_formats = unsupported_formats
+        self.session_ttl_seconds = session_ttl_seconds
+
+    def _check_session_expiry(self, session: UploadSession) -> None:
+        if session.state in {
+            UploadSessionState.CREATED,
+            UploadSessionState.FAILED,
+            UploadSessionState.UPLOADED,
+        }:
+            if (
+                session.created_at is None
+                or time.time() - session.created_at > self.session_ttl_seconds
+            ):
+                self.storage.delete("quarantine", session.quarantine_key)
+                raise FileValidationError("UPLOAD_SESSION_EXPIRED", "create a new upload session")
 
     @staticmethod
     def request_hash(payload: dict[str, Any]) -> str:
@@ -74,6 +99,10 @@ class UploadService:
         target_document_row_version: int | None = None,
     ) -> UploadSession:
         safe_filename = self.validator.validate_filename(filename)
+        if Path(safe_filename).suffix.lower().lstrip(".") in self.unsupported_formats:
+            raise FileValidationError(
+                "ASR_PROVIDER_NOT_CONFIGURED", "audio requires a real ASR provider"
+            )
         if expected_size < 0:
             raise FileValidationError("DOC_INVALID_SIZE", "expected_size must be non-negative")
         if expected_size > self.validator.max_size_bytes:
@@ -157,7 +186,8 @@ class UploadService:
         expected_row_version: int,
         content_length: int | None,
     ) -> UploadSession:
-        session = self.repository.get_session(session_id)
+        session = await run_in_threadpool(self.repository.get_session, session_id)
+        await run_in_threadpool(self._check_session_expiry, session)
         if session.row_version != expected_row_version:
             raise OptimisticConcurrencyError(session_id)
         if session.state not in {UploadSessionState.CREATED, UploadSessionState.FAILED}:
@@ -173,12 +203,21 @@ class UploadService:
                 raise FileValidationError(
                     "DOC_SIZE_MISMATCH", "Content-Length differs from declared size"
                 )
-        async with self._stream_slots:
+
+        async def timed_chunks() -> AsyncIterable[bytes]:
+            iterator = aiter(chunks)
+            while True:
+                try:
+                    yield await asyncio.wait_for(anext(iterator), self.stream_idle_timeout_seconds)
+                except StopAsyncIteration:
+                    return
+
+        async with asyncio.timeout(self.stream_timeout_seconds), self._stream_slots:
             try:
                 written = await self.storage.write_stream(
                     "quarantine",
                     session.quarantine_key,
-                    chunks,
+                    timed_chunks(),
                     max_bytes=self.validator.max_size_bytes,
                     quota_bytes=self.quarantine_max_bytes,
                     content_length=content_length,
@@ -192,12 +231,13 @@ class UploadService:
                     error.code, messages.get(error.code, "streaming upload failed")
                 ) from error
         if written.size != session.expected_size:
-            self.storage.delete("quarantine", session.quarantine_key)
+            await run_in_threadpool(self.storage.delete, "quarantine", session.quarantine_key)
             raise FileValidationError("DOC_SIZE_MISMATCH", "uploaded size differs from declaration")
         if written.sha256 != session.expected_sha256:
-            self.storage.delete("quarantine", session.quarantine_key)
+            await run_in_threadpool(self.storage.delete, "quarantine", session.quarantine_key)
             raise FileValidationError("DOC_HASH_MISMATCH", "uploaded hash differs from declaration")
-        return self.repository.update_session(
+        return await run_in_threadpool(
+            self.repository.update_session,
             session.id,
             session.row_version,
             UploadSessionState.UPLOADED,
@@ -215,6 +255,21 @@ class UploadService:
             "status": "QUEUED",
             "real_acceptance": False,
         }
+
+    def reconcile_promoted_sessions(self) -> list[dict[str, Any]]:
+        """PROMOTED is the durable upload-to-queue command; retry its immutable intent."""
+        pending = getattr(self.repository, "pending_promoted_sessions", None)
+        results = []
+        if callable(pending):
+            for session in pending(limit=100):
+                results.append(
+                    self.complete(
+                        session.id,
+                        expected_row_version=session.row_version,
+                        idempotency_key=f"recover:{session.id}",
+                    )
+                )
+        return results
 
     def complete(
         self,
@@ -244,6 +299,7 @@ class UploadService:
         }:
             raise UploadStateError(f"cannot complete session in state {session.state.value}")
         if session.state is UploadSessionState.UPLOADED:
+            self._check_session_expiry(session)
             quarantine_path = self.storage.path_for("quarantine", session.quarantine_key)
             try:
                 detected = self.validator.inspect(

@@ -49,15 +49,39 @@ class MySQLNormalizedEntityStore:
         names = [item[0] for item in cursor.description]
         return dict(zip(names, row, strict=True))
 
-    def load(self, cursor: Any) -> EntityMap:
+    def load(
+        self,
+        cursor: Any,
+        *,
+        entity_type: str | None = None,
+        entity_id: str | None = None,
+        parent_id: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> EntityMap:
+        conditions = ["tenant_id=%s"]
+        parameters: list[object] = [self.tenant_id]
+        for field, value in (
+            ("entity_type", entity_type),
+            ("entity_id", entity_id),
+            ("parent_id", parent_id),
+        ):
+            if value is not None:
+                conditions.append(f"{field}=%s")
+                parameters.append(value)
+        paging = ""
+        if limit is not None:
+            paging = " LIMIT %s OFFSET %s"
+            parameters.extend((limit, offset))
         cursor.execute(
             f"""
             SELECT entity_type, entity_id, logical_key, parent_id, ordinal,
                    payload_json, entity_revision
-            FROM {self.table} WHERE tenant_id=%s
+            FROM {self.table} WHERE {" AND ".join(conditions)}
             ORDER BY entity_type, parent_id, ordinal, entity_id
-            """,  # noqa: S608 - table is selected from a closed internal allowlist
-            (self.tenant_id,),
+            {paging}
+            """,  # noqa: S608 - identifiers are closed internal constants
+            tuple(parameters),
         )
         entities: EntityMap = {}
         for raw in cursor.fetchall():

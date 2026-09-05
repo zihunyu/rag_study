@@ -28,6 +28,7 @@ class UploadSession:
     job_id: str | None
     error_code: str | None
     row_version: int
+    created_at: float | None = None
 
 
 class IdempotencyConflictError(ValueError):

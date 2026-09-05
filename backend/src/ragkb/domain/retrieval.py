@@ -76,6 +76,7 @@ class IndexCandidate:
     channel: SearchChannel
     rank: int
     score: float
+    vector_pk: str | None = None
 
 
 @dataclass(frozen=True)
@@ -98,6 +99,7 @@ class AuthorizedChunk:
     valid_to_epoch: int
     permission_revision: int
     current_version: bool
+    index_generation_id: str = ""
 
 
 @dataclass(frozen=True)

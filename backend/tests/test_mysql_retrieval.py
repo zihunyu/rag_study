@@ -79,6 +79,7 @@ def _chunk() -> AuthorizedChunk:
         0,
         2,
         True,
+        "generation-1",
     )
 
 
@@ -103,6 +104,7 @@ def test_mysql_projection_authorization_write_lifecycle_and_release(tmp_path: Pa
         "valid_to_epoch": 0,
         "permission_revision": 2,
         "current_version": 1,
+        "index_generation_id": "generation-1",
     }
     release = {
         "tenant_id": "tenant-1",
@@ -124,7 +126,7 @@ def test_mysql_projection_authorization_write_lifecycle_and_release(tmp_path: Pa
     ).settings
     assert settings is not None
     control = MySQLControlPlaneAdapter(settings, connection_factory=factory)
-    adapter = MySQLRetrievalControlPlane(control)
+    adapter = MySQLRetrievalControlPlane(control, "generation-1")
     context = SearchContext("tenant-1", ("space-1",), ("group:reader",), 1, 1, "generation-1", 2, 2)
 
     assert adapter.authorize_chunks(("chunk-1",), context)["chunk-1"] == chunk

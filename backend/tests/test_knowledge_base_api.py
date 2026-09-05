@@ -116,6 +116,9 @@ def test_created_knowledge_base_owns_documents_chunks_search_and_ask(
     assert answer.status_code == 200
     assert answer.json()["status"] == "answered", answer.json()
     assert answer.json()["verified"] is True
+    source = client.get(answer.json()["citations"][0]["source_url"])
+    assert source.status_code == 200, source.text
+    assert "三年" in source.json()["text"]
 
 
 def test_unknown_knowledge_base_is_not_searchable(tmp_path: Path, monkeypatch) -> None:

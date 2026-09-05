@@ -7,7 +7,6 @@ import pytest
 from fastapi.testclient import TestClient
 from ragkb.api.app import create_app
 from ragkb.application.lifecycle import LifecycleIdempotencyConflict, LifecycleService
-from ragkb.domain.lifecycle import LifecycleState
 from ragkb.infrastructure.lifecycle_repository import SQLiteLifecycleStore
 from ragkb.infrastructure.sqlite import SQLiteDatabase
 from ragkb.runtime_components import build_runtime_components
@@ -76,49 +75,33 @@ def test_delete_tombstone_blocks_document_and_versions_before_and_after_restart(
 
 
 def test_acl_idempotency_is_stable_conflicting_and_restart_safe(tmp_path: Path) -> None:
+    from test_lifecycle_fact_source import _process_next, _upload
     components = _components(tmp_path)
-    components.lifecycle_service.register_document("doc", "v1", trace_id="trace")
-    record = components.lifecycle_store.documents["doc"]
-    record.lifecycle_state = LifecycleState.ACTIVE
-    record.visible = True
-    components.lifecycle_store.persist_state(tenant_id=components.tenant_id)
     client = TestClient(create_app(components))
-    request = {
-        "target_acl_revision": 2,
-        "required_watermark": 10,
-        "observed_watermark": 10,
-        "projection_ok": True,
-    }
-
-    first = client.put(
-        "/api/v1/resources/document/doc/permissions",
-        headers={"Idempotency-Key": "acl-key"},
-        json=request,
+    document_id, version_id, _ = _upload(client, components.space_id)
+    _process_next(components, client, version_id)
+    published = client.post(
+        f"/api/v1/document-versions/{version_id}:publish",
+        headers={"Idempotency-Key": "publish"},
     )
-    replay = client.put(
-        "/api/v1/resources/document/doc/permissions",
-        headers={"Idempotency-Key": "acl-key"},
-        json=request,
-    )
-    conflict = client.put(
-        "/api/v1/resources/document/doc/permissions",
-        headers={"Idempotency-Key": "acl-key"},
-        json={**request, "target_acl_revision": 3},
-    )
-
+    assert published.status_code == 200
+    request = {"security_projection": {"visibility": "RESTRICTED", "classification_level": 1,
+                                       "acl_scope_tokens": ["group:legal"]}}
+    headers = {"Idempotency-Key": "acl-key", "If-Match": f'\"{published.json()["row_version"]}\"'}
+    path = f"/api/v1/resources/document/{document_id}/permissions"
+    first = client.put(path, headers=headers, json=request)
+    replay = client.put(path, headers=headers, json=request)
+    conflict = client.put(path, headers=headers, json={"security_projection": {
+        **request["security_projection"], "classification_level": 2}})
+    assert first.status_code == 200, first.text
     assert first.json()["visible"] is True
     assert replay.json() == first.json()
     assert conflict.status_code == 409
     assert conflict.json()["code"] == "CONFLICT_IDEMPOTENCY_KEY"
-
     restarted = _components(tmp_path)
-    after_restart = TestClient(create_app(restarted)).put(
-        "/api/v1/resources/document/doc/permissions",
-        headers={"Idempotency-Key": "acl-key"},
-        json=request,
-    )
+    after_restart = TestClient(create_app(restarted)).put(path, headers=headers, json=request)
     assert after_restart.json() == first.json()
-    assert restarted.lifecycle_store.is_accessible("doc")
+    assert restarted.lifecycle_store.is_accessible(document_id)
 
 
 def test_all_lifecycle_operations_are_idempotent_and_validation_does_not_consume_key(

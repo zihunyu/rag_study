@@ -6,6 +6,7 @@ import contextvars
 import importlib
 import secrets
 import time
+from collections import deque
 from collections.abc import Iterator, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
@@ -32,11 +33,17 @@ class InMemoryTracer:
 
     revision = "rag-tracing:v1"
 
-    def __init__(self) -> None:
-        self.completed: list[CompletedSpan] = []
+    def __init__(self, max_spans: int = 2048) -> None:
+        if max_spans < 1:
+            raise ValueError("TRACE_CAPACITY_MUST_BE_POSITIVE")
+        self._completed: deque[CompletedSpan] = deque(maxlen=max_spans)
         self._current: contextvars.ContextVar[tuple[str, str] | None] = contextvars.ContextVar(
             "rag_current_span", default=None
         )
+
+    @property
+    def completed(self) -> list[CompletedSpan]:
+        return list(self._completed)
 
     @contextmanager
     def span(self, name: str, attributes: Mapping[str, object] | None = None) -> Iterator[None]:
@@ -54,7 +61,7 @@ class InMemoryTracer:
         finally:
             duration = time.perf_counter() - started
             self._current.reset(token)
-            self.completed.append(
+            self._completed.append(
                 CompletedSpan(
                     trace_id,
                     span_id,

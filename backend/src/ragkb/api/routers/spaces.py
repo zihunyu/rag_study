@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Query, Request, status
 
 from ragkb.api.models import (
     CreateSpaceRequest,
     KnowledgeDocumentResponse,
     SpaceResponse,
 )
+from ragkb.api.support import document_manager, ensure_document_readable
 from ragkb.api.support import (
     principal as _principal,
 )
@@ -37,7 +38,7 @@ def build_spaces_router(runtime: RuntimeComponents) -> APIRouter:
             raise ResourceNotFoundError(space_id)
 
     @router.get("/api/v1/spaces", response_model=list[SpaceResponse], tags=["spaces"])
-    async def spaces(request: Request) -> list[SpaceResponse]:
+    def spaces(request: Request) -> list[SpaceResponse]:
         principal = _principal(request)
         _require_role(principal, "reader", "knowledge_maintainer", "admin")
         _require_local_tenant(runtime, principal)
@@ -57,7 +58,7 @@ def build_spaces_router(runtime: RuntimeComponents) -> APIRouter:
         status_code=status.HTTP_201_CREATED,
         tags=["spaces"],
     )
-    async def create_space(body: CreateSpaceRequest, request: Request) -> SpaceResponse:
+    def create_space(body: CreateSpaceRequest, request: Request) -> SpaceResponse:
         principal = _principal(request)
         _require_role(principal, "knowledge_maintainer", "admin")
         _require_local_tenant(runtime, principal)
@@ -87,14 +88,30 @@ def build_spaces_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=list[KnowledgeDocumentResponse],
         tags=["spaces", "documents"],
     )
-    async def documents(space_id: str, request: Request) -> list[KnowledgeDocumentResponse]:
+    def documents(
+        space_id: str,
+        request: Request,
+        limit: int = Query(default=100, ge=1, le=100),
+        offset: int = Query(default=0, ge=0),
+    ) -> list[KnowledgeDocumentResponse]:
         principal = _principal(request)
         _require_role(principal, "reader", "knowledge_maintainer", "admin")
         _require_local_tenant(runtime, principal)
         require_space(principal.tenant_id, space_id)
-        return [
-            KnowledgeDocumentResponse.model_validate(item)
-            for item in runtime.repository.list_documents(space_id)
-        ]
+        result = []
+        for item in runtime.repository.list_documents(
+            space_id,
+            limit=limit,
+            offset=offset,
+            current_only=not document_manager(principal, space_id),
+        ):
+            try:
+                ensure_document_readable(
+                    runtime, str(item["document_id"]), principal, str(item["version_id"])
+                )
+            except ResourceNotFoundError:
+                continue
+            result.append(KnowledgeDocumentResponse.model_validate(item))
+        return result
 
     return router

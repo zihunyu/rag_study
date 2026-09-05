@@ -62,11 +62,13 @@ def test_complete_resumes_after_promotion_and_document_creation(tmp_path: Path) 
     assert recoverable.document_id is not None
     assert recoverable.document_version_id is not None
 
-    result = components.uploads.complete(
-        session.id,
-        expected_row_version=recoverable.row_version,
-        idempotency_key="complete",
-    )
+    result = components.uploads.reconcile_promoted_sessions()[0]
+    from ragkb.runtime import _reconcile_upload_intents
+
+    _reconcile_upload_intents(components)
+    assert components.uploads.reconcile_promoted_sessions() == []
+    components.lifecycle_store.reload()
+    assert result["document_id"] in components.lifecycle_store.documents
 
     assert result["status"] == "QUEUED"
     assert len(components.repository.get_versions(result["document_id"])) == 1

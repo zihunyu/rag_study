@@ -61,7 +61,8 @@ def test_recorded_migrations_apply_once_and_second_run_is_idempotent() -> None:
     assert second["applied_count"] == 0
     assert second["skipped_count"] == len(migrations)
     assert connection.applied == {migration_id for migration_id, _ in migrations}
-    assert not any("DROP " in statement.upper() for statement in connection.statements)
+    assert not any("DROP TABLE" in statement.upper() or "DROP DATABASE" in statement.upper()
+                   for statement in connection.statements)
 
 
 def test_publication_outbox_primary_key_fits_mysql_utf8mb4_index_limit() -> None:

@@ -62,67 +62,72 @@ def run_runtime_backup_restore_probe() -> dict[str, object]:
             database_path=source_database,
             app_secret_override=secret,
         )
-        client = TestClient(create_app(source))
-        published = _upload(client, source.space_id, "published", b"published backup body")
-        worker = LocalIngestionWorker(
-            source.queue,
-            source.repository,
-            source.storage,
-            ParserRouter(),
-            "backup-worker",
-        )
-        assert worker.run_once()
-        version_id = published["document_version_id"]
-        client.post(
-            f"/api/v1/document-versions/{version_id}/review",
-            headers={"Idempotency-Key": "backup-review"},
-            json={
-                "decision": "APPROVED",
-                "comment": "temporary backup probe",
-                "security_projection": {
-                    "visibility": "TENANT",
-                    "classification_level": 0,
-                    "acl_scope_tokens": [],
+        with TestClient(create_app(source)) as client:
+            published = _upload(client, source.space_id, "published", b"published backup body")
+            worker = LocalIngestionWorker(
+                source.queue,
+                source.repository,
+                source.storage,
+                ParserRouter(),
+                "backup-worker",
+            )
+            assert worker.run_once()
+            version_id = published["document_version_id"]
+            client.post(
+                f"/api/v1/document-versions/{version_id}/review",
+                headers={"Idempotency-Key": "backup-review"},
+                json={
+                    "decision": "APPROVED",
+                    "comment": "temporary backup probe",
+                    "security_projection": {
+                        "visibility": "TENANT",
+                        "classification_level": 0,
+                        "acl_scope_tokens": [],
+                    },
                 },
-            },
-        )
-        client.post(
-            f"/api/v1/document-versions/{version_id}:publish",
-            headers={"Idempotency-Key": "backup-publish"},
-        )
-        deleted = _upload(client, source.space_id, "deleted", b"deleted backup body")
-        reference_url = source.reference_signer.source_url(
-            "backup-run",
-            "E1",
-            source.tenant_id,
-            source.settings.auth_local_user_id,
-            deleted["document_id"],
-        )
-        client.delete(
-            f"/api/v1/documents/{deleted['document_id']}",
-            headers={"Idempotency-Key": "backup-delete"},
-        )
-        rag_run_id = client.post("/api/v1/ask", json={"question": "backup probe"}).json()[
-            "rag_run_id"
-        ]
-        queued = source.queue.enqueue(
-            "backup-probe", {"synthetic": True}, "backup-key", "backup-hash"
-        )
-        replayed = source.queue.enqueue(
-            "backup-probe", {"synthetic": True}, "backup-key", "backup-hash"
-        )
-        original_key = str(source.repository.get_version(version_id)["original_key"])
-        prefix, _, _ = original_key.rpartition("/original/")
-        artifact_key = f"{prefix}/artifacts/canonical-document-v1.json"
-        expected_hashes = {
-            ("original", original_key): hashlib.sha256(
-                source.storage.read_bytes("original", original_key)
-            ).hexdigest(),
-            ("artifacts", artifact_key): hashlib.sha256(
-                source.storage.read_bytes("artifacts", artifact_key)
-            ).hexdigest(),
-        }
-        client.close()
+            )
+            client.post(
+                f"/api/v1/document-versions/{version_id}:publish",
+                headers={"Idempotency-Key": "backup-publish"},
+            )
+            deleted = _upload(client, source.space_id, "deleted", b"deleted backup body")
+            reference_url = source.reference_signer.source_url(
+                "backup-run",
+                "E1",
+                source.tenant_id,
+                source.settings.auth_local_user_id,
+                deleted["document_id"],
+            )
+            client.delete(
+                f"/api/v1/documents/{deleted['document_id']}",
+                headers={"Idempotency-Key": "backup-delete"},
+            )
+            rag_run_id = client.post("/api/v1/ask", json={"question": "backup probe"}).json()[
+                "rag_run_id"
+            ]
+            queued = source.queue.enqueue(
+                "backup-probe", {"synthetic": True}, "backup-key", "backup-hash"
+            )
+            replayed = source.queue.enqueue(
+                "backup-probe", {"synthetic": True}, "backup-key", "backup-hash"
+            )
+            original_key = str(source.repository.get_version(version_id)["original_key"])
+            prefix, _, _ = original_key.rpartition("/original/")
+            artifact_key = next(
+                key
+                for partition, key in source.repository.list_local_content_lineage(
+                    published["document_id"]
+                )
+                if partition == "artifacts" and "canonical-document-f" in key
+            )
+            expected_hashes = {
+                ("original", original_key): hashlib.sha256(
+                    source.storage.read_bytes("original", original_key)
+                ).hexdigest(),
+                ("artifacts", artifact_key): hashlib.sha256(
+                    source.storage.read_bytes("artifacts", artifact_key)
+                ).hexdigest(),
+            }
 
         with (
             closing(sqlite3.connect(source_database)) as connection,

@@ -37,7 +37,7 @@ def build_operations_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=list[AuditEventResponse],
         tags=["admin"],
     )
-    async def audit_events(request: Request) -> list[AuditEventResponse]:
+    def audit_events(request: Request) -> list[AuditEventResponse]:
         principal = _principal(request)
         _require_role(principal, "admin")
         _require_local_tenant(runtime, principal)
@@ -59,14 +59,14 @@ def build_operations_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=DiagnosticsResponse,
         tags=["operations"],
     )
-    async def diagnostics(request: Request) -> DiagnosticsResponse:
+    def diagnostics(request: Request) -> DiagnosticsResponse:
         principal = _principal(request)
         _require_role(principal, "admin")
         _require_local_tenant(runtime, principal)
         return DiagnosticsResponse.model_validate(runtime.observability.diagnostics())
 
     @router.get("/api/v1/admin/alerts", tags=["operations"])
-    async def alerts(request: Request) -> list[dict[str, object]]:
+    def alerts(request: Request) -> list[dict[str, object]]:
         principal = _principal(request)
         _require_role(principal, "admin")
         _require_local_tenant(runtime, principal)
@@ -77,9 +77,7 @@ def build_operations_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=EvidenceIndexResponse,
         tags=["operations"],
     )
-    async def add_evidence_index(
-        body: EvidenceIndexRequest, request: Request
-    ) -> EvidenceIndexResponse:
+    def add_evidence_index(body: EvidenceIndexRequest, request: Request) -> EvidenceIndexResponse:
         principal = _principal(request)
         _require_role(principal, "admin")
         _require_local_tenant(runtime, principal)
@@ -101,7 +99,7 @@ def build_operations_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=GovernanceRegisterResponse,
         tags=["operations"],
     )
-    async def add_governance_register(
+    def add_governance_register(
         body: GovernanceRegisterRequest, request: Request
     ) -> GovernanceRegisterResponse:
         principal = _principal(request)

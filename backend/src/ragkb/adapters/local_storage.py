@@ -6,6 +6,7 @@ import asyncio
 import os
 import tempfile
 import threading
+import time
 from collections.abc import AsyncIterable
 from hashlib import sha256
 from pathlib import Path
@@ -81,12 +82,33 @@ class LocalFileStorage:
     ) -> int:
         with self._quota_lock:
             partition_root = self.root / "quarantine"
+            self.cleanup_stale_uploads()
             existing_target = target.stat().st_size if target.is_file() else 0
             committed = max(0, self._directory_size(partition_root) - existing_target)
             if committed + self._reserved_quarantine_bytes + requested_bytes > quota_bytes:
                 raise StorageIntegrityError("UPLOAD_QUARANTINE_QUOTA_EXCEEDED")
             self._reserved_quarantine_bytes += requested_bytes
             return requested_bytes
+
+    def cleanup_stale_uploads(self, max_age_seconds: float = 3600) -> int:
+        # Streams expire after 300 s; uncompleted upload sessions after 24 h.
+        # Never touch original/artifact partitions, symlinks, or external paths.
+        root = (self.root / "quarantine").resolve()
+        cutoff = time.time() - max_age_seconds
+        removed = 0
+        for path in root.rglob("*"):
+            if removed >= 100:
+                break
+            if path.is_symlink() or not path.is_file() or not path.resolve().is_relative_to(root):
+                continue
+            try:
+                expiry = cutoff if path.name.endswith(".uploading") else time.time() - 86400
+                if path.stat().st_mtime < expiry:
+                    path.unlink()
+                    removed += 1
+            except FileNotFoundError:
+                continue
+        return removed
 
     def _grow_quarantine_reservation(
         self,
@@ -130,7 +152,8 @@ class LocalFileStorage:
         target = self._safe_path(partition, key)
         target.parent.mkdir(parents=True, exist_ok=True)
         initial_reservation = content_length if content_length is not None else max_bytes
-        reservation = self._reserve_quarantine(
+        reservation = await asyncio.to_thread(
+            self._reserve_quarantine,
             target,
             requested_bytes=initial_reservation,
             quota_bytes=quota_bytes,
@@ -155,7 +178,8 @@ class LocalFileStorage:
                     size += len(chunk)
                     if size > max_bytes:
                         raise StorageIntegrityError("DOC_SIZE_LIMIT")
-                    reservation = self._grow_quarantine_reservation(
+                    reservation = await asyncio.to_thread(
+                        self._grow_quarantine_reservation,
                         target, reservation, size, quota_bytes
                     )
                     digest.update(chunk)

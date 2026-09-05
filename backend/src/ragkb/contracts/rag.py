@@ -59,6 +59,8 @@ class FinalPermissionPort(Protocol):
         subject_scope_tokens: tuple[str, ...],
         permission_revision: int,
         at_epoch: int,
+        clearance_level: int = 0,
+        generation_id: str = "",
     ) -> bool: ...
 
 

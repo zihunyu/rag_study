@@ -10,6 +10,7 @@ from ragkb.api.models import (
     PermissionUpdateRequest,
     RollbackRequest,
 )
+from ragkb.api.support import if_match as parse_if_match
 from ragkb.api.support import (
     lifecycle_response as _lifecycle_response,
 )
@@ -19,6 +20,7 @@ from ragkb.api.support import (
 from ragkb.api.support import (
     request_id as _request_id,
 )
+from ragkb.api.support import require_document_manager
 from ragkb.api.support import (
     require_local_tenant as _require_local_tenant,
 )
@@ -36,12 +38,23 @@ OPENAPI_VERSION = "1.0.0"
 def build_lifecycle_router(runtime: RuntimeComponents) -> APIRouter:
     router = APIRouter()
 
+    @router.get("/api/v1/documents/{document_id}/lifecycle", response_model=LifecycleResponse)
+    def get_lifecycle(document_id: str, request: Request) -> LifecycleResponse:
+        principal = _principal(request)
+        _require_local_tenant(runtime, principal)
+        require_document_manager(runtime, principal, document_id)
+        runtime.lifecycle_store.reload()
+        record = runtime.lifecycle_store.documents.get(document_id)
+        if record is None:
+            raise ResourceNotFoundError(document_id)
+        return _lifecycle_response(record)
+
     @router.post(
         "/api/v1/document-versions/{version_id}:publish",
         response_model=LifecycleResponse,
         tags=["lifecycle"],
     )
-    async def publish_version(
+    def publish_version(
         version_id: str,
         request: Request,
         idempotency_key: str = Header(alias="Idempotency-Key", min_length=1),
@@ -52,6 +65,7 @@ def build_lifecycle_router(runtime: RuntimeComponents) -> APIRouter:
         runtime.lifecycle_store.reload()
         version = runtime.repository.get_version(version_id)
         document_id = str(version["document_id"])
+        require_document_manager(runtime, principal, document_id)
         if document_id not in runtime.lifecycle_store.documents:
             runtime.lifecycle_service.register_document(
                 document_id, version_id, trace_id=_request_id(request)
@@ -74,7 +88,7 @@ def build_lifecycle_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=LifecycleResponse,
         tags=["lifecycle"],
     )
-    async def rollback_document(
+    def rollback_document(
         document_id: str,
         body: RollbackRequest,
         request: Request,
@@ -83,6 +97,7 @@ def build_lifecycle_router(runtime: RuntimeComponents) -> APIRouter:
         principal = _principal(request)
         _require_role(principal, "knowledge_maintainer", "admin")
         _require_local_tenant(runtime, principal)
+        require_document_manager(runtime, principal, document_id)
         runtime.lifecycle_store.reload()
         if document_id not in runtime.lifecycle_store.documents:
             raise ResourceNotFoundError(document_id)
@@ -104,23 +119,26 @@ def build_lifecycle_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=LifecycleResponse,
         tags=["lifecycle"],
     )
-    async def update_document_permissions(
+    def update_document_permissions(
         document_id: str,
         body: PermissionUpdateRequest,
         request: Request,
+        if_match: str = Header(alias="If-Match"),
         idempotency_key: str = Header(alias="Idempotency-Key", min_length=1),
     ) -> LifecycleResponse:
         principal = _principal(request)
         _require_role(principal, "admin")
         _require_local_tenant(runtime, principal)
+        require_document_manager(runtime, principal, document_id)
+        runtime.lifecycle_store.reload()
         if document_id not in runtime.lifecycle_store.documents:
             raise ResourceNotFoundError(document_id)
-        record = runtime.lifecycle_service.update_acl(
+        policy = body.security_projection
+        require_document_manager(runtime, principal, document_id)
+        record = runtime.lifecycle_service.replace_permissions(
             document_id,
-            body.target_acl_revision,
-            body.required_watermark,
-            body.observed_watermark,
-            projection_ok=body.projection_ok,
+            policy.model_dump(),
+            expected_row_version=parse_if_match(if_match),
             event_id=idempotency_key,
             trace_id=_request_id(request),
         )
@@ -131,7 +149,7 @@ def build_lifecycle_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=DeletionResponse,
         tags=["lifecycle"],
     )
-    async def delete_document(
+    def delete_document(
         document_id: str,
         request: Request,
         idempotency_key: str = Header(alias="Idempotency-Key", min_length=1),
@@ -158,7 +176,7 @@ def build_lifecycle_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=LifecycleResponse,
         tags=["lifecycle"],
     )
-    async def revoke_document(
+    def revoke_document(
         document_id: str,
         request: Request,
         idempotency_key: str = Header(alias="Idempotency-Key", min_length=1),
@@ -179,7 +197,7 @@ def build_lifecycle_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=DeletionResponse,
         tags=["lifecycle"],
     )
-    async def run_document_cleanup(
+    def run_document_cleanup(
         document_id: str,
         target_store: str,
         request: Request,

@@ -45,6 +45,7 @@ class SQLitePersistentJobQueue:
             ),
             cancel_requested=bool(row["cancel_requested"]),
             error_code=str(row["error_code"]) if row["error_code"] is not None else None,
+            fence_token=int(row["fence_token"]),
         )
 
     def _get_in(self, connection: sqlite3.Connection, job_id: str) -> QueueJob:
@@ -193,7 +194,8 @@ class SQLitePersistentJobQueue:
             expires = timestamp + lease_seconds
             connection.execute(
                 """
-                UPDATE job_queue SET state = ?, attempt = attempt + 1, lease_owner = ?,
+                UPDATE job_queue SET state = ?, attempt = attempt + 1,
+                    fence_token = fence_token + 1, lease_owner = ?,
                     lease_expires_at = ?, heartbeat_at = ?, updated_at = ? WHERE id = ?
                 """,
                 (
@@ -220,6 +222,8 @@ class SQLitePersistentJobQueue:
             job = self._get_in(connection, job_id)
             if job.state not in {JobState.RUNNING, JobState.CANCEL_REQUESTED} or (
                 job.lease_owner != worker_id
+                or job.lease_expires_at is None
+                or job.lease_expires_at <= timestamp
             ):
                 raise QueueLeaseError("job is not leased by this worker")
             if job.state is JobState.CANCEL_REQUESTED or job.cancel_requested:

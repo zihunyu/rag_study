@@ -25,6 +25,7 @@ class QueueJob:
     next_retry_at: float | None
     cancel_requested: bool
     error_code: str | None = None
+    fence_token: int = 0
 
 
 class QueueConflictError(ValueError):

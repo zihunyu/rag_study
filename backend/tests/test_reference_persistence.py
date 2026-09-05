@@ -66,7 +66,9 @@ def test_reference_mapping_and_local_random_secret_survive_restart(tmp_path: Pat
     answer = TestClient(create_app(first)).post("/api/v1/ask", json={"question": "q"}).json()
     source_url = answer["citations"][0]["source_url"]
 
-    restarted = _components(tmp_path)
+    # This fixture isolates persistence/signing. It has no indexed content;
+    # real control-plane source authorization is covered by the knowledge-base API test.
+    restarted = _answered_components(tmp_path)
     response = TestClient(create_app(restarted)).get(source_url)
 
     assert response.status_code == 200

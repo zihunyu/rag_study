@@ -14,7 +14,17 @@ import uvicorn
 
 from ragkb.api.app import create_app
 from ragkb.application.worker import LocalIngestionWorker, WorkerFailure
-from ragkb.runtime_components import build_runtime_components
+from ragkb.runtime_components import RuntimeComponents, build_runtime_components
+
+
+def _reconcile_upload_intents(components: RuntimeComponents) -> None:
+    for result in components.uploads.reconcile_promoted_sessions():
+        components.lifecycle_store.reload()
+        document_id = str(result["document_id"])
+        if document_id not in components.lifecycle_store.documents:
+            components.lifecycle_service.register_document(
+                document_id, str(result["document_version_id"]), trace_id=f"recover:{document_id}"
+            )
 
 
 @dataclass(frozen=True)
@@ -162,6 +172,7 @@ def run_worker(argv: Sequence[str] | None = None) -> int:
         failure_pause_seconds=components.settings.worker_failure_pause_seconds,
     )
     if args.once:
+        _reconcile_upload_intents(components)
         iteration = run_worker_iteration(worker)
         print(
             json.dumps(
@@ -178,8 +189,18 @@ def run_worker(argv: Sequence[str] | None = None) -> int:
         )
         return 1 if iteration.failed else 0
     print("G3 native Python Worker started")
+    next_reconciliation = 0.0
     try:
         while True:
+            if time.monotonic() >= next_reconciliation:
+                next_reconciliation = time.monotonic() + 60
+                try:
+                    _reconcile_upload_intents(components)
+                except Exception as error:
+                    print(
+                        f"upload_outbox_reconciliation_failed:{type(error).__name__}",
+                        file=sys.stderr,
+                    )
             iteration = run_worker_iteration(worker)
             if iteration.sleep_seconds > 0:
                 time.sleep(iteration.sleep_seconds)

@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from collections.abc import Callable
 from copy import deepcopy
 from typing import Any
 
 from ragkb.adapters.mysql_control import MySQLControlPlaneAdapter
 from ragkb.adapters.mysql_entity_store import EntityMap, EntityRow, MySQLNormalizedEntityStore
+from ragkb.adapters.mysql_lazy_state import LazyCollection, loaded_items
 from ragkb.contracts.lifecycle import PublicationReadiness
 from ragkb.domain.ids import new_uuid7
+from ragkb.domain.publication_policy import review_quality_error
 from ragkb.domain.state_machines import (
     DocumentState,
     PublicationState,
@@ -26,6 +29,7 @@ from ragkb.domain.uploads import (
     UploadSession,
 )
 from ragkb.domain.validation import DocumentQualityReport
+from ragkb.infrastructure.ingestion_fencing import mysql_ingestion_scope
 
 
 def _empty_state() -> dict[str, Any]:
@@ -56,6 +60,7 @@ class MySQLUploadRepository:
         self.tenant_id = tenant_id
         self.generation_id = generation_id
         self._entities = MySQLNormalizedEntityStore("upload_entities_v3", tenant_id)
+        self._legacy_checked = False
 
     @staticmethod
     def _hashed_id(kind: str, key: str) -> str:
@@ -65,27 +70,27 @@ class MySQLUploadRepository:
     def _to_entities(cls, state: dict[str, Any]) -> EntityMap:
         entities: EntityMap = {}
         for collection in ("spaces", "sessions", "documents", "versions", "quality", "candidates"):
-            for key, value in state[collection].items():
+            for key, value in loaded_items(state[collection]):
                 entities[(collection, str(key))] = EntityRow(
                     str(key),
                     str(value.get("document_id")) if value.get("document_id") else None,
                     int(value.get("version_no", 0)),
                     deepcopy(value),
                 )
-        for version_id, reviews in state["reviews"].items():
+        for version_id, reviews in loaded_items(state["reviews"]):
             for ordinal, value in enumerate(reviews):
                 entity_id = str(value["review_id"])
                 entities[("reviews", entity_id)] = EntityRow(
                     entity_id, str(version_id), ordinal, deepcopy(value)
                 )
-        for document_id, lineage in state["lineage"].items():
+        for document_id, lineage in loaded_items(state["lineage"]):
             for ordinal, value in enumerate(lineage):
                 canonical = json.dumps(value, sort_keys=True, separators=(",", ":"))
                 entity_id = cls._hashed_id("lineage", f"{document_id}:{ordinal}:{canonical}")
                 entities[("lineage", entity_id)] = EntityRow(
                     entity_id, str(document_id), ordinal, deepcopy(value)
                 )
-        for key, value in state["idempotency"].items():
+        for key, value in loaded_items(state["idempotency"]):
             entity_id = cls._hashed_id("idempotency", str(key))
             entities[("idempotency", entity_id)] = EntityRow(str(key), None, 0, deepcopy(value))
         return entities
@@ -113,7 +118,7 @@ class MySQLUploadRepository:
         for collection in ("reviews", "lineage"):
             state[collection] = {
                 key: [item for _, item in sorted(values, key=lambda pair: pair[0])]
-                for key, values in state[collection].items()
+                for key, values in loaded_items(state[collection])
             }
         return state
 
@@ -130,15 +135,42 @@ class MySQLUploadRepository:
             raise ValueError("MYSQL_UPLOAD_STATE_INVALID")
         return loaded
 
-    def _mutate[Result](self, callback: Callable[[dict[str, Any]], Result]) -> Result:
+    def _ensure_legacy_migrated(self) -> None:
+        if self._legacy_checked:
+            return
         connection = self.control.connect()
         try:
             cursor = connection.cursor()
-            before = self._entities.load(cursor)
-            state = self._from_entities(before) if before else self._load_legacy(cursor)
+            state = self._load_legacy(cursor)
+            if any(state.values()):
+                before = self._entities.load(cursor)
+                legacy = self._to_entities(state)
+                # Never overwrite a newer normalized row with a legacy snapshot.
+                self._entities.sync(cursor, before, {**legacy, **before})
+                cursor.execute("DELETE FROM upload_state_v2 WHERE tenant_id=%s", (self.tenant_id,))
+            connection.commit()
+            self._legacy_checked = True
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def _mutate[Result](self, callback: Callable[[dict[str, Any]], Result]) -> Result:
+        self._ensure_legacy_migrated()
+        connection = self.control.connect()
+        try:
+            cursor = connection.cursor()
+            before: EntityMap = {}
+
+            def load(**filters: Any) -> EntityMap:
+                rows = self._entities.load(cursor, **filters)
+                before.update(rows)
+                return rows
+
+            state = {kind: LazyCollection(kind, load) for kind in _empty_state()}
             result = callback(state)
             self._entities.sync(cursor, before, self._to_entities(state))
-            cursor.execute("DELETE FROM upload_state_v2 WHERE tenant_id=%s", (self.tenant_id,))
             connection.commit()
             return result
         except Exception:
@@ -148,13 +180,19 @@ class MySQLUploadRepository:
             connection.close()
 
     def _read(self) -> dict[str, Any]:
-        connection = self.control.connect()
-        try:
-            cursor = connection.cursor()
-            entities = self._entities.load(cursor)
-            return self._from_entities(entities) if entities else self._load_legacy(cursor)
-        finally:
-            connection.close()
+        self._ensure_legacy_migrated()
+
+        def load(**filters: Any) -> EntityMap:
+            connection = self.control.connect()
+            try:
+                return self._entities.load(connection.cursor(), **filters)
+            finally:
+                connection.close()
+
+        return {kind: LazyCollection(kind, load) for kind in _empty_state()}
+
+    def ingestion_scope(self, job: Any) -> Any:
+        return mysql_ingestion_scope(self.control, job)
 
     @staticmethod
     def _session(data: dict[str, Any]) -> UploadSession:
@@ -229,24 +267,50 @@ class MySQLUploadRepository:
 
         return self._mutate(mutate)
 
-    def list_documents(self, space_id: str) -> list[dict[str, Any]]:
+    def list_documents(
+        self, space_id: str, *, limit: int = 100, offset: int = 0, current_only: bool = False
+    ) -> list[dict[str, Any]]:
         state = self._read()
         if space_id not in state["spaces"]:
             raise ResourceNotFoundError(space_id)
-        sessions = [
-            item
-            for item in state["sessions"].values()
-            if item.get("space_id") == space_id and item.get("document_id")
-        ]
-        document_ids = {str(item["document_id"]) for item in sessions}
+        connection = self.control.connect()
+        try:
+            cursor = connection.cursor()
+            cursor.execute(
+                """
+                SELECT d.entity_id FROM upload_entities_v3 d
+                WHERE d.tenant_id=%s AND d.entity_type='documents'
+                  AND JSON_UNQUOTE(JSON_EXTRACT(d.payload_json, '$.state')) != 'DELETED'
+                  AND (JSON_UNQUOTE(JSON_EXTRACT(d.payload_json, '$.space_id'))=%s
+                    OR (JSON_EXTRACT(d.payload_json, '$.space_id') IS NULL AND EXISTS (
+                        SELECT 1 FROM upload_entities_v3 s WHERE s.tenant_id=d.tenant_id
+                        AND s.entity_type='sessions' AND s.parent_id=d.entity_id
+                        AND JSON_UNQUOTE(JSON_EXTRACT(s.payload_json, '$.space_id'))=%s)))
+                ORDER BY d.entity_id LIMIT %s OFFSET %s
+            """,
+                (self.tenant_id, space_id, space_id, limit, offset),
+            )
+            document_ids = [
+                str(row["entity_id"] if isinstance(row, dict) else row[0])
+                for row in cursor.fetchall()
+            ]
+            sessions = [
+                row.payload
+                for document_id in document_ids
+                for row in self._entities.load(
+                    cursor, entity_type="sessions", parent_id=document_id
+                ).values()
+            ]
+        finally:
+            connection.close()
         latest_by_document: dict[str, dict[str, Any]] = {}
-        for version in state["versions"].values():
-            document_id = str(version["document_id"])
-            if document_id not in document_ids:
-                continue
-            previous = latest_by_document.get(document_id)
-            if previous is None or int(version["version_no"]) > int(previous["version_no"]):
-                latest_by_document[document_id] = version
+        for document_id in document_ids:
+            versions = self.get_versions(document_id)
+            if current_only:
+                current = state["documents"][document_id].get("current_version_id")
+                versions = [item for item in versions if item["id"] == current]
+            if versions:
+                latest_by_document[document_id] = versions[-1]
         session_by_version = {
             str(item["document_version_id"]): item
             for item in sessions
@@ -262,11 +326,13 @@ class MySQLUploadRepository:
                 query = (
                     "SELECT document_version_id, COUNT(*) AS chunk_count "  # noqa: S608
                     "FROM retrieval_chunk_projections WHERE document_version_id "
-                    f"IN ({placeholders}) GROUP BY document_version_id"
+                    f"IN ({placeholders}) AND tenant_id=%s AND index_generation_id=%s "
+                    "AND COALESCE(JSON_EXTRACT(locator_json, '$.is_parent'), false)=false "
+                    "GROUP BY document_version_id"
                 )
                 cursor.execute(
                     query,
-                    tuple(version_ids),
+                    (*version_ids, self.tenant_id, self.generation_id),
                 )
                 for row in cursor.fetchall():
                     version_id = str(
@@ -308,7 +374,9 @@ class MySQLUploadRepository:
             )
         return sorted(results, key=lambda item: (str(item["filename"]), str(item["document_id"])))
 
-    def list_chunks(self, version_id: str) -> list[dict[str, Any]]:
+    def list_chunks(
+        self, version_id: str, *, limit: int = 100, offset: int = 0
+    ) -> list[dict[str, Any]]:
         if version_id not in self._read()["versions"]:
             raise ResourceNotFoundError(version_id)
         connection = self.control.connect()
@@ -319,9 +387,11 @@ class MySQLUploadRepository:
                 SELECT chunk_id, parent_chunk_id, display_text, locator_json,
                        lifecycle_projection, current_version
                 FROM retrieval_chunk_projections
-                WHERE document_version_id=%s ORDER BY chunk_id
+                WHERE document_version_id=%s AND tenant_id=%s AND index_generation_id=%s
+                ORDER BY CAST(JSON_EXTRACT(locator_json, '$.ordinal') AS UNSIGNED), chunk_id
+                LIMIT %s OFFSET %s
                 """,
-                (version_id,),
+                (version_id, self.tenant_id, self.generation_id, limit, offset),
             )
             rows = cursor.fetchall()
             results: list[dict[str, Any]] = []
@@ -341,12 +411,15 @@ class MySQLUploadRepository:
                         "parent_chunk_id": (
                             str(row["parent_chunk_id"]) if row["parent_chunk_id"] else None
                         ),
-                        "ordinal": ordinal,
-                        "kind": str(locator.get("node_type", "CHUNK")),
-                        "token_count": None,
+                        "ordinal": int(locator.get("ordinal", ordinal)),
+                        "kind": str(locator.get("kind", "UNKNOWN")),
+                        "token_count": locator.get("token_count"),
+                        "is_parent": bool(locator.get("is_parent", False)),
+                        "vector_indexed": bool(locator.get("vector_indexed", False)),
                         "status": (
-                            "SERVING"
-                            if bool(row["current_version"])
+                            "RETIRED"
+                            if row["lifecycle_projection"] == "SERVING"
+                            and not row["current_version"]
                             else str(row["lifecycle_projection"])
                         ),
                         "text": str(row["display_text"]),
@@ -427,11 +500,25 @@ class MySQLUploadRepository:
                 document = state["documents"].get(target_document_id)
                 if document is None or document["state"] == DocumentState.DELETED.value:
                     raise ResourceNotFoundError(target_document_id)
+                original_space = document.get("space_id")
+                if not original_space:
+                    original_spaces = {
+                        item["space_id"]
+                        for item in state["sessions"].values()
+                        if item.get("document_id") == target_document_id
+                        and not item.get("target_document_id")
+                    }
+                    original_space = (
+                        next(iter(original_spaces)) if len(original_spaces) == 1 else None
+                    )
+                if original_space != space_id:
+                    raise ResourceNotFoundError(target_document_id)
                 if int(document["row_version"]) != target_document_row_version:
                     raise OptimisticConcurrencyError(target_document_id)
             session_id = new_uuid7()
             data = {
                 "id": session_id,
+                "created_at": time.time(),
                 "tenant_id": tenant_id,
                 "space_id": space_id,
                 "filename": filename,
@@ -466,6 +553,30 @@ class MySQLUploadRepository:
         if data is None:
             raise ResourceNotFoundError(session_id)
         return self._session(data)
+
+    def pending_promoted_sessions(self, limit: int = 100) -> list[UploadSession]:
+        connection = self.control.connect()
+        try:
+            cursor = connection.cursor()
+            cursor.execute(
+                "SELECT s.payload_json FROM upload_entities_v3 s WHERE s.tenant_id=%s "
+                "AND s.entity_type='sessions' AND ("
+                "JSON_UNQUOTE(JSON_EXTRACT(s.payload_json, '$.state'))='PROMOTED' OR ("
+                "JSON_UNQUOTE(JSON_EXTRACT(s.payload_json, '$.state'))='COMPLETED' AND NOT EXISTS ("
+                "SELECT 1 FROM lifecycle_entities_v3 l WHERE l.tenant_id=s.tenant_id "
+                "AND l.entity_type='documents' AND l.entity_id=s.parent_id))) "
+                "ORDER BY s.updated_at LIMIT %s",
+                (self.tenant_id, limit),
+            )
+            sessions = []
+            for row in cursor.fetchall():
+                value = row["payload_json"] if isinstance(row, dict) else row[0]
+                sessions.append(
+                    self._session(json.loads(value) if isinstance(value, str) else value)
+                )
+            return sessions
+        finally:
+            connection.close()
 
     def update_session(
         self,
@@ -506,6 +617,7 @@ class MySQLUploadRepository:
                     "external_key": session.filename,
                     "state": DocumentState.ACTIVE.value,
                     "current_version_id": None,
+                    "space_id": session.space_id,
                     "row_version": 1,
                 }
                 state["documents"][document_id] = document
@@ -535,6 +647,22 @@ class MySQLUploadRepository:
 
         return self._mutate(mutate)
 
+    def get_document_space(self, document_id: str) -> str:
+        state = self._read()
+        document = state["documents"].get(document_id)
+        if document is None:
+            raise ResourceNotFoundError(document_id)
+        if document.get("space_id"):
+            return str(document["space_id"])
+        spaces = {
+            str(item["space_id"])
+            for item in state["sessions"].values()
+            if item.get("document_id") == document_id and not item.get("target_document_id")
+        }
+        if len(spaces) != 1:
+            raise ResourceNotFoundError(document_id)
+        return spaces.pop()
+
     def get_document(self, document_id: str) -> dict[str, Any]:
         document = self._read()["documents"].get(document_id)
         if document is None:
@@ -542,14 +670,17 @@ class MySQLUploadRepository:
         return dict(document)
 
     def get_versions(self, document_id: str) -> list[dict[str, Any]]:
-        return sorted(
-            [
-                dict(item)
-                for item in self._read()["versions"].values()
-                if item["document_id"] == document_id
-            ],
-            key=lambda item: int(item["version_no"]),
-        )
+        self._ensure_legacy_migrated()
+        connection = self.control.connect()
+        try:
+            rows = self._entities.load(
+                connection.cursor(), entity_type="versions", parent_id=document_id
+            )
+            return sorted(
+                [row.payload for row in rows.values()], key=lambda item: int(item["version_no"])
+            )
+        finally:
+            connection.close()
 
     def get_version(self, version_id: str) -> dict[str, Any]:
         version = self._read()["versions"].get(version_id)
@@ -683,7 +814,9 @@ class MySQLUploadRepository:
                 "security_projection": security_projection,
                 "real_acceptance": False,
             }
-            state["reviews"].setdefault(version_id, []).append(result)
+            state["reviews"].setdefault(version_id, []).append(
+                {**result, "projection_applied": not bool(security_projection)}
+            )
             state["idempotency"][identity] = {
                 "request_hash": request_hash,
                 "resource_id": result["review_id"],
@@ -692,6 +825,19 @@ class MySQLUploadRepository:
             return result
 
         return self._mutate(mutate)
+
+    def get_latest_review(self, version_id: str) -> dict[str, Any] | None:
+        reviews = self._read()["reviews"].get(version_id, [])
+        return dict(reviews[-1]) if reviews else None
+
+    def mark_review_applied(self, version_id: str, review_id: str) -> None:
+        def mutate(state: dict[str, Any]) -> None:
+            reviews = state["reviews"].get(version_id, [])
+            if not reviews or reviews[-1]["review_id"] != review_id:
+                raise OptimisticConcurrencyError(version_id)
+            reviews[-1]["projection_applied"] = True
+
+        self._mutate(mutate)
 
     def publication_readiness(
         self, document_id: str, version_id: str, *, rollback: bool = False
@@ -704,16 +850,12 @@ class MySQLUploadRepository:
         review = reviews[-1] if reviews else None
         candidate = state["candidates"].get(version_id)
         error: str | None = None
-        if document is None or version is None:
+        if document is None or version is None or version["document_id"] != document_id:
             error = "PUBLICATION_TARGET_NOT_FOUND"
         elif version["processing_state"] != VersionProcessingState.VALIDATED.value:
             error = "PUBLICATION_VERSION_NOT_VALIDATED"
-        elif quality is None:
-            error = "PUBLICATION_QUALITY_REPORT_MISSING"
-        elif review is None or review["decision"] != "APPROVED":
-            error = "PUBLICATION_REVIEW_NOT_APPROVED"
-        elif not review.get("security_projection"):
-            error = "PUBLICATION_SECURITY_REVIEW_REQUIRED"
+        elif review_quality_error(quality, review) is not None:
+            error = review_quality_error(quality, review)
         elif candidate is None:
             error = "PUBLICATION_CANDIDATE_MISSING"
         elif candidate["projection_state"] != ("RETIRED" if rollback else "STAGED"):

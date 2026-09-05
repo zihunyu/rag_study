@@ -4,6 +4,12 @@ import { webcrypto } from "node:crypto";
 
 import App from "./App.vue";
 
+vi.mock("./auth.js", () => ({
+  initializeAuth: async () => ({ profile: { sub: "synthetic-reader" } }),
+  accessToken: async () => "synthetic-browser-token",
+  oidcEnabled: true, signIn: vi.fn(), signOut: vi.fn(),
+}));
+
 function sseResponse(payload) {
   const encoder = new TextEncoder();
   return new Response(
@@ -33,6 +39,48 @@ afterEach(() => {
 });
 
 describe("trusted QA UI", () => {
+  it("ignores a delayed old-library document response", async () => {
+    let release;
+    const pending = new Promise((resolve) => { release = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async (url) => {
+      const path = String(url);
+      if (path.endsWith("/spaces")) return jsonResponse([{ id: "a", name: "库 A" }, { id: "b", name: "库 B" }]);
+      if (path.endsWith("/spaces/a/documents")) return pending;
+      if (path.endsWith("/spaces/b/documents")) return jsonResponse([{ document_id: "b", version_id: "vb", filename: "B-only.md" }]);
+      return jsonResponse({});
+    }));
+    const wrapper = mount(App);
+    await flushPromises();
+    await wrapper.get('[data-testid="global-space-select"]').setValue("b");
+    await flushPromises();
+    release(jsonResponse([{ document_id: "a", version_id: "va", filename: "A-secret.md" }]));
+    await flushPromises();
+    await button(wrapper, "知识库").trigger("click");
+    expect(wrapper.text()).toContain("B-only.md");
+    expect(wrapper.text()).not.toContain("A-secret.md");
+  });
+
+  it("loads signed citations through the authenticated API, without token in URL", async () => {
+    const calls = [];
+    vi.stubGlobal("fetch", vi.fn(async (url, options = {}) => {
+      calls.push([String(url), options]);
+      if (String(url).endsWith("/spaces")) return jsonResponse([{ id: "a", name: "库 A" }]);
+      if (String(url).includes("/sources/")) return jsonResponse({ text: "authorized source evidence" });
+      if (String(url).includes("/ask")) return sseResponse('event: progress\ndata: {"stage":"verified"}\n\nevent: result\ndata: {"status":"answered","answer":"证据回答","verified":true,"citations":[{"evidence_id":"E1","source_url":"/api/v1/sources/ref?signature=synthetic","locator":{}}]}\n\n');
+      return jsonResponse([]);
+    }));
+    const wrapper = mount(App);
+    await flushPromises();
+    await wrapper.find("textarea").setValue("问题");
+    await button(wrapper, "从此知识库回答").trigger("click");
+    await flushPromises();
+    await wrapper.find('a[href*="/sources/"]').trigger("click");
+    await flushPromises();
+    const [url, options] = calls.find(([path]) => path.includes("/sources/"));
+    expect(new Headers(options.headers).get("Authorization")).toBe("Bearer synthetic-browser-token");
+    expect(url).not.toContain("synthetic-browser-token");
+    expect(wrapper.text()).toContain("authorized source evidence");
+  });
   it("shows an answer only after verified progress", async () => {
     vi.stubGlobal(
       "fetch",

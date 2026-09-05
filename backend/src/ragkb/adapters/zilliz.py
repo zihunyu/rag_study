@@ -251,6 +251,7 @@ class MilvusHybridAdapter:
                     channel="bm25" if channel == "bm25" else "dense",
                     rank=rank,
                     score=float(hit.get("distance", 0.0)),
+                    vector_pk=str(entity.get("zilliz_pk") or hit.get("id") or "") or None,
                 )
             )
         return tuple(candidates)
@@ -268,7 +269,7 @@ class MilvusHybridAdapter:
                 anns_field=vector_sparse_field(self._settings),
                 filter=build_zilliz_filter(context),
                 limit=limit,
-                output_fields=["chunk_id", "document_version_id", "parent_chunk_id"],
+                output_fields=["chunk_id", "document_version_id", "parent_chunk_id", "zilliz_pk"],
                 consistency_level=vector_security_consistency(self._settings),
             )
         except (MilvusUnavailableException, ConnectError) as error:
@@ -287,7 +288,7 @@ class MilvusHybridAdapter:
                 anns_field=vector_dense_field(self._settings),
                 filter=build_zilliz_filter(context),
                 limit=limit,
-                output_fields=["chunk_id", "document_version_id", "parent_chunk_id"],
+                output_fields=["chunk_id", "document_version_id", "parent_chunk_id", "zilliz_pk"],
                 search_params={"metric_type": vector_metric_type(self._settings)},
                 consistency_level=vector_security_consistency(self._settings),
             )

@@ -26,7 +26,19 @@ class MySQLIndexSagaLedger:
     @staticmethod
     def manifest(records: Sequence[Mapping[str, object]]) -> ChunkManifest:
         values = tuple(
-            sorted((str(record["chunk_id"]), str(record["content_checksum"])) for record in records)
+            sorted(
+                (
+                    str(record["chunk_id"]),
+                    hashlib.sha256(
+                        json.dumps(
+                            dict(record), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+                        ).encode()
+                    ).hexdigest()
+                    if "zilliz_pk" in record
+                    else str(record["content_checksum"]),
+                )
+                for record in records
+            )
         )
         if not values:
             raise ValueError("INDEX_SAGA_EMPTY_MANIFEST")

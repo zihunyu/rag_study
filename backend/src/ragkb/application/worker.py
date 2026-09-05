@@ -5,12 +5,15 @@ from __future__ import annotations
 import json
 import random
 import time
+import uuid
 from collections.abc import Callable
+from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from ragkb.application.lease_guard import LeaseGuard
 from ragkb.application.tracing import InMemoryTracer, TracerPort
-from ragkb.contracts.jobs import PersistentJobQueuePort, QueueJob
+from ragkb.contracts.jobs import PersistentJobQueuePort, QueueJob, QueueLeaseError
 from ragkb.contracts.ports import ChunkerPort, ContentStoragePort, ParserRouterPort, ParsingDeferred
 from ragkb.contracts.uploads import UploadRepositoryPort
 from ragkb.domain.errors import (
@@ -155,6 +158,7 @@ class LocalIngestionWorker:
         return delay
 
     def run_once(self) -> bool:
+        owner = f"{self.worker_id}:{uuid.uuid4().hex}"
         self.last_failure = None
         self.last_idle_delay_seconds = 0.0
         remaining_cooldown = self._dependency_circuit_open_until - self.clock()
@@ -162,7 +166,7 @@ class LocalIngestionWorker:
             self.last_idle_delay_seconds = remaining_cooldown
             return False
         try:
-            job = self.queue.lease(self.worker_id, lease_seconds=self.lease_seconds)
+            job = self.queue.lease(owner, lease_seconds=self.lease_seconds)
         except Exception as error:
             if not self._dependency_error(error):
                 raise
@@ -180,7 +184,7 @@ class LocalIngestionWorker:
         if job is None:
             return False
         if job.operation != "process_document":
-            self.queue.fail(job.id, self.worker_id, "JOB_OPERATION_UNSUPPORTED", retryable=False)
+            self.queue.fail(job.id, owner, "JOB_OPERATION_UNSUPPORTED", retryable=False)
             self._set_failure(
                 job,
                 ValueError("unsupported operation"),
@@ -190,12 +194,22 @@ class LocalIngestionWorker:
                 dependency_failure=False,
             )
             return True
-        version_id = str(job.payload["document_version_id"])
-        version = self.repository.get_version(version_id)
-        source_format = str(job.payload["source_format"])
-        source = self.storage.path_for("original", str(version["original_key"]))
+        version_id = str(job.payload.get("document_version_id", ""))
         artifact_key: str | None = None
+        initialized = False
+        scope = ExitStack()
+        guard = LeaseGuard(self.queue, job.id, owner, self.lease_seconds)
+        guard.start()
         try:
+            guard.check()
+            ingestion_scope = getattr(self.repository, "ingestion_scope", None)
+            if callable(ingestion_scope):
+                scope.enter_context(ingestion_scope(job))
+            guard.check()
+            version = self.repository.get_version(version_id)
+            initialized = True
+            source_format = str(job.payload["source_format"])
+            source = self.storage.path_for("original", str(version["original_key"]))
             with self.tracer.span("document.parse", {"source_format": source_format}):
                 document = self.parser_router.parse(source_format, source, version_id)
             chunking = (
@@ -203,15 +217,12 @@ class LocalIngestionWorker:
                 if self.chunker is not None
                 else None
             )
-            heartbeat = self.queue.heartbeat(
-                job.id, self.worker_id, lease_seconds=self.lease_seconds
-            )
-            if heartbeat.cancel_requested:
+            if guard.check():
                 self.repository.mark_version_cancelled(version_id)
-                self.queue.acknowledge_cancel(job.id, self.worker_id)
+                self.queue.acknowledge_cancel(job.id, owner)
                 return True
             artifact_key = str(version["original_key"]).replace(
-                f"original/{source.name}", "artifacts/canonical-document-v1.json"
+                f"original/{source.name}", f"artifacts/canonical-document-f{job.fence_token}.json"
             )
             self.repository.record_local_content(
                 str(job.payload["document_id"]),
@@ -227,6 +238,7 @@ class LocalIngestionWorker:
                     "utf-8"
                 ),
             )
+            guard.check()
             self.repository.save_canonical_document(document)
             if chunking is not None:
                 save_chunking = getattr(self.repository, "save_chunking_result", None)
@@ -239,32 +251,39 @@ class LocalIngestionWorker:
                         tenant_id=str(job.payload["tenant_id"]),
                         space_id=str(job.payload["space_id"]),
                         security_projection=SecurityProjection.unapproved(permission_revision=1),
-                        cancel_check=lambda: (
-                            self.queue.heartbeat(
-                                job.id, self.worker_id, lease_seconds=self.lease_seconds
-                            ).cancel_requested
-                        ),
+                        cancel_check=guard.check,
                     )
                     if index_ready is not True:
                         raise RuntimeError("INDEX_SAGA_READY_CONFIRMATION_REQUIRED")
                     mark_index_ready = getattr(self.repository, "mark_index_ready", None)
+                    guard.check()
                     if callable(mark_index_ready):
                         mark_index_ready(version_id)
+            guard.check()
             self.repository.save_quality_report(DocumentQualityReport.from_document(document))
-            completed = self.queue.complete(job.id, self.worker_id)
+            completed = self.queue.complete(job.id, owner)
             if completed.state is JobState.CANCELLED:
                 self.storage.delete("artifacts", artifact_key)
                 self.repository.mark_version_cancelled(version_id)
             self._consecutive_dependency_failures = 0
             self._dependency_circuit_open_until = 0.0
+        except QueueLeaseError as error:
+            self._set_failure(
+                job,
+                error,
+                error_code="INGEST_LEASE_LOST",
+                retryable=False,
+                retry_delay_seconds=self.failure_pause_seconds,
+                dependency_failure=True,
+            )
         except IngestionCancelled:
             if artifact_key is not None:
                 self.storage.delete("artifacts", artifact_key)
             self.repository.mark_version_cancelled(version_id)
-            self.queue.acknowledge_cancel(job.id, self.worker_id)
+            self.queue.acknowledge_cancel(job.id, owner)
         except ParsingDeferred as error:
             self.repository.mark_version_quarantined(version_id, self.parser_router.revision)
-            self.queue.fail(job.id, self.worker_id, error.code, retryable=False)
+            self.queue.fail(job.id, owner, error.code, retryable=False)
             self._set_failure(
                 job,
                 error,
@@ -279,13 +298,13 @@ class LocalIngestionWorker:
                 can_retry = job.attempt < min(job.max_attempts, self.transient_max_attempts)
                 failed = self.queue.fail(
                     job.id,
-                    self.worker_id,
+                    owner,
                     "INGEST_TRANSIENT",
                     retryable=can_retry,
                     retry_delay=delay,
                 )
                 retryable = failed.state is JobState.RETRY_WAIT
-                if not retryable:
+                if not retryable and initialized:
                     self.repository.mark_version_failed(version_id, self.parser_router.revision)
                 self._set_failure(
                     job,
@@ -299,8 +318,9 @@ class LocalIngestionWorker:
                 error,
                 (InvalidProviderResponse, ConfigurationError, SchemaMismatch, ValueError, KeyError),
             ):
-                self.queue.fail(job.id, self.worker_id, "INGEST_PERMANENT", retryable=False)
-                self.repository.mark_version_failed(version_id, self.parser_router.revision)
+                self.queue.fail(job.id, owner, "INGEST_PERMANENT", retryable=False)
+                if initialized:
+                    self.repository.mark_version_failed(version_id, self.parser_router.revision)
                 self._set_failure(
                     job,
                     error,
@@ -310,8 +330,9 @@ class LocalIngestionWorker:
                     dependency_failure=False,
                 )
             else:
-                self.queue.fail(job.id, self.worker_id, "INGEST_UNEXPECTED", retryable=False)
-                self.repository.mark_version_failed(version_id, self.parser_router.revision)
+                self.queue.fail(job.id, owner, "INGEST_UNEXPECTED", retryable=False)
+                if initialized:
+                    self.repository.mark_version_failed(version_id, self.parser_router.revision)
                 self._set_failure(
                     job,
                     error,
@@ -320,6 +341,9 @@ class LocalIngestionWorker:
                     retry_delay_seconds=self.failure_pause_seconds,
                     dependency_failure=False,
                 )
+        finally:
+            guard.stop()
+            scope.close()
         return True
 
     def _chunk(self, document: Any, *, tenant_id: str) -> Any:
