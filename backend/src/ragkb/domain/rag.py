@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Literal
 
+from ragkb.domain.retrieval import RetrievalHealth
+
 
 class AnswerStatus(StrEnum):
     ANSWERED = "answered"
@@ -36,6 +38,9 @@ class Evidence:
     permission_revision: int
     authorized: bool
     current_version: bool
+    source_role: Literal["hit", "parent_context"] = "hit"
+    parent_chunk_id: str | None = None
+    display_text: str = ""
 
     def __post_init__(self) -> None:
         if not self.evidence_id.startswith("E") or not self.evidence_id[1:].isdigit():
@@ -68,6 +73,8 @@ class EvidencePackage:
     disposition: QuestionDisposition = QuestionDisposition.ANSWERABLE
     conflict_detected: bool = False
     real_acceptance: bool = False
+    retrieval_health: RetrievalHealth = RetrievalHealth.HEALTHY
+    retrieval_warnings: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         expected = [f"E{index}" for index in range(1, len(self.evidence) + 1)]
@@ -85,11 +92,17 @@ class AtomicClaim:
             raise ValueError("claims require text and evidence IDs")
 
 
+class DraftAnswerStatus(StrEnum):
+    ANSWERED = "answered"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+
+
 @dataclass(frozen=True)
 class DraftAnswer:
     text: str
     citation_ids: tuple[str, ...]
     claims: tuple[AtomicClaim, ...] = ()
+    status: DraftAnswerStatus = DraftAnswerStatus.ANSWERED
 
 
 @dataclass(frozen=True)
@@ -140,6 +153,9 @@ class AskResult:
     warnings: tuple[str, ...]
     verified: bool
     real_acceptance: bool = False
+    retrieval_health: RetrievalHealth = RetrievalHealth.HEALTHY
+    degraded: bool = False
+    retryable: bool = False
 
 
 @dataclass(frozen=True)

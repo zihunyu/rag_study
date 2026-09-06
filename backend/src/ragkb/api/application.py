@@ -100,7 +100,7 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
         allow_origins=list(runtime.settings.cors_origins),
         allow_methods=["*"],
         allow_headers=["*"],
-        expose_headers=["ETag", "X-Request-ID"],
+        expose_headers=["ETag", "X-Request-ID", "X-Next-Cursor"],
     )
 
     @app.exception_handler(ResourceNotFoundError)

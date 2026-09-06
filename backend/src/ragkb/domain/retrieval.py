@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, Literal
 
 from ragkb.domain.errors import RetrievalFailClosed
@@ -103,6 +104,22 @@ class AuthorizedChunk:
 
 
 @dataclass(frozen=True)
+class SearchSource:
+    """One authorized source range, without mixing text from related chunks."""
+
+    chunk_id: str
+    document_id: str
+    document_version_id: str
+    display_text: str
+    retrieval_text: str
+    locator: dict[str, Any]
+    valid_from_epoch: int
+    valid_to_epoch: int
+    permission_revision: int
+    current_version: bool
+
+
+@dataclass(frozen=True)
 class SearchHit:
     chunk_id: str
     document_id: str
@@ -121,6 +138,13 @@ class SearchHit:
     display_text: str = ""
     retrieval_text: str = ""
     generation_context: str = ""
+    parent_source: SearchSource | None = None
+
+
+class RetrievalHealth(StrEnum):
+    HEALTHY = "healthy"
+    DEGRADED = "degraded"
+    UNAVAILABLE = "unavailable"
 
 
 @dataclass(frozen=True)
@@ -130,6 +154,7 @@ class SearchResult:
     real_acceptance: bool = False
     degraded: bool = False
     warnings: tuple[str, ...] = ()
+    retrieval_health: RetrievalHealth = RetrievalHealth.HEALTHY
 
 
 @dataclass(frozen=True)

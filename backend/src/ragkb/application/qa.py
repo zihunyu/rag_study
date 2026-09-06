@@ -7,6 +7,8 @@ import json
 import re
 import threading
 import time
+from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import asdict
 from typing import Literal
 from urllib.parse import urlparse
@@ -30,12 +32,14 @@ from ragkb.domain.rag import (
     Citation,
     ClaimVerdict,
     DraftAnswer,
+    DraftAnswerStatus,
     Evidence,
     EvidencePackage,
     Feedback,
     QuestionDisposition,
     VerificationResult,
 )
+from ragkb.domain.retrieval import RetrievalHealth, SecurityWatermarkNotReady
 
 _FACT_PATTERN = re.compile(
     r"(?:(?:\d{1,4}(?:[-/.年]\d{1,2}){0,2}|\d+(?:\.\d+)?)|"
@@ -260,6 +264,7 @@ class TrustedQAService:
         cache: VerifiedAnswerCachePort | None = None,
         tracer: TracerPort | None = None,
         verifier: ClaimVerifierPort | None = None,
+        response_release_guard: Callable[[], AbstractContextManager[object]] | None = None,
     ) -> None:
         self.evidence_provider = evidence_provider
         self.generator = generator
@@ -269,6 +274,7 @@ class TrustedQAService:
         self.verifier = verifier or DeterministicClaimVerifier()
         self.cache = cache
         self.tracer = tracer or InMemoryTracer()
+        self.response_release_guard = response_release_guard or nullcontext
 
     def _save(
         self,
@@ -279,6 +285,7 @@ class TrustedQAService:
         citations: tuple[Citation, ...] = (),
         warnings: tuple[str, ...] = (),
         verified: bool = False,
+        retryable: bool = False,
     ) -> AskResult:
         result = AskResult(
             rag_run_id=package.rag_run_id,
@@ -286,9 +293,12 @@ class TrustedQAService:
             answer=answer,
             citations=citations,
             evidence=package.evidence,
-            warnings=warnings,
+            warnings=tuple(dict.fromkeys((*package.retrieval_warnings, *warnings))),
             verified=verified,
             real_acceptance=package.real_acceptance and verified,
+            retrieval_health=package.retrieval_health,
+            degraded=package.retrieval_health is not RetrievalHealth.HEALTHY,
+            retryable=retryable,
         )
         self.repository.save_run(package, result)
         return result
@@ -339,7 +349,7 @@ class TrustedQAService:
                         clearance_level=clearance_level,
                         space_id=space_id,
                     )
-        except (RetrievalFailClosed, TransientProviderError):
+        except (RetrievalFailClosed, TransientProviderError) as error:
             package = EvidencePackage(
                 rag_run_id=new_uuid7(),
                 tenant_id=tenant_id,
@@ -354,17 +364,33 @@ class TrustedQAService:
                 evidence=(),
                 verifier_revision=self.verifier.revision,
                 real_acceptance=False,
+                retrieval_health=RetrievalHealth.UNAVAILABLE,
             )
             return self._save(
                 package,
                 AnswerStatus.SYSTEM_ERROR,
                 warnings=("RETRIEVAL_OR_PERMISSION_FAIL_CLOSED",),
+                retryable=isinstance(error, (TransientProviderError, SecurityWatermarkNotReady)),
+            )
+        if package.retrieval_health is RetrievalHealth.UNAVAILABLE:
+            return self._save(
+                package,
+                AnswerStatus.SYSTEM_ERROR,
+                warnings=("RETRIEVAL_UNAVAILABLE",),
+                retryable=True,
             )
         if package.disposition is QuestionDisposition.OUT_OF_SCOPE:
             return self._save(package, AnswerStatus.OUT_OF_SCOPE, verified=True)
         if package.disposition is QuestionDisposition.NEEDS_CLARIFICATION:
             return self._save(package, AnswerStatus.NEEDS_CLARIFICATION, verified=True)
         if not package.evidence:
+            if package.retrieval_health is RetrievalHealth.DEGRADED:
+                return self._save(
+                    package,
+                    AnswerStatus.SYSTEM_ERROR,
+                    warnings=("RETRIEVAL_INCOMPLETE",),
+                    retryable=True,
+                )
             return self._save(package, AnswerStatus.INSUFFICIENT_EVIDENCE, verified=True)
         if package.conflict_detected:
             return self._save(package, AnswerStatus.CONFLICTING_EVIDENCE, verified=True)
@@ -391,11 +417,40 @@ class TrustedQAService:
             if draft is None:
                 with self.tracer.span("rag.ask.llm.generate"):
                     draft = self.generator.generate(question, package.evidence)
-        except (TransientProviderError, InvalidProviderResponse):
+        except InvalidProviderResponse:
+            return self._save(
+                package, AnswerStatus.SYSTEM_ERROR, warnings=("GENERATION_PROTOCOL_INVALID",)
+            )
+        except TransientProviderError:
             return self._save(
                 package,
                 AnswerStatus.SYSTEM_ERROR,
                 warnings=("GENERATION_UNAVAILABLE_AUTHORIZED_EVIDENCE_ONLY",),
+                retryable=True,
+            )
+        if draft.status is DraftAnswerStatus.INSUFFICIENT_EVIDENCE:
+            if draft.text != "" or draft.citation_ids or draft.claims:
+                return self._save(
+                    package, AnswerStatus.SYSTEM_ERROR, warnings=("GENERATION_PROTOCOL_INVALID",)
+                )
+            # A refusal has no factual claims to verify and must never enter the
+            # answer cache. It still crosses the same current-permission release gate.
+            with self.response_release_guard():
+                if not self._permission_recheck(package, subject_scope_tokens, clearance_level):
+                    return self._save(
+                        package,
+                        AnswerStatus.SYSTEM_ERROR,
+                        warnings=("FINAL_PERMISSION_RECHECK_FAILED",),
+                    )
+                return self._save(
+                    package,
+                    AnswerStatus.INSUFFICIENT_EVIDENCE,
+                    warnings=("MODEL_INSUFFICIENT_EVIDENCE",),
+                    verified=True,
+                )
+        if draft.status is not DraftAnswerStatus.ANSWERED:
+            return self._save(
+                package, AnswerStatus.SYSTEM_ERROR, warnings=("GENERATION_PROTOCOL_INVALID",)
             )
         available = {item.evidence_id: item for item in package.evidence}
         if (
@@ -430,7 +485,7 @@ class TrustedQAService:
             return self._save(
                 package,
                 AnswerStatus.SYSTEM_ERROR,
-                warnings=("FINAL_PERMISSION_RECHECK_FAILED",),
+                warnings=("PRE_VERIFIER_PERMISSION_RECHECK_FAILED",),
             )
         try:
             with self.tracer.span("rag.ask.claim.verify"):
@@ -447,12 +502,6 @@ class TrustedQAService:
                 AnswerStatus.INSUFFICIENT_EVIDENCE,
                 warnings=tuple(item.reason_code for item in verification.verdicts),
             )
-        if not self._permission_recheck(package, subject_scope_tokens, clearance_level):
-            return self._save(
-                package,
-                AnswerStatus.SYSTEM_ERROR,
-                warnings=("POST_VERIFIER_PERMISSION_RECHECK_FAILED",),
-            )
         verified_draft = DraftAnswer(
             render_verified_claims(draft.claims),
             claim_citation_ids,
@@ -464,30 +513,42 @@ class TrustedQAService:
                 AnswerStatus.INSUFFICIENT_EVIDENCE,
                 warnings=("VERIFIED_CLAIMS_EMPTY",),
             )
-        with self.tracer.span("rag.ask.citation.verify"):
-            citations = tuple(
-                Citation(
-                    evidence_id=evidence.evidence_id,
-                    source_url=self.references.source_url(
-                        package.rag_run_id,
-                        evidence.evidence_id,
-                        package.tenant_id,
-                        user_id,
-                        evidence.document_id,
-                    ),
-                    locator=evidence.locator,
+        # All model calls have finished. Runtime assembly shares this guard with
+        # lifecycle mutations, serializing the release decision and its side effects
+        # against revocation in this runtime. HTTP transport is outside this boundary.
+        with self.response_release_guard():
+            with self.tracer.span("rag.ask.permission.final"):
+                allowed = self._permission_recheck(package, subject_scope_tokens, clearance_level)
+            if not allowed:
+                return self._save(
+                    package,
+                    AnswerStatus.SYSTEM_ERROR,
+                    warnings=("FINAL_PERMISSION_RECHECK_FAILED",),
                 )
-                for evidence in cited
+            with self.tracer.span("rag.ask.citation.verify"):
+                citations = tuple(
+                    Citation(
+                        evidence_id=evidence.evidence_id,
+                        source_url=self.references.source_url(
+                            package.rag_run_id,
+                            evidence.evidence_id,
+                            package.tenant_id,
+                            user_id,
+                            evidence.document_id,
+                        ),
+                        locator=evidence.locator,
+                    )
+                    for evidence in cited
+                )
+            if self.cache is not None:
+                self.cache.put(package, verified_draft)
+            return self._save(
+                package,
+                AnswerStatus.ANSWERED,
+                answer=verified_draft.text,
+                citations=citations,
+                verified=True,
             )
-        if self.cache is not None:
-            self.cache.put(package, verified_draft)
-        return self._save(
-            package,
-            AnswerStatus.ANSWERED,
-            answer=verified_draft.text,
-            citations=citations,
-            verified=True,
-        )
 
     def ask(
         self,
@@ -559,6 +620,8 @@ class InMemoryVerifiedAnswerCache:
             return self._values.get(self._key(package))
 
     def put(self, package: EvidencePackage, draft: DraftAnswer) -> None:
+        if draft.status is not DraftAnswerStatus.ANSWERED:
+            return
         key = self._key(package)
         with self._lock:
             if len(self._values) >= self.max_entries:
@@ -569,7 +632,7 @@ class InMemoryVerifiedAnswerCache:
 def verified_answer_cache_key(package: EvidencePackage) -> str:
     payload = {
         "verifier_revision": package.verifier_revision,
-        "permission_policy_revision": "projection-recheck:v2",
+        "permission_policy_revision": "guarded-final-release:v3",
         "tenant_id": package.tenant_id,
         "user_id": package.user_id,
         "permission_revision": package.permission_revision,

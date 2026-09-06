@@ -31,7 +31,7 @@ class _SafeModelTransport:
                 {
                     "message": {
                         "content": (
-                            '{"answer":"每晚 600 元","citation_ids":["E1"],'
+                            '{"status":"answered","answer":"每晚 600 元","citation_ids":["E1"],'
                             '"claims":[{"text":"每晚 600 元","evidence_ids":["E1"]}]}'
                         )
                     }

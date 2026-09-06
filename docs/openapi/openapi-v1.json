@@ -75,12 +75,26 @@
             "title": "Citations",
             "type": "array"
           },
+          "degraded": {
+            "default": false,
+            "title": "Degraded",
+            "type": "boolean"
+          },
           "rag_run_id": {
             "title": "Rag Run Id",
             "type": "string"
           },
           "real_acceptance": {
             "title": "Real Acceptance",
+            "type": "boolean"
+          },
+          "retrieval_health": {
+            "$ref": "#/components/schemas/RetrievalHealth",
+            "default": "healthy"
+          },
+          "retryable": {
+            "default": false,
+            "title": "Retryable",
             "type": "boolean"
           },
           "status": {
@@ -1757,6 +1771,15 @@
         "title": "ReadinessResponse",
         "type": "object"
       },
+      "RetrievalHealth": {
+        "enum": [
+          "healthy",
+          "degraded",
+          "unavailable"
+        ],
+        "title": "RetrievalHealth",
+        "type": "string"
+      },
       "RollbackRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1860,6 +1883,16 @@
               }
             ],
             "title": "Parent Chunk Id"
+          },
+          "parent_source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SearchSourceResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "parent_text": {
             "anyOf": [
@@ -1967,6 +2000,10 @@
             "title": "Request Id",
             "type": "string"
           },
+          "retrieval_health": {
+            "$ref": "#/components/schemas/RetrievalHealth",
+            "default": "healthy"
+          },
           "warnings": {
             "items": {
               "type": "string"
@@ -1984,6 +2021,46 @@
           "warnings"
         ],
         "title": "SearchResponse",
+        "type": "object"
+      },
+      "SearchSourceResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "chunk_id": {
+            "title": "Chunk Id",
+            "type": "string"
+          },
+          "display_text": {
+            "title": "Display Text",
+            "type": "string"
+          },
+          "document_id": {
+            "title": "Document Id",
+            "type": "string"
+          },
+          "document_version_id": {
+            "title": "Document Version Id",
+            "type": "string"
+          },
+          "locator": {
+            "additionalProperties": true,
+            "title": "Locator",
+            "type": "object"
+          },
+          "retrieval_text": {
+            "title": "Retrieval Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "chunk_id",
+          "document_id",
+          "document_version_id",
+          "display_text",
+          "retrieval_text",
+          "locator"
+        ],
+        "title": "SearchSourceResponse",
         "type": "object"
       },
       "SecurityProjectionRequest": {
@@ -2732,6 +2809,23 @@
               "title": "Offset",
               "type": "integer"
             }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
           }
         ],
         "responses": {
@@ -2769,6 +2863,98 @@
         "tags": [
           "documents",
           "retrieval"
+        ]
+      }
+    },
+    "/api/v1/document-versions/{version_id}/chunks/preview": {
+      "get": {
+        "operationId": "preview_chunks_api_v1_document_versions__version_id__chunks_preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "title": "Version Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DocumentChunkResponse"
+                  },
+                  "title": "Response Preview Chunks Api V1 Document Versions  Version Id  Chunks Preview Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Preview Chunks",
+        "tags": [
+          "documents",
+          "management-preview"
         ]
       }
     },
@@ -3155,6 +3341,54 @@
         "summary": "Get Lifecycle"
       }
     },
+    "/api/v1/documents/{document_id}/preview": {
+      "get": {
+        "operationId": "preview_document_api_v1_documents__document_id__preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Preview Document",
+        "tags": [
+          "documents",
+          "management-preview"
+        ]
+      }
+    },
     "/api/v1/documents/{document_id}/versions": {
       "get": {
         "operationId": "versions_api_v1_documents__document_id__versions_get",
@@ -3203,6 +3437,58 @@
         "summary": "Versions",
         "tags": [
           "documents"
+        ]
+      }
+    },
+    "/api/v1/documents/{document_id}/versions/preview": {
+      "get": {
+        "operationId": "preview_versions_api_v1_documents__document_id__versions_preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DocumentVersionResponse"
+                  },
+                  "title": "Response Preview Versions Api V1 Documents  Document Id  Versions Preview Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Preview Versions",
+        "tags": [
+          "documents",
+          "management-preview"
         ]
       }
     },
@@ -5261,6 +5547,23 @@
               "title": "Offset",
               "type": "integer"
             }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
           }
         ],
         "responses": {
@@ -5298,6 +5601,98 @@
         "tags": [
           "spaces",
           "documents"
+        ]
+      }
+    },
+    "/api/v1/spaces/{space_id}/documents/preview": {
+      "get": {
+        "operationId": "preview_documents_api_v1_spaces__space_id__documents_preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "title": "Space Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/KnowledgeDocumentResponse"
+                  },
+                  "title": "Response Preview Documents Api V1 Spaces  Space Id  Documents Preview Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Preview Documents",
+        "tags": [
+          "spaces",
+          "management-preview"
         ]
       }
     },

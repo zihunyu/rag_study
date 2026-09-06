@@ -27,10 +27,10 @@ function button(wrapper, label) {
   return wrapper.findAll("button").find((item) => item.text().includes(label));
 }
 
-function jsonResponse(payload, status = 200) {
+function jsonResponse(payload, status = 200, headers = {}) {
   return new Response(JSON.stringify(payload), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
   });
 }
 
@@ -39,6 +39,145 @@ afterEach(() => {
 });
 
 describe("trusted QA UI", () => {
+  it("clears the prior library immediately while the next list is loading", async () => {
+    let release;
+    const pending = new Promise((resolve) => { release = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async (url) => {
+      const path = String(url);
+      if (path.endsWith("/spaces")) return jsonResponse([{ id: "a", name: "库 A" }, { id: "b", name: "库 B" }]);
+      if (path.endsWith("/spaces/a/documents")) return jsonResponse([{ document_id: "a", version_id: "va", filename: "A-only.md" }]);
+      if (path.endsWith("/spaces/b/documents")) return pending;
+      return jsonResponse([]);
+    }));
+    const wrapper = mount(App);
+    await flushPromises();
+    await button(wrapper, "知识库").trigger("click");
+    expect(wrapper.text()).toContain("A-only.md");
+    await wrapper.get('[data-testid="global-space-select"]').setValue("b");
+    expect(wrapper.text()).not.toContain("A-only.md");
+    release(jsonResponse([]));
+    await flushPromises();
+  });
+
+  it.each([false, true])("ignores delayed old-document chunks or errors (error=%s)", async (failed) => {
+    let release;
+    const pending = new Promise((resolve) => { release = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async (url) => {
+      const path = String(url);
+      if (path.endsWith("/spaces")) return jsonResponse([{ id: "a", name: "库 A" }]);
+      if (path.endsWith("/documents")) return jsonResponse([
+        { document_id: "a", version_id: "va", filename: "A.md" },
+        { document_id: "b", version_id: "vb", filename: "B.md" },
+      ]);
+      if (path.includes("/va/chunks")) return pending;
+      if (path.includes("/vb/chunks")) return jsonResponse([{ chunk_id: "cb", text: "B body", locator: {} }]);
+      return jsonResponse([]);
+    }));
+    const wrapper = mount(App);
+    await flushPromises();
+    await button(wrapper, "知识库").trigger("click");
+    await wrapper.findAll('[data-testid="view-chunks"]')[0].trigger("click");
+    await flushPromises();
+    await wrapper.findAll('[data-testid="view-chunks"]')[1].trigger("click");
+    await flushPromises();
+    release(failed ? jsonResponse({ code: "OLD_DOCUMENT_FAILED" }, 500)
+      : jsonResponse([{ chunk_id: "ca", text: "A late body", locator: {} }]));
+    await flushPromises();
+    expect(wrapper.get('[data-testid="chunk-panel"]').text()).toContain("B body");
+    expect(wrapper.text()).not.toContain("A late body");
+    expect(wrapper.text()).not.toContain("OLD_DOCUMENT_FAILED");
+  });
+
+  it("ignores old-library answer progress/results and search results", async () => {
+    let releaseAnswer, releaseSearch;
+    const answer = new Promise((resolve) => { releaseAnswer = resolve; });
+    const search = new Promise((resolve) => { releaseSearch = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async (url) => {
+      const path = String(url);
+      if (path.endsWith("/spaces")) return jsonResponse([{ id: "a", name: "库 A" }, { id: "b", name: "库 B" }]);
+      if (path.includes("/ask")) return answer;
+      if (path.endsWith("/search")) return search;
+      return jsonResponse([]);
+    }));
+    const wrapper = mount(App);
+    await flushPromises();
+    await wrapper.find("textarea").setValue("A 的问题");
+    await button(wrapper, "从此知识库回答").trigger("click");
+    await button(wrapper, "检索调试").trigger("click");
+    await button(wrapper, "在当前知识库检索").trigger("click");
+    await flushPromises();
+    await wrapper.get('[data-testid="global-space-select"]').setValue("b");
+    releaseAnswer(sseResponse('event: progress\ndata: {"stage":"verified"}\n\nevent: result\ndata: {"status":"answered","answer":"OLD_ANSWER","citations":[],"verified":true}\n\n'));
+    releaseSearch(jsonResponse({ hits: [{ text: "OLD_SEARCH" }] }));
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("OLD_SEARCH");
+    await button(wrapper, "知识问答").trigger("click");
+    expect(wrapper.text()).not.toContain("OLD_ANSWER");
+    expect(wrapper.text()).not.toContain("已验证");
+    expect(wrapper.text()).toContain("等待输入");
+  });
+
+  it("follows a server cursor even when authorization leaves an empty page", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url) => {
+      const path = String(url);
+      if (path.endsWith("/spaces")) return jsonResponse([{ id: "a", name: "库 A" }]);
+      if (path.endsWith("/documents")) return jsonResponse([], 200, { "X-Next-Cursor": "position-1" });
+      if (path.includes("cursor=position-1")) return jsonResponse([{ document_id: "b", version_id: "vb", filename: "visible.md" }]);
+      return jsonResponse([]);
+    }));
+    const wrapper = mount(App);
+    await flushPromises();
+    await button(wrapper, "知识库").trigger("click");
+    await button(wrapper, "加载更多文件").trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("visible.md");
+    expect(button(wrapper, "加载更多文件")).toBeUndefined();
+  });
+
+  it("shows a valid model refusal as insufficient evidence", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url) => {
+      const path = String(url);
+      if (path.endsWith("/spaces")) return jsonResponse([{ id: "a", name: "库 A" }]);
+      if (path.includes("/ask")) return sseResponse(
+        'event: progress\ndata: {"stage":"verified"}\n\n' +
+        'event: result\ndata: {"status":"insufficient_evidence","answer":null,"citations":[],"verified":true,"warnings":["MODEL_INSUFFICIENT_EVIDENCE"]}\n\n',
+      );
+      return jsonResponse([]);
+    }));
+    const wrapper = mount(App);
+    await flushPromises();
+    await wrapper.find("textarea").setValue("退款政策是什么？");
+    await button(wrapper, "从此知识库回答").trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".answer").text()).toContain("现有资料不足以回答这个问题");
+    expect(wrapper.text()).not.toContain("system_error");
+    expect(wrapper.text()).not.toContain("验证失败");
+  });
+
+  it.each([
+    ["unavailable", "system_error", true, false, "服务暂不可用"],
+    ["degraded", "answered", false, true, "部分检索服务暂不可用"],
+  ])("shows retrieval health %s instead of claiming missing evidence", async (health, status, retryable, verified, message) => {
+    vi.stubGlobal("fetch", vi.fn(async (url) => {
+      const path = String(url);
+      if (path.endsWith("/spaces")) return jsonResponse([{ id: "a", name: "库 A" }]);
+      if (path.includes("/ask")) return sseResponse(
+        `event: progress\ndata: ${JSON.stringify({ stage: verified ? "verified" : "verification_failed" })}\n\n` +
+        `event: result\ndata: ${JSON.stringify({ status, answer: verified ? "证据回答" : null, verified, citations: [], retrieval_health: health, degraded: true, retryable })}\n\n`,
+      );
+      return jsonResponse([]);
+    }));
+    const wrapper = mount(App);
+    await flushPromises();
+    await wrapper.find("textarea").setValue("问题");
+    await button(wrapper, "从此知识库回答").trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain(message);
+    expect(wrapper.text()).not.toContain("insufficient_evidence");
+    if (verified) expect(wrapper.text()).toContain("证据回答");
+    else expect(wrapper.text()).not.toContain("已验证");
+  });
+
   it("ignores a delayed old-library document response", async () => {
     let release;
     const pending = new Promise((resolve) => { release = resolve; });
@@ -138,7 +277,7 @@ describe("trusted QA UI", () => {
         if (path.endsWith("/spaces")) {
           return jsonResponse([{ id: "space-1", name: "制度库", status: "ACTIVE" }]);
         }
-        if (path.endsWith("/spaces/space-1/documents")) {
+        if (path.endsWith("/spaces/space-1/documents") || path.endsWith("/spaces/space-1/documents/preview")) {
           documentReads += 1;
           return jsonResponse(
             documentReads === 1
@@ -172,7 +311,7 @@ describe("trusted QA UI", () => {
         if (path.endsWith("/document-versions/version-1/quality-report")) {
           return jsonResponse({ document_version_id: "version-1", source_format: "md", parser_revision: "parser:v1", node_count: 1, locator_coverage: 1, issue_codes: [], disposition: "PASS", real_acceptance: false });
         }
-        if (path.endsWith("/document-versions/version-1/chunks")) {
+        if (path.endsWith("/document-versions/version-1/chunks/preview")) {
           return jsonResponse([{ chunk_id: "chunk-1", document_version_id: "version-1", parent_chunk_id: null, ordinal: 0, kind: "paragraph", token_count: 3, status: "STAGED", text: "policy content", locator: { line_start: 1 } }]);
         }
         return jsonResponse({ method: options.method }, 404);
@@ -208,6 +347,8 @@ describe("trusted QA UI", () => {
     expect(wrapper.text()).toContain("解析入库完成");
     expect(wrapper.get('[data-testid="document-list"]').text()).toContain("policy.md");
     expect(wrapper.get('[data-testid="chunk-panel"]').text()).toContain("policy content");
+    expect(wrapper.get('[data-testid="document-preview"]').element.checked).toBe(true);
+    expect(fetch.mock.calls.some(([url]) => String(url).endsWith("/document-versions/version-1/chunks/preview"))).toBe(true);
   });
 
   it("creates and selects a knowledge base", async () => {

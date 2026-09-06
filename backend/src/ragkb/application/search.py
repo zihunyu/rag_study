@@ -21,10 +21,12 @@ from ragkb.domain.errors import TransientProviderError
 from ragkb.domain.retrieval import (
     AuthorizedChunk,
     IndexCandidate,
+    RetrievalHealth,
     SearchChannel,
     SearchContext,
     SearchHit,
     SearchResult,
+    SearchSource,
     SecurityWatermarkNotReady,
 )
 
@@ -136,7 +138,7 @@ def near_duplicate(left: str, right: str, *, threshold: float) -> bool:
 
 
 class HybridSearchService:
-    revision = "hybrid-search-service:g2-v2"
+    revision = "hybrid-search-service:g2-v4"
 
     def __init__(
         self,
@@ -184,7 +186,9 @@ class HybridSearchService:
 
     def _retrieve(
         self, query: str, context: SearchContext
-    ) -> tuple[Sequence[IndexCandidate], Sequence[IndexCandidate], list[str]]:
+    ) -> tuple[
+        Sequence[IndexCandidate], Sequence[IndexCandidate], list[str], tuple[SearchChannel, ...]
+    ]:
         warnings: list[str] = []
         native = getattr(self.index, "search_hybrid", None)
         if callable(native):
@@ -200,15 +204,20 @@ class HybridSearchService:
                     bm25_limit=self.bm25_top_k,
                     dense_limit=self.dense_top_k,
                 )
-                return result[0], result[1], warnings
+                return result[0], result[1], warnings, ("bm25", "dense")
             except TransientProviderError:
                 warnings.append("DENSE_RETRIEVAL_UNAVAILABLE")
                 try:
                     with self.tracer.span("rag.retrieval.bm25"):
-                        return self.index.search_bm25(query, context, self.bm25_top_k), (), warnings
+                        return (
+                            self.index.search_bm25(query, context, self.bm25_top_k),
+                            (),
+                            warnings,
+                            ("bm25",),
+                        )
                 except TransientProviderError:
                     warnings.append("BM25_RETRIEVAL_UNAVAILABLE")
-                    return (), (), warnings
+                    return (), (), warnings, ()
 
         def dense_path() -> Sequence[IndexCandidate]:
             with self.tracer.span("rag.retrieval.embedding"):
@@ -222,6 +231,7 @@ class HybridSearchService:
             with self.tracer.span("rag.retrieval.bm25"):
                 return self.index.search_bm25(query, context, self.bm25_top_k)
 
+        available: list[SearchChannel] = []
         with ThreadPoolExecutor(max_workers=2, thread_name_prefix="hybrid-retrieval") as pool:
             bm25_context = contextvars.copy_context()
             dense_context = contextvars.copy_context()
@@ -229,15 +239,17 @@ class HybridSearchService:
             dense_future = pool.submit(dense_context.run, dense_path)
             try:
                 bm25 = bm25_future.result()
+                available.append("bm25")
             except TransientProviderError:
                 bm25 = ()
                 warnings.append("BM25_RETRIEVAL_UNAVAILABLE")
             try:
                 dense = dense_future.result()
+                available.append("dense")
             except TransientProviderError:
                 dense = ()
                 warnings.append("DENSE_RETRIEVAL_UNAVAILABLE")
-        return bm25, dense, warnings
+        return bm25, dense, warnings, tuple(available)
 
     def search(
         self, query: str, context: SearchContext, *, limit: int | None = None
@@ -251,7 +263,15 @@ class HybridSearchService:
         with self.tracer.span(
             "rag.retrieval", {"query_type": classify_query(normalized), "limit": limit or 0}
         ):
-            bm25, dense, warnings = self._retrieve(normalized, context)
+            bm25, dense, warnings, available_channels = self._retrieve(normalized, context)
+        if not available_channels:
+            return SearchResult(
+                (),
+                observed,
+                degraded=True,
+                warnings=tuple(warnings),
+                retrieval_health=RetrievalHealth.UNAVAILABLE,
+            )
         query_type = classify_query(normalized)
         # Discard late writes from a retired ingestion attempt before score fusion.
         if any(item.vector_pk for item in (*bm25, *dense)):
@@ -313,12 +333,17 @@ class HybridSearchService:
         hits: list[SearchHit] = []
         selected_texts: list[str] = []
         document_counts: Counter[str] = Counter()
-        section_counts: Counter[str] = Counter()
+        section_counts: Counter[tuple[str, str, str]] = Counter()
         for position in order:
             if position < 0 or position >= len(authorized_candidates):
                 raise ValueError("reranker returned an invalid candidate index")
             chunk, score, channels = authorized_candidates[position]
-            section_key = str(chunk.locator.get("section_path", chunk.document_id))
+            canonical_section_path = str(chunk.locator.get("section_path") or "").strip() or "root"
+            section_key = (
+                chunk.document_id,
+                chunk.document_version_id,
+                canonical_section_path,
+            )
             if (
                 document_counts[chunk.document_id] >= self.max_chunks_per_document
                 or section_counts[section_key] >= self.max_chunks_per_section
@@ -340,22 +365,37 @@ class HybridSearchService:
                 if chunk.parent_chunk_id
                 else None
             )
-            if parent is not None and not self._currently_authorized(parent, context):
+            if parent is not None and (
+                not self._currently_authorized(parent, context)
+                or parent.document_id != chunk.document_id
+                or parent.document_version_id != chunk.document_version_id
+                # Older parent projections only locate their first child. They
+                # need reindexing before the entire parent can be cited safely.
+                or not parent.locator.get("source_spans")
+            ):
                 parent = None
-            generation_parts: list[str] = []
-            section_path = str(chunk.locator.get("section_path", "")).strip()
-            if section_path and section_path != "root":
-                generation_parts.append(f"SECTION_PATH: {section_path}")
-            generation_parts.append(chunk.retrieval_text)
-            if parent is not None and parent.retrieval_text != chunk.retrieval_text:
-                generation_parts.append(f"PARENT_CONTEXT: {parent.retrieval_text}")
-            generation_context = "\n".join(generation_parts)
+            parent_source = (
+                SearchSource(
+                    chunk_id=parent.chunk_id,
+                    document_id=parent.document_id,
+                    document_version_id=parent.document_version_id,
+                    display_text=parent.display_text,
+                    retrieval_text=parent.retrieval_text,
+                    locator=parent.locator,
+                    valid_from_epoch=parent.valid_from_epoch,
+                    valid_to_epoch=parent.valid_to_epoch,
+                    permission_revision=parent.permission_revision,
+                    current_version=parent.current_version,
+                )
+                if parent is not None
+                else None
+            )
             hits.append(
                 SearchHit(
                     chunk_id=chunk.chunk_id,
                     document_id=chunk.document_id,
                     document_version_id=chunk.document_version_id,
-                    text=generation_context,
+                    text=chunk.retrieval_text,
                     locator=chunk.locator,
                     fused_score=score,
                     rerank_position=len(hits) + 1,
@@ -368,7 +408,10 @@ class HybridSearchService:
                     current_version=chunk.current_version,
                     display_text=chunk.display_text,
                     retrieval_text=chunk.retrieval_text,
-                    generation_context=generation_context,
+                    # Compatibility field: only this hit's text. Evidence assembly
+                    # owns prompt context, and parents have separate source IDs.
+                    generation_context=chunk.retrieval_text,
+                    parent_source=parent_source,
                 )
             )
             if len(hits) >= requested:
@@ -379,4 +422,5 @@ class HybridSearchService:
             real_acceptance=self.real_acceptance,
             degraded=bool(warnings),
             warnings=tuple(warnings),
+            retrieval_health=(RetrievalHealth.DEGRADED if warnings else RetrievalHealth.HEALTHY),
         )

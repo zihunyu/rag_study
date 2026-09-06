@@ -131,7 +131,7 @@ def test_draft_is_hidden_from_reader_but_available_to_management_until_publish(
     assert record.visible is False
     assert reader.get(f"/api/v1/documents/{document_id}").status_code == 404
     assert reader.get(f"/api/v1/documents/{document_id}/versions").status_code == 404
-    assert maintainer.get(f"/api/v1/documents/{document_id}").status_code == 200
+    assert maintainer.get(f"/api/v1/documents/{document_id}/preview").status_code == 200
     assert maintainer.get(f"/api/v1/ingestion-jobs/{job_id}").status_code == 200
     _process_next(components, admin, version_id)
 

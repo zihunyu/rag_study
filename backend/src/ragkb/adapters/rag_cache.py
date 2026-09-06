@@ -6,7 +6,7 @@ from redis.exceptions import RedisError
 
 from ragkb.adapters.redis_cache import RedisCacheRateLimitAdapter
 from ragkb.application.qa import verified_answer_cache_key
-from ragkb.domain.rag import AtomicClaim, DraftAnswer, EvidencePackage
+from ragkb.domain.rag import AtomicClaim, DraftAnswer, DraftAnswerStatus, EvidencePackage
 
 
 class RedisVerifiedAnswerCache:
@@ -22,6 +22,8 @@ class RedisVerifiedAnswerCache:
         except (RedisError, ValueError):
             return None
         if value is None:
+            return None
+        if value.get("status", "answered") != DraftAnswerStatus.ANSWERED:
             return None
         answer = value.get("answer")
         citation_ids = value.get("citation_ids")
@@ -45,11 +47,14 @@ class RedisVerifiedAnswerCache:
         return DraftAnswer(answer, tuple(map(str, citation_ids)), parsed_claims)
 
     def put(self, package: EvidencePackage, draft: DraftAnswer) -> None:
+        if draft.status is not DraftAnswerStatus.ANSWERED:
+            return
         try:
             self.redis.set_json(
                 "verified-answer",
                 verified_answer_cache_key(package),
                 {
+                    "status": draft.status.value,
                     "answer": draft.text,
                     "citation_ids": list(draft.citation_ids),
                     "claims": [

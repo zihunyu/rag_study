@@ -95,7 +95,7 @@ def test_grounded_generator_separates_untrusted_evidence_and_parses_citations(
                 {
                     "message": {
                         "content": (
-                            '{"answer":"保修期三年","citation_ids":["E1"],'
+                            '{"status":"answered","answer":"保修期三年","citation_ids":["E1"],'
                             '"claims":[{"text":"保修期三年","evidence_ids":["E1"]}]}'
                         )
                     }
@@ -137,7 +137,8 @@ def test_grounded_generator_rebuilds_surface_text_from_atomic_claims(tmp_path: P
                 {
                     "message": {
                         "content": (
-                            '{"answer":"According to the evidence, the warranty is three years.",'
+                            '{"status":"answered",'
+                            '"answer":"According to the evidence, the warranty is three years.",'
                             '"citation_ids":["E1"],'
                             '"claims":[{"text":"The warranty is three years.",'
                             '"evidence_ids":["E1"]}]}'

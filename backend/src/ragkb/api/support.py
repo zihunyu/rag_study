@@ -73,6 +73,9 @@ def ask_response(result: AskResult) -> AskResponse:
         warnings=list(result.warnings),
         verified=result.verified,
         real_acceptance=result.real_acceptance,
+        retrieval_health=result.retrieval_health,
+        degraded=result.degraded,
+        retryable=result.retryable,
     )
 
 
@@ -135,26 +138,51 @@ def ensure_document_readable(
     principal: RequestPrincipal,
     version_id: str | None = None,
 ) -> None:
+    require_local_tenant(runtime, principal)
     runtime.lifecycle_store.reload()
     record = runtime.lifecycle_store.documents.get(document_id)
     if record is None or runtime.lifecycle_store.is_tombstoned(document_id):
         raise ResourceNotFoundError(document_id)
     space_id = runtime.repository.get_document_space(document_id)
-    if document_manager(principal, space_id):
-        return
     ensure_document_visible(runtime, document_id)
     if version_id is not None and record.active_version_id != version_id:
         raise ResourceNotFoundError(document_id)
     active = record.active_version_id
     if active is None:
         raise ResourceNotFoundError(document_id)
-    rows = runtime.repository.list_chunks(active)
+    version = runtime.repository.get_version(active)
+    if (
+        version["tenant_id"] != principal.tenant_id
+        or version["document_id"] != document_id
+        or version["publication_state"] != "SERVING"
+    ):
+        raise ResourceNotFoundError(document_id)
     context = document_search_context(runtime, principal, space_id)
-    allowed = runtime.search_service.control_plane.authorize_chunks(
-        tuple(str(row["chunk_id"]) for row in rows), context
-    )
-    if not any(
-        runtime.lifecycle_store.authorizes_chunk(chunk, context) for chunk in allowed.values()
+    offset = 0
+    while chunk_ids := runtime.repository.list_chunk_ids(active, limit=100, offset=offset):
+        allowed = runtime.search_service.control_plane.authorize_chunks(chunk_ids, context)
+        if any(
+            chunk.document_id == document_id and chunk.document_version_id == active
+            for chunk in allowed.values()
+        ):
+            return
+        offset += len(chunk_ids)
+    raise ResourceNotFoundError(document_id)
+
+
+def ensure_document_previewable(
+    runtime: RuntimeComponents, document_id: str, principal: RequestPrincipal
+) -> None:
+    """Management access is explicit and never changes the reader authorization policy."""
+    require_local_tenant(runtime, principal)
+    document = runtime.repository.get_document(document_id)
+    if document["tenant_id"] != principal.tenant_id:
+        raise ResourceNotFoundError(document_id)
+    require_document_manager(runtime, principal, document_id)
+    runtime.lifecycle_store.reload()
+    if (
+        document_id not in runtime.lifecycle_store.documents
+        or runtime.lifecycle_store.is_tombstoned(document_id)
     ):
         raise ResourceNotFoundError(document_id)
 

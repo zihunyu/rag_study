@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ragkb.domain.retrieval import RetrievalHealth
+
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -184,6 +186,15 @@ class SearchRequest(StrictModel):
     limit: int | None = Field(default=None, ge=1, le=50)
 
 
+class SearchSourceResponse(StrictModel):
+    chunk_id: str
+    document_id: str
+    document_version_id: str
+    display_text: str
+    retrieval_text: str
+    locator: dict[str, Any]
+
+
 class SearchHitResponse(StrictModel):
     chunk_id: str
     document_id: str
@@ -198,6 +209,7 @@ class SearchHitResponse(StrictModel):
     channels: list[str]
     parent_chunk_id: str | None = None
     parent_text: str | None = None
+    parent_source: SearchSourceResponse | None = None
 
 
 class SearchResponse(StrictModel):
@@ -207,6 +219,7 @@ class SearchResponse(StrictModel):
     real_acceptance: bool
     degraded: bool
     warnings: list[str]
+    retrieval_health: RetrievalHealth = RetrievalHealth.HEALTHY
 
 
 class AskRequest(StrictModel):
@@ -228,6 +241,9 @@ class AskResponse(StrictModel):
     warnings: list[str]
     verified: bool
     real_acceptance: bool
+    retrieval_health: RetrievalHealth = RetrievalHealth.HEALTHY
+    degraded: bool = False
+    retryable: bool = False
 
 
 class EvidenceSourceResponse(StrictModel):

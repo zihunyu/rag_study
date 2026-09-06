@@ -12,9 +12,12 @@ from typing import Any
 from ragkb.adapters.mysql_control import MySQLControlPlaneAdapter
 from ragkb.adapters.mysql_entity_store import EntityMap, EntityRow, MySQLNormalizedEntityStore
 from ragkb.adapters.mysql_lazy_state import LazyCollection, loaded_items
+from ragkb.adapters.mysql_retrieval import MySQLRetrievalControlPlane
 from ragkb.contracts.lifecycle import PublicationReadiness
 from ragkb.domain.ids import new_uuid7
+from ragkb.domain.pagination import PageKey, RepositoryPage
 from ragkb.domain.publication_policy import review_quality_error
+from ragkb.domain.retrieval import SearchContext
 from ragkb.domain.state_machines import (
     DocumentState,
     PublicationState,
@@ -233,6 +236,12 @@ class MySQLUploadRepository:
     def list_spaces(self) -> list[dict[str, str]]:
         return [dict(item) for item in self._read()["spaces"].values()]
 
+    def get_space(self, space_id: str) -> dict[str, str]:
+        item = self._read()["spaces"].get(space_id)
+        if item is None:
+            raise ResourceNotFoundError(space_id)
+        return dict(item)
+
     def create_space(self, tenant_id: str, name: str) -> dict[str, str]:
         if tenant_id != self.tenant_id:
             raise ResourceNotFoundError(tenant_id)
@@ -270,6 +279,19 @@ class MySQLUploadRepository:
     def list_documents(
         self, space_id: str, *, limit: int = 100, offset: int = 0, current_only: bool = False
     ) -> list[dict[str, Any]]:
+        return self.list_documents_page(
+            space_id, limit=limit, offset=offset, current_only=current_only
+        ).items
+
+    def list_documents_page(
+        self,
+        space_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        current_only: bool = False,
+        after: PageKey | None = None,
+    ) -> RepositoryPage:
         state = self._read()
         if space_id not in state["spaces"]:
             raise ResourceNotFoundError(space_id)
@@ -280,6 +302,7 @@ class MySQLUploadRepository:
                 """
                 SELECT d.entity_id FROM upload_entities_v3 d
                 WHERE d.tenant_id=%s AND d.entity_type='documents'
+                  AND d.entity_id > %s
                   AND JSON_UNQUOTE(JSON_EXTRACT(d.payload_json, '$.state')) != 'DELETED'
                   AND (JSON_UNQUOTE(JSON_EXTRACT(d.payload_json, '$.space_id'))=%s
                     OR (JSON_EXTRACT(d.payload_json, '$.space_id') IS NULL AND EXISTS (
@@ -288,34 +311,44 @@ class MySQLUploadRepository:
                         AND JSON_UNQUOTE(JSON_EXTRACT(s.payload_json, '$.space_id'))=%s)))
                 ORDER BY d.entity_id LIMIT %s OFFSET %s
             """,
-                (self.tenant_id, space_id, space_id, limit, offset),
+                (self.tenant_id, after[1] if after else "", space_id, space_id, limit + 1, offset),
             )
             document_ids = [
                 str(row["entity_id"] if isinstance(row, dict) else row[0])
                 for row in cursor.fetchall()
             ]
-            sessions = [
-                row.payload
-                for document_id in document_ids
-                for row in self._entities.load(
-                    cursor, entity_type="sessions", parent_id=document_id
-                ).values()
-            ]
+            next_key = (0, document_ids[limit - 1]) if len(document_ids) > limit else None
+            document_ids = document_ids[:limit]
+            latest_by_document: dict[str, dict[str, Any]] = {}
+            session_by_version: dict[str, dict[str, Any]] = {}
+            for document_id in document_ids:
+                if current_only:
+                    current = state["documents"][document_id].get("current_version_id")
+                    version = state["versions"].get(current) if current else None
+                else:
+                    rows = self._entities.load(
+                        cursor,
+                        entity_type="versions",
+                        parent_id=document_id,
+                        limit=1,
+                        descending=True,
+                    )
+                    version = next((row.payload for row in rows.values()), None)
+                if version is None or version["document_id"] != document_id:
+                    continue
+                latest_by_document[document_id] = version
+                sessions = self._entities.load(
+                    cursor,
+                    entity_type="sessions",
+                    parent_id=document_id,
+                    document_version_id=str(version["id"]),
+                    limit=1,
+                    descending=True,
+                )
+                if sessions:
+                    session_by_version[str(version["id"])] = next(iter(sessions.values())).payload
         finally:
             connection.close()
-        latest_by_document: dict[str, dict[str, Any]] = {}
-        for document_id in document_ids:
-            versions = self.get_versions(document_id)
-            if current_only:
-                current = state["documents"][document_id].get("current_version_id")
-                versions = [item for item in versions if item["id"] == current]
-            if versions:
-                latest_by_document[document_id] = versions[-1]
-        session_by_version = {
-            str(item["document_version_id"]): item
-            for item in sessions
-            if item.get("document_version_id")
-        }
         counts: dict[str, int] = {}
         version_ids = [str(item["id"]) for item in latest_by_document.values()]
         if version_ids:
@@ -372,11 +405,51 @@ class MySQLUploadRepository:
                     "job_id": str(session["job_id"]) if session and session.get("job_id") else None,
                 }
             )
-        return sorted(results, key=lambda item: (str(item["filename"]), str(item["document_id"])))
+        return RepositoryPage(results, next_key)
+
+    def list_chunk_ids(self, version_id: str, *, limit: int = 100, offset: int = 0) -> list[str]:
+        connection = self.control.connect()
+        try:
+            cursor = connection.cursor()
+            cursor.execute(
+                "SELECT chunk_id FROM retrieval_chunk_projections "
+                "WHERE document_version_id=%s AND tenant_id=%s AND index_generation_id=%s "
+                "ORDER BY CAST(JSON_EXTRACT(locator_json, '$.ordinal') AS UNSIGNED), chunk_id "
+                "LIMIT %s OFFSET %s",
+                (version_id, self.tenant_id, self.generation_id, limit, offset),
+            )
+            return [
+                str(row["chunk_id"] if isinstance(row, dict) else row[0])
+                for row in cursor.fetchall()
+            ]
+        finally:
+            connection.close()
 
     def list_chunks(
-        self, version_id: str, *, limit: int = 100, offset: int = 0
+        self,
+        version_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        context: SearchContext | None = None,
+        preview: bool = False,
     ) -> list[dict[str, Any]]:
+        return self.list_chunks_page(
+            version_id, limit=limit, offset=offset, context=context, preview=preview
+        ).items
+
+    def list_chunks_page(
+        self,
+        version_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        context: SearchContext | None = None,
+        preview: bool = False,
+        after: PageKey | None = None,
+    ) -> RepositoryPage:
+        if context is None and not preview:
+            raise ValueError("CHUNK_READ_CONTEXT_REQUIRED")
         if version_id not in self._read()["versions"]:
             raise ResourceNotFoundError(version_id)
         connection = self.control.connect()
@@ -388,12 +461,40 @@ class MySQLUploadRepository:
                        lifecycle_projection, current_version
                 FROM retrieval_chunk_projections
                 WHERE document_version_id=%s AND tenant_id=%s AND index_generation_id=%s
-                ORDER BY CAST(JSON_EXTRACT(locator_json, '$.ordinal') AS UNSIGNED), chunk_id
+                  AND (COALESCE(CAST(JSON_EXTRACT(locator_json, '$.ordinal') AS UNSIGNED), 0) > %s
+                    OR (COALESCE(CAST(JSON_EXTRACT(locator_json, '$.ordinal') AS UNSIGNED), 0) = %s
+                      AND chunk_id > %s))
+                ORDER BY COALESCE(CAST(JSON_EXTRACT(locator_json, '$.ordinal') AS UNSIGNED), 0),
+                         chunk_id
                 LIMIT %s OFFSET %s
                 """,
-                (version_id, self.tenant_id, self.generation_id, limit, offset),
+                (
+                    version_id,
+                    self.tenant_id,
+                    self.generation_id,
+                    after[0] if after else -1,
+                    after[0] if after else -1,
+                    after[1] if after else "",
+                    limit + 1,
+                    offset,
+                ),
             )
-            rows = cursor.fetchall()
+            rows = [self._entities._mapping(cursor, row) for row in cursor.fetchall()]
+            next_key = None
+            if len(rows) > limit:
+                last = rows[limit - 1]
+                last_locator = last["locator_json"]
+                if isinstance(last_locator, str):
+                    last_locator = json.loads(last_locator)
+                next_key = (int(last_locator.get("ordinal", 0)), str(last["chunk_id"]))
+            rows = rows[:limit]
+            allowed = None
+            if not preview:
+                assert context is not None
+                ids = [str(row["chunk_id"] if isinstance(row, dict) else row[0]) for row in rows]
+                allowed = MySQLRetrievalControlPlane(
+                    self.control, self.generation_id
+                ).authorize_chunks(ids, context)
             results: list[dict[str, Any]] = []
             for ordinal, raw in enumerate(rows):
                 row = (
@@ -401,6 +502,11 @@ class MySQLUploadRepository:
                     if isinstance(raw, dict)
                     else dict(zip((item[0] for item in cursor.description), raw, strict=True))
                 )
+                if allowed is not None and (
+                    (chunk := allowed.get(str(row["chunk_id"]))) is None
+                    or chunk.document_version_id != version_id
+                ):
+                    continue
                 locator = row["locator_json"]
                 if isinstance(locator, str):
                     locator = json.loads(locator)
@@ -422,11 +528,19 @@ class MySQLUploadRepository:
                             and not row["current_version"]
                             else str(row["lifecycle_projection"])
                         ),
-                        "text": str(row["display_text"]),
-                        "locator": dict(locator),
+                        "text": (
+                            allowed[str(row["chunk_id"])].display_text
+                            if allowed is not None
+                            else str(row["display_text"])
+                        ),
+                        "locator": (
+                            allowed[str(row["chunk_id"])].locator
+                            if allowed is not None
+                            else dict(locator)
+                        ),
                     }
                 )
-            return results
+            return RepositoryPage(results, next_key)
         finally:
             connection.close()
 
@@ -504,9 +618,8 @@ class MySQLUploadRepository:
                 if not original_space:
                     original_spaces = {
                         item["space_id"]
-                        for item in state["sessions"].values()
-                        if item.get("document_id") == target_document_id
-                        and not item.get("target_document_id")
+                        for item in state["sessions"].by_parent(target_document_id)
+                        if not item.get("target_document_id")
                     }
                     original_space = (
                         next(iter(original_spaces)) if len(original_spaces) == 1 else None
@@ -623,15 +736,13 @@ class MySQLUploadRepository:
                 state["documents"][document_id] = document
             elif int(document["row_version"]) != session.target_document_row_version:
                 raise OptimisticConcurrencyError(document_id)
-            versions = [
-                item for item in state["versions"].values() if item["document_id"] == document_id
-            ]
+            versions = state["versions"].by_parent(document_id, limit=1, descending=True)
             version_id = new_uuid7()
             state["versions"][version_id] = {
                 "id": version_id,
                 "tenant_id": self.tenant_id,
                 "document_id": document_id,
-                "version_no": len(versions) + 1,
+                "version_no": int(versions[0]["version_no"]) + 1 if versions else 1,
                 "content_sha256": session.expected_sha256,
                 "original_key": session.original_key,
                 "mime_type": session.detected_mime,
@@ -656,8 +767,8 @@ class MySQLUploadRepository:
             return str(document["space_id"])
         spaces = {
             str(item["space_id"])
-            for item in state["sessions"].values()
-            if item.get("document_id") == document_id and not item.get("target_document_id")
+            for item in state["sessions"].by_parent(document_id)
+            if not item.get("target_document_id")
         }
         if len(spaces) != 1:
             raise ResourceNotFoundError(document_id)

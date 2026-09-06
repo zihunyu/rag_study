@@ -122,4 +122,4 @@ def test_generation_time_revoke_discards_search_backed_answer(tmp_path: Path) ->
 
     assert response.json()["status"] == AnswerStatus.SYSTEM_ERROR.value
     assert response.json()["answer"] is None
-    assert response.json()["warnings"] == ["FINAL_PERMISSION_RECHECK_FAILED"]
+    assert response.json()["warnings"] == ["PRE_VERIFIER_PERMISSION_RECHECK_FAILED"]

@@ -241,7 +241,7 @@ def test_existing_document_new_version_api_keeps_old_serving_then_publishes_and_
         f"/api/v1/document-versions/{first['document_version_id']}:publish",
         headers={"Idempotency-Key": "publish-first"},
     )
-    document = client.get(f"/api/v1/documents/{first['document_id']}")
+    document = client.get(f"/api/v1/documents/{first['document_id']}/preview")
     new_version_path = f"/api/v1/documents/{first['document_id']}/versions/upload-sessions"
     second = _create_and_complete(
         client,
@@ -299,7 +299,7 @@ def test_new_version_session_enforces_rbac_if_match_and_idempotency(tmp_path: Pa
         b"base",
         key="base",
     )
-    document = admin.get(f"/api/v1/documents/{first['document_id']}")
+    document = admin.get(f"/api/v1/documents/{first['document_id']}/preview")
     path = f"/api/v1/documents/{first['document_id']}/versions/upload-sessions"
     body = {
         "filename": "next.txt",
@@ -350,7 +350,7 @@ def test_projection_swap_failure_rolls_back_and_keeps_old_version_serving(
         f"/api/v1/document-versions/{first['document_version_id']}:publish",
         headers={"Idempotency-Key": "stable-publish-first"},
     )
-    document = client.get(f"/api/v1/documents/{first['document_id']}")
+    document = client.get(f"/api/v1/documents/{first['document_id']}/preview")
     second = _create_and_complete(
         client,
         f"/api/v1/documents/{first['document_id']}/versions/upload-sessions",

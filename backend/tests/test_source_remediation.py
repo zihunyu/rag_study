@@ -96,7 +96,7 @@ def test_new_version_keeps_custom_space_and_old_review_replay_is_inert(tmp_path)
             "SELECT visibility FROM retrieval_projections WHERE document_version_id=?", (version,)
         ).fetchall()
     assert scopes and all(row["visibility"] == "RESTRICTED" for row in scopes)
-    etag = client.get(f"/api/v1/documents/{document}").headers["etag"]
+    etag = client.get(f"/api/v1/documents/{document}/preview").headers["etag"]
     _, new_version, _ = _upload(client, space, key="new", document_id=document, document_etag=etag)
     assert runtime.repository.get_document_space(document) == space
     assert new_version != version
@@ -117,7 +117,7 @@ def test_verifier_time_revocation_cannot_emit_answer(tmp_path):
     service.verifier = RevokingVerifier()
     result = service.ask("保修期多久？", "tenant-1", "user-1")
     assert not result.verified and result.answer is None
-    assert "POST_VERIFIER_PERMISSION_RECHECK_FAILED" in result.warnings
+    assert "FINAL_PERMISSION_RECHECK_FAILED" in result.warnings
 
 
 @pytest.mark.parametrize(

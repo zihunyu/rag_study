@@ -424,6 +424,11 @@ class ZillizChunkIndexingSink:
                         "section_id": chunk.section_id,
                         "section_path": chunk.metadata.get("section_path", "root"),
                         "heading": chunk.metadata.get("heading", ""),
+                        **(
+                            {"source_spans": chunk.metadata["source_spans"]}
+                            if "source_spans" in chunk.metadata
+                            else {}
+                        ),
                         "ordinal": chunk.ordinal,
                         "kind": chunk.kind,
                         "token_count": chunk.token_count,

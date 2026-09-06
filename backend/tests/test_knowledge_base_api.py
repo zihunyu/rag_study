@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from ragkb.adapters.sqlite_retrieval import SQLiteRetrievalControlPlane
 from ragkb.api.app import create_app
 from ragkb.application.worker import LocalIngestionWorker
 from ragkb.runtime_components import build_runtime_components
@@ -65,14 +67,14 @@ def test_created_knowledge_base_owns_documents_chunks_search_and_ask(
     )
     assert worker.run_once() is True
 
-    documents = client.get(f"/api/v1/spaces/{space_id}/documents")
+    documents = client.get(f"/api/v1/spaces/{space_id}/documents/preview")
     assert documents.status_code == 200
     assert documents.json()[0]["filename"] == "service-policy.md"
     assert documents.json()[0]["processing_state"] == "VALIDATED"
     assert documents.json()[0]["chunk_count"] > 0
 
     version_id = completed["document_version_id"]
-    chunks = client.get(f"/api/v1/document-versions/{version_id}/chunks")
+    chunks = client.get(f"/api/v1/document-versions/{version_id}/chunks/preview")
     assert chunks.status_code == 200
     assert any("三年" in item["text"] for item in chunks.json())
 
@@ -119,6 +121,30 @@ def test_created_knowledge_base_owns_documents_chunks_search_and_ask(
     source = client.get(answer.json()["citations"][0]["source_url"])
     assert source.status_code == 200, source.text
     assert "三年" in source.json()["text"]
+
+    # Previously issued citations must obey the same current resource ACL as reads.
+    with components.database.connect() as connection:
+        rows = connection.execute(
+            "SELECT * FROM retrieval_projections WHERE document_version_id=?", (version_id,)
+        ).fetchall()
+    SQLiteRetrievalControlPlane(components.database).upsert_chunks(
+        [
+            replace(
+                SQLiteRetrievalControlPlane._chunk(dict(row)),
+                visibility="RESTRICTED",
+                acl_scope_tokens=("group:separate-audience",),
+            )
+            for row in rows
+        ]
+    )
+    assert client.get(answer.json()["citations"][0]["source_url"]).status_code == 404
+    assert client.get(f"/api/v1/document-versions/{version_id}/chunks").status_code == 404
+    assert (
+        client.post(
+            "/api/v1/search", json={"query": "ThinkPad 21FA 保修期", "space_id": space_id}
+        ).json()["hits"]
+        == []
+    )
 
 
 def test_unknown_knowledge_base_is_not_searchable(tmp_path: Path, monkeypatch) -> None:

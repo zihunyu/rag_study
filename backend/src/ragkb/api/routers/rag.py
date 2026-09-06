@@ -19,6 +19,7 @@ from ragkb.api.models import (
     SearchHitResponse,
     SearchRequest,
     SearchResponse,
+    SearchSourceResponse,
 )
 from ragkb.api.support import (
     ask_response as _ask_response,
@@ -50,10 +51,7 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
 
     def selected_space(tenant_id: str, requested_space_id: str | None) -> str:
         space_id = requested_space_id or runtime.space_id
-        if not any(
-            str(item["id"]) == space_id and str(item["tenant_id"]) == tenant_id
-            for item in runtime.repository.list_spaces()
-        ):
+        if runtime.repository.get_space(space_id)["tenant_id"] != tenant_id:
             raise ResourceNotFoundError(space_id)
         return space_id
 
@@ -100,12 +98,25 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
                     channels=list(hit.channels),
                     parent_chunk_id=hit.parent_chunk_id,
                     parent_text=hit.parent_text,
+                    parent_source=(
+                        SearchSourceResponse(
+                            chunk_id=hit.parent_source.chunk_id,
+                            document_id=hit.parent_source.document_id,
+                            document_version_id=hit.parent_source.document_version_id,
+                            display_text=hit.parent_source.display_text,
+                            retrieval_text=hit.parent_source.retrieval_text,
+                            locator=hit.parent_source.locator,
+                        )
+                        if hit.parent_source is not None
+                        else None
+                    ),
                 )
                 for hit in result.hits
             ],
             real_acceptance=result.real_acceptance,
             degraded=result.degraded,
             warnings=list(result.warnings),
+            retrieval_health=result.retrieval_health,
         )
 
     @router.post(
@@ -202,7 +213,7 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
             raise ResourceNotFoundError(evidence_id)
         return EvidenceSourceResponse(
             evidence_id=evidence.evidence_id,
-            text=evidence.text,
+            text=evidence.display_text or evidence.text,
             locator=evidence.locator,
         )
 

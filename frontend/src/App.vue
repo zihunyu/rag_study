@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, ref } from "vue";
-import { apiUrl, askStream, authorizedFetch, request, sourceUrl } from "./api.js";
+import { apiUrl, askStream, authorizedFetch, request, requestPage, sourceUrl } from "./api.js";
 import { initializeAuth, oidcEnabled, signIn, signOut } from "./auth.js";
 import { sha256File } from "./fileHash.js";
 
@@ -18,6 +18,7 @@ const newSpaceName = ref("");
 const spaceBusy = ref(false);
 const spaceError = ref("");
 const documents = ref([]);
+const documentPreview = ref(false);
 const documentsBusy = ref(false);
 const documentsHasMore = ref(false);
 const selectedDocument = ref(null);
@@ -62,6 +63,9 @@ let documentListRevision = 0;
 let spaceListRevision = 0;
 let answerRevision = 0;
 let searchRevision = 0;
+let chunksRevision = 0;
+let documentsCursor = null;
+let chunksCursor = null;
 const citationSource = ref(null);
 const terminalJobStates = new Set(["SUCCEEDED", "FAILED_FINAL", "CANCELLED"]);
 const uploadPhaseText = computed(() => ({
@@ -137,6 +141,9 @@ async function createSpace() {
 
 function resetDocumentSelection() {
   selectionRevision += 1;
+  chunksRevision += 1;
+  chunksBusy.value = false;
+  chunksCursor = null;
   uploadWorkflowRevision += 1;
   versionHashRevision += 1;
   lifecycle.value = { documentId: "", versionId: "" };
@@ -156,6 +163,12 @@ async function changeSpace() {
   result.value = null;
   searchResult.value = null;
   citationSource.value = null;
+  stage.value = "等待输入";
+  error.value = "";
+  spaceError.value = "";
+  documents.value = [];
+  documentsCursor = null;
+  documentsHasMore.value = false;
   upload.value.status = null;
   upload.value.job = null;
   upload.value.busy = false;
@@ -168,20 +181,29 @@ async function loadDocuments(append = false) {
   append = append === true;
   const revision = ++documentListRevision;
   const spaceId = selectedSpaceId.value;
-  const offset = append ? documents.value.length : 0;
+  const preview = documentPreview.value;
+  const cursor = append ? documentsCursor : null;
+  if (!append) {
+    documentsCursor = null;
+    documentsHasMore.value = false;
+    documents.value = [];
+  }
   if (!selectedSpaceId.value) {
     documents.value = [];
+    documentsBusy.value = false;
     return;
   }
   documentsBusy.value = true;
   try {
-    const loaded = await request(`/spaces/${spaceId}/documents${offset ? `?limit=100&offset=${offset}` : ""}`);
-    if (revision === documentListRevision && spaceId === selectedSpaceId.value) {
-      documents.value = append ? [...documents.value, ...loaded] : loaded;
-      documentsHasMore.value = loaded.length === 100;
+    const loaded = await requestPage(`/spaces/${spaceId}/documents${preview ? "/preview" : ""}${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`);
+    if (revision === documentListRevision && spaceId === selectedSpaceId.value && preview === documentPreview.value) {
+      documents.value = append ? [...documents.value, ...loaded.items.filter((item) =>
+        !documents.value.some((existing) => existing.document_id === item.document_id))] : loaded.items;
+      documentsCursor = loaded.nextCursor;
+      documentsHasMore.value = Boolean(loaded.nextCursor);
     }
   } catch (cause) {
-    if (revision !== documentListRevision) return;
+    if (revision !== documentListRevision || spaceId !== selectedSpaceId.value || preview !== documentPreview.value) return;
     spaceError.value = cause.message;
     documents.value = [];
   } finally {
@@ -190,6 +212,7 @@ async function loadDocuments(append = false) {
 }
 
 async function openDocument(item) {
+  if (!documents.value.includes(item) || (item.space_id && item.space_id !== selectedSpaceId.value)) return;
   resetDocumentSelection();
   const revision = selectionRevision;
   selectedDocument.value = item;
@@ -200,39 +223,51 @@ async function openDocument(item) {
 }
 
 async function loadChunks(versionId, revision = selectionRevision, append = false) {
-  const offset = append ? chunks.value.length : 0;
+  const requestRevision = ++chunksRevision;
+  const spaceId = selectedSpaceId.value;
+  const preview = documentPreview.value;
+  const cursor = append ? chunksCursor : null;
+  const isCurrent = () => revision === selectionRevision && requestRevision === chunksRevision
+    && versionId === lifecycle.value.versionId && spaceId === selectedSpaceId.value
+    && preview === documentPreview.value;
   chunksBusy.value = true;
-  if (!append) chunks.value = [];
+  if (!append) {
+    chunks.value = [];
+    chunksCursor = null;
+    chunksHasMore.value = false;
+  }
   try {
-    const loaded = await request(`/document-versions/${versionId}/chunks${offset ? `?limit=100&offset=${offset}` : ""}`);
-    if (revision === selectionRevision) {
-      chunks.value = append ? [...chunks.value, ...loaded] : loaded;
-      chunksHasMore.value = loaded.length === 100;
+    const loaded = await requestPage(`/document-versions/${versionId}/chunks${preview ? "/preview" : ""}${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`);
+    if (isCurrent()) {
+      chunks.value = append ? [...chunks.value, ...loaded.items] : loaded.items;
+      chunksCursor = loaded.nextCursor;
+      chunksHasMore.value = Boolean(loaded.nextCursor);
     }
   } catch (cause) {
-    if (revision !== selectionRevision) return;
+    if (!isCurrent()) return;
     spaceError.value = cause.message;
   } finally {
-    if (revision === selectionRevision) chunksBusy.value = false;
+    if (isCurrent()) chunksBusy.value = false;
   }
 }
 
 async function ask() {
   if (!question.value.trim() || !selectedSpaceId.value) return;
   error.value = ""; stage.value = "检索、生成缓冲与验证中"; result.value = null;
+  citationSource.value = null;
   const revision = ++answerRevision;
   const spaceId = selectedSpaceId.value;
   try {
     const answer = await askStream(
       question.value,
-      (current) => { if (revision === answerRevision) stage.value = current; },
+      (current) => { if (revision === answerRevision && spaceId === selectedSpaceId.value) stage.value = current; },
       fetch,
       spaceId,
     );
-    if (revision !== answerRevision) return;
+    if (revision !== answerRevision || spaceId !== selectedSpaceId.value) return;
     result.value = answer;
-    stage.value = result.value.verified ? "已验证" : "验证失败";
-  } catch (cause) { if (revision === answerRevision) { error.value = cause.message; stage.value = "system_error"; } }
+    stage.value = result.value.retryable ? "服务暂不可用，可重试" : result.value.verified ? "已验证" : "验证失败";
+  } catch (cause) { if (revision === answerRevision && spaceId === selectedSpaceId.value) { error.value = cause.message; stage.value = "system_error"; } }
 }
 
 async function openCitation(citation) {
@@ -259,11 +294,18 @@ async function submitFeedback() {
 
 async function search() {
   const revision = ++searchRevision;
-  const found = await request("/search", {
-    method: "POST",
-    body: JSON.stringify({ query: searchQuery.value, space_id: selectedSpaceId.value }),
-  });
-  if (revision === searchRevision) searchResult.value = found;
+  const spaceId = selectedSpaceId.value;
+  searchResult.value = null;
+  error.value = "";
+  try {
+    const found = await request("/search", {
+      method: "POST",
+      body: JSON.stringify({ query: searchQuery.value, space_id: spaceId }),
+    });
+    if (revision === searchRevision && spaceId === selectedSpaceId.value) searchResult.value = found;
+  } catch (cause) {
+    if (revision === searchRevision && spaceId === selectedSpaceId.value) error.value = cause.message;
+  }
 }
 
 const idempotency = (action) => `${action}-${crypto.randomUUID()}`;
@@ -389,6 +431,7 @@ async function monitorIngestionJob(jobId, workflowRevision, versionId = upload.v
         if (workflowRevision !== uploadWorkflowRevision) return;
         quality.value = report;
         upload.value.phase = "READY_FOR_REVIEW";
+        documentPreview.value = true;
         await loadDocuments();
         if (workflowRevision !== uploadWorkflowRevision) return;
         const ingested = documents.value.find(
@@ -496,7 +539,7 @@ async function uploadDocument() {
 async function loadDocumentVersionEtag() {
   const revision = selectionRevision;
   const documentId = lifecycle.value.documentId;
-  const document = await request(`/documents/${documentId}`);
+  const document = await request(`/documents/${documentId}/preview`);
   if (revision !== selectionRevision) return;
   versionUpload.value.documentRowVersion = String(document.row_version);
 }
@@ -700,7 +743,7 @@ async function generateAcceptance() {
       <header><div><span>KNOWLEDGE BASE WORKSPACE</span><h2>企业知识库</h2></div><div class="session"><label>当前知识库</label><select v-model="selectedSpaceId" data-testid="global-space-select" @change="changeSpace"><option v-if="!spaces.length" value="">尚未创建</option><option v-for="item in spaces" :key="item.id" :value="item.id">{{ item.name }}</option></select><button v-if="oidcEnabled && !authenticatedUser" @click="signIn">OIDC 登录</button><button v-if="oidcEnabled && authenticatedUser" @click="signOut">退出 {{ authenticatedUser.profile?.name ?? authenticatedUser.profile?.sub }}</button></div></header>
       <section v-if="tab==='ask'">
         <article class="hero-card"><span class="eyebrow">在指定知识库中检索</span><h3>{{ selectedSpace?.name ?? '请先创建知识库' }}</h3><label>问答知识库</label><select v-model="selectedSpaceId" @change="changeSpace"><option v-for="item in spaces" :key="item.id" :value="item.id">{{ item.name }}</option></select><label>问题</label><textarea v-model="question" rows="5" placeholder="例如：这份制度的有效期是多久？"/><button class="primary" :disabled="!selectedSpaceId || !question.trim()" @click="ask">从此知识库回答</button><span class="stage">{{ stage }}</span></article>
-        <article><h3>{{ result?.status ?? '尚未运行' }}</h3><p class="answer">{{ result?.answer ?? '答案仅在引用与权限复核后显示。' }}</p><a v-for="citation in citations" :key="citation.evidence_id" :href="citation.href" @click.prevent="openCitation(citation)">{{ citation.evidence_id }} · 签名来源</a><pre v-if="citationSource" class="source-content">{{ citationSource }}</pre><form v-if="result" @submit.prevent="submitFeedback"><select v-model="feedback.rating"><option :value="5">有帮助</option><option :value="1">无帮助</option></select><input v-model="feedback.comment" placeholder="反馈说明"><button>提交反馈</button></form><p class="error">{{ error }}</p></article>
+        <article><h3>{{ result?.status ?? '尚未运行' }}</h3><p v-if="result?.retryable" data-testid="retryable-error" role="alert">服务暂不可用，未能完成本次问答。请稍后重试。</p><p v-else-if="result?.degraded" data-testid="retrieval-degraded" role="status">部分检索服务暂不可用，本次结果可能不完整。</p><p class="answer">{{ result?.answer ?? (result?.status === 'insufficient_evidence' ? '现有资料不足以回答这个问题，请补充相关资料或调整问题。' : '答案仅在引用与权限复核后显示。') }}</p><a v-for="citation in citations" :key="citation.evidence_id" :href="citation.href" @click.prevent="openCitation(citation)">{{ citation.evidence_id }} · 签名来源</a><pre v-if="citationSource" class="source-content">{{ citationSource }}</pre><form v-if="result" @submit.prevent="submitFeedback"><select v-model="feedback.rating"><option :value="5">有帮助</option><option :value="1">无帮助</option></select><input v-model="feedback.comment" placeholder="反馈说明"><button>提交反馈</button></form><p class="error">{{ error }}</p></article>
       </section>
       <section v-if="tab==='admin'">
         <p v-if="capabilities" class="muted" data-testid="parser-capabilities">
@@ -711,6 +754,7 @@ async function generateAcceptance() {
         <article><div class="section-title"><div><span class="eyebrow">KNOWLEDGE BASES</span><h3>创建和选择知识库</h3></div><span class="badge">{{ spaces.length }} 个</span></div><div class="inline-form"><input v-model="newSpaceName" data-testid="new-space-name" placeholder="知识库名称，例如：产品手册" @keyup.enter="createSpace"><button class="primary" data-testid="create-space-submit" :disabled="spaceBusy || !newSpaceName.trim()" @click="createSpace">{{ spaceBusy ? '创建中…' : '创建知识库' }}</button></div><div class="space-grid" data-testid="space-list"><button v-for="item in spaces" :key="item.id" class="space-card" :class="{selected:selectedSpaceId===item.id}" @click="selectedSpaceId=item.id;changeSpace()"><b>{{ item.name }}</b><small>{{ item.status }} · {{ item.id }}</small></button></div><p class="error">{{ spaceError }}</p></article>
         <article class="workflow"><h3>文档解析入库流程</h3><ol><li :class="{done: upload.status}">上传文件并创建任务</li><li :class="{done: upload.job?.state==='SUCCEEDED'}">Worker 解析、切块、Embedding、写入 Zilliz</li><li :class="{done: documentReview.result?.decision==='APPROVED'}">检查质量并提交安全复核</li><li :class="{done: upload.phase==='PUBLISHED'}">发布到检索空间</li><li :class="{done: upload.phase==='PUBLISHED'}">进入可信问答</li></ol><p class="workflow-status" :data-phase="upload.phase">{{ uploadPhaseText }}</p></article>
         <article><h3>1. 上传到“{{ selectedSpace?.name ?? '-' }}”并解析入库</h3><input data-testid="initial-upload-file" type="file" @change="selectUploadFile"><button class="primary" data-testid="initial-upload-submit" :disabled="spaceBusy || !selectedSpaceId || !upload.sha256 || upload.busy" @click="uploadDocument">{{ upload.busy ? '处理中…' : '上传并开始解析入库' }}</button><button v-if="upload.status?.job_id && !upload.busy && upload.job?.state!=='SUCCEEDED'" @click="refreshIngestionJob">刷新解析状态</button><progress :value="upload.hashProgress" max="1"/><code data-testid="initial-upload-hash">{{ upload.sha256 || '等待选择文件' }}</code><p class="error" data-testid="initial-upload-error">{{ upload.error }}</p><dl v-if="upload.status" class="result-grid" data-testid="initial-upload-result"><dt>当前阶段</dt><dd>{{ upload.status.stage ?? 'INGESTION_JOB' }}</dd><dt>Document ID</dt><dd>{{ upload.status.document_id ?? '-' }}</dd><dt>Version ID</dt><dd>{{ upload.status.document_version_id ?? '-' }}</dd><dt>Job ID</dt><dd>{{ upload.status.job_id ?? '-' }}</dd><dt>任务状态</dt><dd>{{ upload.job?.state ?? upload.status.status ?? '-' }}</dd><dt>尝试次数</dt><dd>{{ upload.job?.attempt ?? 0 }}</dd></dl><p v-else data-testid="initial-upload-result" class="empty-result">选择文件并点击“上传并开始解析入库”后，这里会显示任务进度。</p></article>
+        <label><input v-model="documentPreview" data-testid="document-preview" type="checkbox" @change="resetDocumentSelection(); loadDocuments()" /> 管理预览（含草稿和历史版本，需要管理权限）</label>
         <article><div class="section-title"><div><span class="eyebrow">DOCUMENTS</span><h3>2. 已入库文件</h3></div><button :disabled="documentsBusy || !selectedSpaceId" @click="loadDocuments">{{ documentsBusy ? '刷新中…' : '刷新列表' }}</button></div><div v-if="documents.length" class="table-wrap"><table data-testid="document-list"><thead><tr><th>文件</th><th>解析状态</th><th>发布状态</th><th>分块</th><th>版本</th><th></th></tr></thead><tbody><tr v-for="item in documents" :key="item.document_id"><td><b>{{ item.filename }}</b><small>{{ item.document_id }}</small></td><td><span class="badge" :class="item.processing_state==='VALIDATED'?'success':'warning'">{{ item.processing_state }}</span></td><td><span class="badge">{{ item.publication_state }}</span></td><td>{{ item.chunk_count }}</td><td>v{{ item.version_no }}</td><td><button data-testid="view-chunks" @click="openDocument(item)">查看分块</button></td></tr></tbody></table></div><p v-else class="empty-result">该知识库还没有文档。</p><button v-if="documentsHasMore" :disabled="documentsBusy" @click="loadDocuments(true)">加载更多文件</button></article>
         <article v-if="selectedDocument" data-testid="chunk-panel"><div class="section-title"><div><span class="eyebrow">CHUNKS</span><h3>{{ selectedDocument.filename }} · 分块状态</h3></div><span class="badge">已加载 {{ chunks.length }} 个分块</span></div><p v-if="chunksBusy">正在读取分块…</p><div v-else-if="chunks.length" class="chunk-list"><details v-for="chunk in chunks" :key="chunk.chunk_id" class="chunk-card"><summary><span>#{{ chunk.ordinal+1 }} · {{ chunk.kind }}</span><span><b>{{ chunk.status }}</b> · {{ chunk.token_count ?? '-' }} tokens</span></summary><p>{{ chunk.text }}</p><code>{{ JSON.stringify(chunk.locator) }}</code></details></div><p v-else class="empty-result">解析任务尚未生成分块。</p><button v-if="chunksHasMore" :disabled="chunksBusy" @click="loadChunks(lifecycle.versionId, selectionRevision, true)">加载更多分块</button></article>
         <article><h3>2. 检查质量并提交复核</h3><button :disabled="!lifecycle.versionId" @click="loadQuality">读取质量报告</button><select v-model="documentReview.decision"><option>APPROVED</option><option>NEEDS_REWORK</option><option>REJECTED</option></select><select v-model="documentReview.visibility"><option>TENANT</option><option>RESTRICTED</option></select><input v-model.number="documentReview.classificationLevel" type="number" min="0" max="3" placeholder="密级 0-3"><input v-model="documentReview.aclScopeTokens" placeholder="ACL scopes，普通本机文档可留空"><input v-model="documentReview.comment" placeholder="复核说明"><button class="primary" :disabled="!canReview" @click="submitDocumentReview">提交复核</button><p v-if="!quality" class="hint">解析成功后会自动加载质量报告；也可以点击上方按钮手动读取。</p><pre v-else>{{ JSON.stringify({quality,review:documentReview.result},null,2) }}</pre></article>

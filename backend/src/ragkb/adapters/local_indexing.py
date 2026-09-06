@@ -396,6 +396,11 @@ class SQLiteLocalIndexingSink:
                         "section_id": chunk.section_id,
                         "section_path": chunk.metadata.get("section_path", "root"),
                         "heading": chunk.metadata.get("heading", ""),
+                        **(
+                            {"source_spans": chunk.metadata["source_spans"]}
+                            if "source_spans" in chunk.metadata
+                            else {}
+                        ),
                     },
                     content_checksum=chunk.content_sha256,
                     visibility=security.visibility,

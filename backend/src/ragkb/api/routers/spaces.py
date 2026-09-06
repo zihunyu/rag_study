@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Query, Request, status
+from fastapi import APIRouter, Query, Request, Response, status
 
+from ragkb.adapters.auth import AuthorizationError
 from ragkb.api.models import (
     CreateSpaceRequest,
     KnowledgeDocumentResponse,
     SpaceResponse,
 )
-from ragkb.api.support import document_manager, ensure_document_readable
+from ragkb.api.pagination import read_cursor, write_cursor
+from ragkb.api.support import (
+    document_manager,
+    ensure_document_previewable,
+    ensure_document_readable,
+)
 from ragkb.api.support import (
     principal as _principal,
 )
@@ -31,10 +37,7 @@ def build_spaces_router(runtime: RuntimeComponents) -> APIRouter:
     router = APIRouter()
 
     def require_space(tenant_id: str, space_id: str) -> None:
-        if not any(
-            str(item["id"]) == space_id and str(item["tenant_id"]) == tenant_id
-            for item in runtime.repository.list_spaces()
-        ):
+        if runtime.repository.get_space(space_id)["tenant_id"] != tenant_id:
             raise ResourceNotFoundError(space_id)
 
     @router.get("/api/v1/spaces", response_model=list[SpaceResponse], tags=["spaces"])
@@ -91,24 +94,62 @@ def build_spaces_router(runtime: RuntimeComponents) -> APIRouter:
     def documents(
         space_id: str,
         request: Request,
+        response: Response,
         limit: int = Query(default=100, ge=1, le=100),
         offset: int = Query(default=0, ge=0),
+        cursor: str | None = Query(default=None, max_length=2048),
+    ) -> list[KnowledgeDocumentResponse]:
+        return list_documents(space_id, request, response, limit, offset, cursor, preview=False)
+
+    @router.get(
+        "/api/v1/spaces/{space_id}/documents/preview",
+        response_model=list[KnowledgeDocumentResponse],
+        tags=["spaces", "management-preview"],
+    )
+    def preview_documents(
+        space_id: str,
+        request: Request,
+        response: Response,
+        limit: int = Query(default=100, ge=1, le=100),
+        offset: int = Query(default=0, ge=0),
+        cursor: str | None = Query(default=None, max_length=2048),
+    ) -> list[KnowledgeDocumentResponse]:
+        return list_documents(space_id, request, response, limit, offset, cursor, preview=True)
+
+    def list_documents(
+        space_id: str,
+        request: Request,
+        response: Response,
+        limit: int,
+        offset: int,
+        cursor: str | None,
+        *,
+        preview: bool,
     ) -> list[KnowledgeDocumentResponse]:
         principal = _principal(request)
         _require_role(principal, "reader", "knowledge_maintainer", "admin")
         _require_local_tenant(runtime, principal)
         require_space(principal.tenant_id, space_id)
+        if preview and not document_manager(principal, space_id):
+            raise AuthorizationError("DOCUMENT_MANAGE_SCOPE_REQUIRED")
         result = []
-        for item in runtime.repository.list_documents(
+        scope = f"documents:{principal.tenant_id}:{space_id}:{preview}"
+        page = runtime.repository.list_documents_page(
             space_id,
             limit=limit,
             offset=offset,
-            current_only=not document_manager(principal, space_id),
-        ):
+            current_only=not preview,
+            after=read_cursor(cursor, scope, offset),
+        )
+        write_cursor(response, scope, page.next_key)
+        for item in page.items:
             try:
-                ensure_document_readable(
-                    runtime, str(item["document_id"]), principal, str(item["version_id"])
-                )
+                if preview:
+                    ensure_document_previewable(runtime, str(item["document_id"]), principal)
+                else:
+                    ensure_document_readable(
+                        runtime, str(item["document_id"]), principal, str(item["version_id"])
+                    )
             except ResourceNotFoundError:
                 continue
             result.append(KnowledgeDocumentResponse.model_validate(item))

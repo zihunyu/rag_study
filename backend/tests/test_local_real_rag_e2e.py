@@ -82,5 +82,11 @@ def test_upload_parse_chunk_embed_index_search_and_ask(tmp_path: Path) -> None:
     assert search.status_code == 200
     assert search.json()["hits"]
     assert "三年" in search.json()["hits"][0]["text"]
+    parent = search.json()["hits"][0]["parent_source"]
+    assert parent is not None
+    assert parent["locator"]["source_spans"]
+    assert search.json()["hits"][0]["chunk_id"] in {
+        span["chunk_id"] for span in parent["locator"]["source_spans"]
+    }
     assert answer.json()["status"] == "answered"
     assert answer.json()["verified"] is True

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -59,6 +60,31 @@ def test_chunk_ids_are_stable_for_reindexing() -> None:
     assert [item.id for item in first.chunks] == [item.id for item in second.chunks]
 
 
+def test_parent_source_spans_cover_all_child_pages() -> None:
+    document = _document("保修期为三年。")
+    document = replace(
+        document,
+        nodes=(
+            *document.nodes,
+            CanonicalNode(
+                "refund",
+                None,
+                NodeType.PARAGRAPH,
+                "退款期限为三十天。",
+                "退款期限为三十天。",
+                SourceLocator(page=2),
+            ),
+        ),
+    )
+
+    result = TokenAwareChunker().chunk(document, tenant_id="tenant-1")
+
+    assert len(result.parent_chunks) == 1
+    spans = result.parent_chunks[0].metadata["source_spans"]
+    assert [span["locator"]["page"] for span in spans] == [1, 2]
+    assert [span["chunk_id"] for span in spans] == [chunk.id for chunk in result.chunks]
+
+
 def test_semantic_chunker_merges_related_nodes_and_splits_on_low_similarity() -> None:
     document = _document("policy alpha")
     extra = (
@@ -96,6 +122,13 @@ def test_semantic_chunker_merges_related_nodes_and_splits_on_low_similarity() ->
 
     assert any("policy alpha\npolicy beta" in item.display_text for item in result.chunks)
     assert any(item.display_text == "unrelated recipe" for item in result.chunks)
+    merged = next(
+        item for item in result.chunks if "policy alpha\npolicy beta" in item.display_text
+    )
+    parent = next(item for item in result.parent_chunks if item.id == merged.parent_chunk_id)
+    span = next(item for item in parent.metadata["source_spans"] if item["chunk_id"] == merged.id)
+    assert len(span["locator"]["source_spans"]) == 2
+    assert span["locator"]["source_spans"] == merged.metadata["source_spans"]
 
 
 def test_pinned_tokenizer_artifact_rejects_hash_drift_and_drives_counts() -> None:

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from ragkb.domain.pagination import PageKey, RepositoryPage
+from ragkb.domain.retrieval import SearchContext
 from ragkb.domain.state_machines import UploadSessionState
 from ragkb.domain.uploads import UploadSession
 from ragkb.domain.validation import DocumentQualityReport
@@ -16,9 +18,44 @@ class UploadRepositoryPort(Protocol):
 
     def list_spaces(self) -> list[dict[str, str]]: ...
 
+    def get_space(self, space_id: str) -> dict[str, str]: ...
+
     def list_documents(self, space_id: str) -> list[dict[str, Any]]: ...
 
-    def list_chunks(self, version_id: str) -> list[dict[str, Any]]: ...
+    def list_documents_page(
+        self,
+        space_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        current_only: bool = False,
+        after: PageKey | None = None,
+    ) -> RepositoryPage: ...
+
+    def list_chunks_page(
+        self,
+        version_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        context: SearchContext | None = None,
+        preview: bool = False,
+        after: PageKey | None = None,
+    ) -> RepositoryPage: ...
+
+    def list_chunk_ids(
+        self, version_id: str, *, limit: int = 100, offset: int = 0
+    ) -> list[str]: ...
+
+    def list_chunks(
+        self,
+        version_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        context: SearchContext | None = None,
+        preview: bool = False,
+    ) -> list[dict[str, Any]]: ...
 
     def create_upload_session(
         self,

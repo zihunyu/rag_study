@@ -16,7 +16,7 @@ from ragkb.api.models import (
 )
 from ragkb.api.support import document_manager, require_document_manager
 from ragkb.api.support import (
-    ensure_document_readable as _ensure_document_readable,
+    ensure_document_previewable as _ensure_document_previewable,
 )
 from ragkb.api.support import (
     etag as _etag,
@@ -120,7 +120,7 @@ def build_uploads_router(runtime: RuntimeComponents) -> APIRouter:
         principal = _principal(request)
         _require_role(principal, "knowledge_maintainer", "admin")
         _require_local_tenant(runtime, principal)
-        _ensure_document_readable(runtime, document_id, principal)
+        _ensure_document_previewable(runtime, document_id, principal)
         require_document_manager(runtime, principal, document_id)
         session = runtime.uploads.create_version_session(
             document_id=document_id,

@@ -115,6 +115,12 @@ def test_rrf_dedup_acl_parent_recheck_and_rerank() -> None:
             acl=("group:reader",),
         ),
     }
+    chunks["parent-1"] = replace(
+        chunks["parent-1"],
+        document_id=chunks["chunk-1"].document_id,
+        document_version_id=chunks["chunk-1"].document_version_id,
+        locator={"page": 2, "source_spans": [{"chunk_id": "source", "locator": {"page": 2}}]},
+    )
     service = HybridSearchService(
         DeterministicEmbedding(),
         InMemoryHybridIndex(bm25=bm25, dense=dense, security_watermark=10),
@@ -132,6 +138,9 @@ def test_rrf_dedup_acl_parent_recheck_and_rerank() -> None:
     assert [hit.chunk_id for hit in result.hits] == ["chunk-1", "chunk-2"]
     assert result.hits[0].channels == ("bm25", "dense")
     assert result.hits[0].parent_text == "authorized parent context"
+    assert result.hits[0].parent_source is not None
+    assert result.hits[0].parent_source.locator["page"] == 2
+    assert "authorized parent context" not in result.hits[0].text
     assert "unauthorized" not in {hit.chunk_id for hit in result.hits}
     assert "duplicate" not in {hit.chunk_id for hit in result.hits}
     assert result.real_acceptance is False
@@ -176,6 +185,122 @@ def test_generation_context_keeps_table_header_for_llm_evidence() -> None:
     assert hit.display_text == "北京 | 600 元"
     assert "TABLE_HEADER: 地区 | 住宿上限" in hit.generation_context
     assert hit.text == hit.generation_context
+
+
+@pytest.mark.parametrize(
+    ("groups", "max_per_document", "expected_ids"),
+    [
+        (
+            (("doc-a", "v1", "root"), ("doc-b", "v1", "root"), ("doc-c", "v1", "root")),
+            3,
+            ("0-0", "0-1", "1-0", "1-1", "2-0", "2-1"),
+        ),
+        (
+            (("doc-a", "v1", "概述"), ("doc-b", "v1", "概述")),
+            3,
+            ("0-0", "0-1", "1-0", "1-1"),
+        ),
+        (
+            (("doc-a", "v1", "常见问题"), ("doc-b", "v1", "常见问题")),
+            3,
+            ("0-0", "0-1", "1-0", "1-1"),
+        ),
+        (
+            (("doc-a", "v1", "root"), ("doc-a", "v2", "root")),
+            6,
+            ("0-0", "0-1", "1-0", "1-1"),
+        ),
+        (
+            (("doc-a", "v1", "概述"), ("doc-a", "v1", "常见问题")),
+            6,
+            ("0-0", "0-1", "1-0", "1-1"),
+        ),
+        (
+            (("doc-a", "v1", "概述"), ("doc-a", "v1", "常见问题")),
+            3,
+            ("0-0", "0-1", "1-0"),
+        ),
+        (
+            (("doc-a", "v1", " 概述 "), ("doc-a", "v1", "概述")),
+            6,
+            ("0-0", "0-1"),
+        ),
+        (
+            (("doc-a", "v1", "root"), ("doc-a", "v1", None), ("doc-a", "v1", "  ")),
+            9,
+            ("0-0", "0-1"),
+        ),
+        (
+            (("doc-a", "v1", None), ("doc-b", "v1", None)),
+            3,
+            ("0-0", "0-1", "1-0", "1-1"),
+        ),
+    ],
+    ids=[
+        "root-across-documents",
+        "overview-across-documents",
+        "faq-across-documents",
+        "section-across-versions",
+        "distinct-sections",
+        "document-limit-still-applies",
+        "trim-section-path",
+        "missing-and-blank-use-root",
+        "missing-section-across-documents",
+    ],
+)
+def test_section_quota_is_scoped_to_document_version(
+    groups: tuple[tuple[str, str, str | None], ...],
+    max_per_document: int,
+    expected_ids: tuple[str, ...],
+) -> None:
+    # Distinct content keeps checksum and near-duplicate filtering out of this test.
+    texts = iter(
+        (
+            "apples",
+            "bicycles",
+            "clouds",
+            "diamonds",
+            "elephants",
+            "forests",
+            "guitars",
+            "harbors",
+            "islands",
+        )
+    )
+    chunks = {}
+    candidates = []
+    for group_index, (document_id, version_id, section_path) in enumerate(groups):
+        for ordinal in range(3):
+            chunk_id = f"{group_index}-{ordinal}"
+            chunks[chunk_id] = replace(
+                _chunk(chunk_id, next(texts), f"checksum-{chunk_id}"),
+                document_id=document_id,
+                document_version_id=version_id,
+                locator={} if section_path is None else {"section_path": section_path},
+            )
+            candidates.append(
+                replace(
+                    _candidate(chunk_id, "bm25", len(candidates) + 1),
+                    document_version_id=version_id,
+                )
+            )
+    service = HybridSearchService(
+        DeterministicEmbedding(),
+        InMemoryHybridIndex(bm25=tuple(candidates), security_watermark=10),
+        InMemoryRetrievalControlPlane(chunks),
+        DeterministicReranker(),
+        bm25_top_k=10,
+        dense_top_k=10,
+        rrf_k=60,
+        rerank_top_k=10,
+        final_evidence_count=10,
+        max_chunks_per_document=max_per_document,
+        max_chunks_per_section=2,
+    )
+
+    result = service.search("quota", _context())
+
+    assert tuple(hit.chunk_id for hit in result.hits) == expected_ids
 
 
 def test_security_watermark_fails_closed() -> None:

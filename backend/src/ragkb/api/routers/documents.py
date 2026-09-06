@@ -15,7 +15,12 @@ from ragkb.api.models import (
     DocumentVersionResponse,
     JobResponse,
 )
-from ragkb.api.support import document_manager, document_search_context, require_document_manager
+from ragkb.api.pagination import read_cursor, write_cursor
+from ragkb.api.support import (
+    document_search_context,
+    ensure_document_previewable,
+    require_document_manager,
+)
 from ragkb.api.support import (
     ensure_document_readable as _ensure_document_readable,
 )
@@ -68,10 +73,28 @@ def build_documents_router(runtime: RuntimeComponents) -> APIRouter:
         tags=["documents"],
     )
     def document(document_id: str, response: Response, request: Request) -> DocumentResponse:
+        return read_document(document_id, response, request, preview=False)
+
+    @router.get(
+        "/api/v1/documents/{document_id}/preview",
+        response_model=DocumentResponse,
+        tags=["documents", "management-preview"],
+    )
+    def preview_document(
+        document_id: str, response: Response, request: Request
+    ) -> DocumentResponse:
+        return read_document(document_id, response, request, preview=True)
+
+    def read_document(
+        document_id: str, response: Response, request: Request, *, preview: bool
+    ) -> DocumentResponse:
         principal = _principal(request)
         _require_role(principal, "reader", "knowledge_maintainer", "admin")
         _require_local_tenant(runtime, principal)
-        _ensure_document_readable(runtime, document_id, principal)
+        if preview:
+            ensure_document_previewable(runtime, document_id, principal)
+        else:
+            _ensure_document_readable(runtime, document_id, principal)
         item = runtime.repository.get_document(document_id)
         response.headers["ETag"] = _etag(int(item["row_version"]))
         return DocumentResponse(
@@ -92,10 +115,26 @@ def build_documents_router(runtime: RuntimeComponents) -> APIRouter:
         tags=["documents"],
     )
     def versions(document_id: str, request: Request) -> list[DocumentVersionResponse]:
+        return read_versions(document_id, request, preview=False)
+
+    @router.get(
+        "/api/v1/documents/{document_id}/versions/preview",
+        response_model=list[DocumentVersionResponse],
+        tags=["documents", "management-preview"],
+    )
+    def preview_versions(document_id: str, request: Request) -> list[DocumentVersionResponse]:
+        return read_versions(document_id, request, preview=True)
+
+    def read_versions(
+        document_id: str, request: Request, *, preview: bool
+    ) -> list[DocumentVersionResponse]:
         principal = _principal(request)
         _require_role(principal, "reader", "knowledge_maintainer", "admin")
         _require_local_tenant(runtime, principal)
-        _ensure_document_readable(runtime, document_id, principal)
+        if preview:
+            ensure_document_previewable(runtime, document_id, principal)
+        else:
+            _ensure_document_readable(runtime, document_id, principal)
         runtime.repository.get_document(document_id)
         return [
             DocumentVersionResponse(
@@ -113,8 +152,15 @@ def build_documents_router(runtime: RuntimeComponents) -> APIRouter:
                 ),
             )
             for item in runtime.repository.get_versions(document_id)
-            if document_manager(principal, runtime.repository.get_document_space(document_id))
-            or str(item["id"]) == runtime.lifecycle_store.documents[document_id].active_version_id
+            if item["tenant_id"] == principal.tenant_id
+            and (
+                preview
+                or (
+                    str(item["id"])
+                    == runtime.lifecycle_store.documents[document_id].active_version_id
+                    and item["publication_state"] == "SERVING"
+                )
+            )
         ]
 
     @router.get(
@@ -125,20 +171,65 @@ def build_documents_router(runtime: RuntimeComponents) -> APIRouter:
     def chunks(
         version_id: str,
         request: Request,
+        response: Response,
         limit: int = Query(default=100, ge=1, le=500),
         offset: int = Query(default=0, ge=0),
+        cursor: str | None = Query(default=None, max_length=2048),
+    ) -> list[DocumentChunkResponse]:
+        return read_chunks(version_id, request, response, limit, offset, cursor, preview=False)
+
+    @router.get(
+        "/api/v1/document-versions/{version_id}/chunks/preview",
+        response_model=list[DocumentChunkResponse],
+        tags=["documents", "management-preview"],
+    )
+    def preview_chunks(
+        version_id: str,
+        request: Request,
+        response: Response,
+        limit: int = Query(default=100, ge=1, le=500),
+        offset: int = Query(default=0, ge=0),
+        cursor: str | None = Query(default=None, max_length=2048),
+    ) -> list[DocumentChunkResponse]:
+        return read_chunks(version_id, request, response, limit, offset, cursor, preview=True)
+
+    def read_chunks(
+        version_id: str,
+        request: Request,
+        response: Response,
+        limit: int,
+        offset: int,
+        cursor: str | None,
+        *,
+        preview: bool,
     ) -> list[DocumentChunkResponse]:
         principal = _principal(request)
         _require_role(principal, "reader", "knowledge_maintainer", "admin")
         _require_local_tenant(runtime, principal)
         version = runtime.repository.get_version(version_id)
         document_id = str(version["document_id"])
-        _ensure_document_readable(runtime, document_id, principal, version_id)
-        rows = runtime.repository.list_chunks(version_id, limit=limit, offset=offset)
+        if version["tenant_id"] != principal.tenant_id:
+            raise ResourceNotFoundError(version_id)
+        if preview:
+            ensure_document_previewable(runtime, document_id, principal)
+        else:
+            _ensure_document_readable(runtime, document_id, principal, version_id)
         space_id = runtime.repository.get_document_space(document_id)
+        context = None if preview else document_search_context(runtime, principal, space_id)
+        scope = f"chunks:{principal.tenant_id}:{version_id}:{preview}"
+        page = runtime.repository.list_chunks_page(
+            version_id,
+            limit=limit,
+            offset=offset,
+            context=context,
+            preview=preview,
+            after=read_cursor(cursor, scope, offset),
+        )
+        write_cursor(response, scope, page.next_key)
+        rows = page.items
         record = runtime.lifecycle_store.documents.get(document_id)
         serving_rows = [row for row in rows if row["status"] == "SERVING"]
-        if serving_rows:
+        if preview and serving_rows:
             if record is None or not runtime.lifecycle_store.is_accessible(document_id):
                 for row in serving_rows:
                     row["status"] = record.lifecycle_state.value if record else "NOT_SERVING"
@@ -150,12 +241,23 @@ def build_documents_router(runtime: RuntimeComponents) -> APIRouter:
                 if release.security_watermark < record.acl_revision:
                     for row in serving_rows:
                         row["status"] = "SECURITY_PENDING"
-        if not document_manager(principal, space_id):
-            context = document_search_context(runtime, principal, space_id)
+        if not preview:
+            assert context is not None
             allowed = runtime.search_service.control_plane.authorize_chunks(
                 tuple(str(item["chunk_id"]) for item in rows), context
             )
-            rows = [item for item in rows if str(item["chunk_id"]) in allowed]
+            rows = [
+                {
+                    **item,
+                    "text": chunk.display_text,
+                    "locator": chunk.locator,
+                    "status": chunk.lifecycle_projection,
+                }
+                for item in rows
+                if (chunk := allowed.get(str(item["chunk_id"]))) is not None
+                and chunk.document_id == document_id
+                and chunk.document_version_id == version_id
+            ]
         return [DocumentChunkResponse.model_validate(item) for item in rows]
 
     @router.get(
@@ -168,7 +270,7 @@ def build_documents_router(runtime: RuntimeComponents) -> APIRouter:
         _require_role(principal, "knowledge_maintainer", "admin")
         _require_local_tenant(runtime, principal)
         version = runtime.repository.get_version(version_id)
-        _ensure_document_readable(runtime, str(version["document_id"]), principal)
+        ensure_document_previewable(runtime, str(version["document_id"]), principal)
         report = runtime.repository.get_quality_report(version_id)
         return DocumentQualityResponse(
             document_version_id=version_id,
@@ -198,7 +300,7 @@ def build_documents_router(runtime: RuntimeComponents) -> APIRouter:
             _require_local_tenant(runtime, principal)
             version = runtime.repository.get_version(version_id)
             require_document_manager(runtime, principal, str(version["document_id"]))
-            _ensure_document_readable(runtime, str(version["document_id"]), principal)
+            ensure_document_previewable(runtime, str(version["document_id"]), principal)
             quality = runtime.repository.get_quality_report(version_id)
             now = int(time.time())
             security = None

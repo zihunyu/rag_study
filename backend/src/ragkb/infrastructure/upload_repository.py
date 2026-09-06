@@ -8,7 +8,10 @@ import sqlite3
 import time
 from typing import Any
 
+from ragkb.adapters.sqlite_retrieval import SQLiteRetrievalControlPlane
 from ragkb.domain.ids import new_uuid7
+from ragkb.domain.pagination import PageKey, RepositoryPage
+from ragkb.domain.retrieval import SearchContext
 from ragkb.domain.state_machines import (
     DocumentState,
     PublicationState,
@@ -201,9 +204,32 @@ class SQLiteUploadRepository:
             raise ResourceNotFoundError(document_id)
         return str(row["space_id"])
 
+    def get_space(self, space_id: str) -> dict[str, str]:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT id, tenant_id, name, status FROM knowledge_spaces WHERE id = ?",
+                (space_id,),
+            ).fetchone()
+        if row is None:
+            raise ResourceNotFoundError(space_id)
+        return dict(row)
+
     def list_documents(
         self, space_id: str, *, limit: int = 100, offset: int = 0, current_only: bool = False
     ) -> list[dict[str, Any]]:
+        return self.list_documents_page(
+            space_id, limit=limit, offset=offset, current_only=current_only
+        ).items
+
+    def list_documents_page(
+        self,
+        space_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        current_only: bool = False,
+        after: PageKey | None = None,
+    ) -> RepositoryPage:
         with self.database.connect() as connection:
             space = connection.execute(
                 "SELECT tenant_id FROM knowledge_spaces WHERE id = ?", (space_id,)
@@ -216,11 +242,13 @@ class SQLiteUploadRepository:
                 FROM documents d
                 JOIN sources src ON src.id = d.source_id
                 JOIN corpora c ON c.id = src.corpus_id
-                WHERE c.space_id = ? AND d.state != 'DELETED'
-                ORDER BY d.created_at DESC, d.id LIMIT ? OFFSET ?
+                WHERE c.space_id = ? AND d.state != 'DELETED' AND d.id > ?
+                ORDER BY d.id LIMIT ? OFFSET ?
                 """,
-                (space_id, limit, offset),
+                (space_id, after[1] if after else "", limit + 1, offset),
             ).fetchall()
+            next_key = (0, str(documents[limit - 1]["id"])) if len(documents) > limit else None
+            documents = documents[:limit]
             results: list[dict[str, Any]] = []
             for document in documents:
                 version = connection.execute(
@@ -264,11 +292,44 @@ class SQLiteUploadRepository:
                         "job_id": str(session["job_id"]) if session and session["job_id"] else None,
                     }
                 )
-            return results
+            return RepositoryPage(results, next_key)
+
+    def list_chunk_ids(self, version_id: str, *, limit: int = 100, offset: int = 0) -> list[str]:
+        with self.database.connect() as connection:
+            return [
+                str(row["id"])
+                for row in connection.execute(
+                    "SELECT id FROM chunks WHERE version_id = ? "
+                    "ORDER BY ordinal, id LIMIT ? OFFSET ?",
+                    (version_id, limit, offset),
+                ).fetchall()
+            ]
 
     def list_chunks(
-        self, version_id: str, *, limit: int = 100, offset: int = 0
+        self,
+        version_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        context: SearchContext | None = None,
+        preview: bool = False,
     ) -> list[dict[str, Any]]:
+        return self.list_chunks_page(
+            version_id, limit=limit, offset=offset, context=context, preview=preview
+        ).items
+
+    def list_chunks_page(
+        self,
+        version_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        context: SearchContext | None = None,
+        preview: bool = False,
+        after: PageKey | None = None,
+    ) -> RepositoryPage:
+        if context is None and not preview:
+            raise ValueError("CHUNK_READ_CONTEXT_REQUIRED")
         with self.database.connect() as connection:
             version = connection.execute(
                 "SELECT id FROM document_versions WHERE id = ?", (version_id,)
@@ -279,10 +340,30 @@ class SQLiteUploadRepository:
                 "SELECT id, parent_chunk_id, ordinal, kind, token_count, status, "
                 "display_text, locator_json, EXISTS(SELECT 1 FROM local_search_index i "
                 "WHERE i.chunk_id=chunks.id) AS vector_indexed FROM chunks WHERE version_id = ? "
+                "AND (ordinal > ? OR (ordinal = ? AND id > ?)) "
                 "ORDER BY ordinal, id LIMIT ? OFFSET ?",
-                (version_id, limit, offset),
+                (
+                    version_id,
+                    after[0] if after else -1,
+                    after[0] if after else -1,
+                    after[1] if after else "",
+                    limit + 1,
+                    offset,
+                ),
             ).fetchall()
-            return [
+            next_key = (
+                (int(rows[limit - 1]["ordinal"]), str(rows[limit - 1]["id"]))
+                if len(rows) > limit
+                else None
+            )
+            rows = rows[:limit]
+            allowed = None
+            if not preview:
+                assert context is not None
+                allowed = SQLiteRetrievalControlPlane(self.database).authorize_chunks(
+                    [str(row["id"]) for row in rows], context
+                )
+            items = [
                 {
                     "chunk_id": str(row["id"]),
                     "document_version_id": version_id,
@@ -295,11 +376,25 @@ class SQLiteUploadRepository:
                     "is_parent": str(row["kind"]) == "parent",
                     "vector_indexed": bool(row["vector_indexed"]),
                     "status": str(row["status"]),
-                    "text": str(row["display_text"]),
-                    "locator": json.loads(str(row["locator_json"])),
+                    "text": (
+                        allowed[str(row["id"])].display_text
+                        if allowed is not None
+                        else str(row["display_text"])
+                    ),
+                    "locator": (
+                        allowed[str(row["id"])].locator
+                        if allowed is not None
+                        else json.loads(str(row["locator_json"]))
+                    ),
                 }
                 for row in rows
+                if allowed is None
+                or (
+                    (chunk := allowed.get(str(row["id"]))) is not None
+                    and chunk.document_version_id == version_id
+                )
             ]
+            return RepositoryPage(items, next_key)
 
     def _idempotency_in(
         self,

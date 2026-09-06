@@ -80,6 +80,22 @@ class LazyCollection(dict[str, Any]):
     def loaded_items(self) -> ItemsView[str, Any]:
         return super().items()
 
+    def by_parent(
+        self, parent_id: str, *, limit: int | None = None, descending: bool = False
+    ) -> list[Any]:
+        if self.kind in {"reviews", "lineage"}:
+            raise ValueError("GROUPED_COLLECTION_REQUIRES_COMPLETE_AGGREGATE")
+        rows = self.loader(
+            entity_type=self.kind, parent_id=parent_id, limit=limit, descending=descending
+        )
+        values = []
+        for row in rows.values():
+            if row.logical_key not in self._loaded:
+                super().__setitem__(row.logical_key, deepcopy(row.payload))
+                self._loaded.add(row.logical_key)
+            values.append(super().__getitem__(row.logical_key))
+        return values
+
 
 def loaded_items(value: dict[str, Any]) -> ItemsView[str, Any]:
     return value.loaded_items() if isinstance(value, LazyCollection) else value.items()

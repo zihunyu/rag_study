@@ -58,6 +58,8 @@ class MySQLNormalizedEntityStore:
         parent_id: str | None = None,
         limit: int | None = None,
         offset: int = 0,
+        descending: bool = False,
+        document_version_id: str | None = None,
     ) -> EntityMap:
         conditions = ["tenant_id=%s"]
         parameters: list[object] = [self.tenant_id]
@@ -69,6 +71,12 @@ class MySQLNormalizedEntityStore:
             if value is not None:
                 conditions.append(f"{field}=%s")
                 parameters.append(value)
+        if document_version_id is not None:
+            conditions.append(
+                "JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.document_version_id'))=%s"
+            )
+            parameters.append(document_version_id)
+        direction = "DESC" if descending else "ASC"
         paging = ""
         if limit is not None:
             paging = " LIMIT %s OFFSET %s"
@@ -78,7 +86,7 @@ class MySQLNormalizedEntityStore:
             SELECT entity_type, entity_id, logical_key, parent_id, ordinal,
                    payload_json, entity_revision
             FROM {self.table} WHERE {" AND ".join(conditions)}
-            ORDER BY entity_type, parent_id, ordinal, entity_id
+            ORDER BY entity_type, parent_id, ordinal {direction}, entity_id {direction}
             {paging}
             """,  # noqa: S608 - identifiers are closed internal constants
             tuple(parameters),

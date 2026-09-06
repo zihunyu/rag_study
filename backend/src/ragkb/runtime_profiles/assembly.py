@@ -21,6 +21,7 @@ from ragkb.adapters.rag_stubs import (
 )
 from ragkb.adapters.zilliz import ZillizChunkIndexingSink
 from ragkb.application.acceptance import load_acceptance_evidence
+from ragkb.application.authorization import ResourceAuthorizationService
 from ragkb.application.evidence import SearchBackedEvidenceProvider
 from ragkb.application.governance import GovernanceService
 from ragkb.application.lifecycle import InMemoryLifecycleStore, LifecycleService
@@ -238,10 +239,11 @@ def build_runtime_components(
                 and evidence.index_generation_id == settings.retrieval_active_generation_id
                 and evidence.source_commit == settings.app_revision
             )
+    authorization = ResourceAuthorizationService(control_plane, lifecycle_store)
     search_service = HybridSearchService(
         embedding,
         index,
-        control_plane,
+        authorization,
         reranker,
         bm25_top_k=settings.retrieval_bm25_top_k,
         dense_top_k=settings.retrieval_dense_top_k,
@@ -312,7 +314,7 @@ def build_runtime_components(
         LifecycleAwareFinalPermission(
             lifecycle_store,
             tenant_id,
-            control_plane=control_plane,
+            control_plane=authorization,
             document_space=repository.get_document_space,
             release=retrieval_release,
         ),
@@ -321,6 +323,7 @@ def build_runtime_components(
         answer_cache,
         tracer,
         verifier=verifier,
+        response_release_guard=lambda: lifecycle_store.lock,
     )
     return RuntimeComponents(
         repository_root=root,

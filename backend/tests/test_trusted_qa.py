@@ -346,7 +346,7 @@ def test_unreferenced_generator_context_revoked_during_generation_discards_answe
     assert result.status is AnswerStatus.SYSTEM_ERROR
     assert result.answer is None
     assert result.citations == ()
-    assert result.warnings == ("FINAL_PERMISSION_RECHECK_FAILED",)
+    assert result.warnings == ("PRE_VERIFIER_PERMISSION_RECHECK_FAILED",)
 
 
 def test_pre_generation_permission_failure_never_calls_generator(tmp_path: Path) -> None:

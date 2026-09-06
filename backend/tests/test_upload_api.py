@@ -124,7 +124,7 @@ def test_upload_complete_document_job_and_worker_flow(tmp_path: Path) -> None:
     )
     job_after = client.get(f"/api/v1/ingestion-jobs/{result['job_id']}")
     assert job_after.json()["state"] == "SUCCEEDED"
-    versions = client.get(f"/api/v1/documents/{result['document_id']}/versions")
+    versions = client.get(f"/api/v1/documents/{result['document_id']}/versions/preview")
     assert versions.json()[0]["processing_state"] == "VALIDATED"
     with components.database.connect() as connection:
         chunk = connection.execute(

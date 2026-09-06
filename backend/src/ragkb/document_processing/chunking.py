@@ -173,7 +173,7 @@ class TokenAwareChunker:
         self.tokenizer_id = self.tokenizer.revision
         self.revision = (
             f"token-aware:{self.config.strategy}:"
-            f"{self.config.target_tokens}:{self.config.overlap_tokens}:v1"
+            f"{self.config.target_tokens}:{self.config.overlap_tokens}:v2"
         )
 
     def _section(
@@ -252,7 +252,24 @@ class TokenAwareChunker:
                 kind="parent",
                 chunking_revision=self.revision,
                 tokenizer_id=self.tokenizer_id,
-                metadata={"child_chunk_ids": [item.id for item in grouped]},
+                metadata={
+                    "child_chunk_ids": [item.id for item in grouped],
+                    "source_spans": [
+                        {
+                            "chunk_id": item.id,
+                            "locator": {
+                                **item.locator.to_dict(),
+                                **(
+                                    {"source_spans": item.metadata["source_spans"]}
+                                    if "source_spans" in item.metadata
+                                    else {}
+                                ),
+                            },
+                        }
+                        for item in grouped
+                    ],
+                    "section_path": grouped[0].metadata.get("section_path", "root"),
+                },
             )
             parents.append(parent)
             for index in range(len(children)):
@@ -395,7 +412,7 @@ class SemanticChunker(TokenAwareChunker):
         scorer_revision = str(getattr(self.boundary_score, "revision", "callable-v1"))
         revision = (
             f"semantic:{scorer_revision}:{self.tokenizer.revision}:"
-            f"{self.threshold}:{self.config.target_tokens}:{self.config.max_tokens}:v2"
+            f"{self.threshold}:{self.config.target_tokens}:{self.config.max_tokens}:v3"
         )
         enriched = tuple(
             replace(

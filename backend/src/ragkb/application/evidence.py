@@ -9,11 +9,11 @@ from ragkb.application.search import HybridSearchService
 from ragkb.contracts.ports import RetrievalReleasePort
 from ragkb.domain.ids import new_uuid7
 from ragkb.domain.rag import Evidence, EvidencePackage
-from ragkb.domain.retrieval import SearchContext
+from ragkb.domain.retrieval import SearchContext, SearchHit, SearchSource
 
 
 class SearchBackedEvidenceProvider:
-    revision = "search-backed-evidence:g3-v1"
+    revision = "search-backed-evidence:g3-v2"
 
     def __init__(
         self,
@@ -87,23 +87,61 @@ class SearchBackedEvidenceProvider:
             context,
             limit=self.final_evidence_count,
         )
-        evidence = tuple(
-            Evidence(
-                evidence_id=f"E{index}",
-                chunk_id=hit.chunk_id,
-                document_id=hit.document_id,
-                document_version_id=hit.document_version_id,
-                text=(f"{hit.parent_text}\n{hit.text}" if hit.parent_text else hit.text),
-                locator=hit.locator,
-                valid_from_epoch=hit.valid_from_epoch,
-                valid_to_epoch=hit.valid_to_epoch,
-                authority_rank=max(1, self.final_evidence_count - index + 1),
-                permission_revision=hit.permission_revision,
-                authorized=True,
-                current_version=hit.current_version,
+        evidence: list[Evidence] = []
+        seen_sources: set[tuple[str, str, str]] = set()
+
+        def append_source(source: SearchHit | SearchSource, rank: int) -> None:
+            key = (source.document_id, source.document_version_id, source.chunk_id)
+            if key in seen_sources:
+                return
+            seen_sources.add(key)
+            parts: list[str] = []
+            section_path = str(source.locator.get("section_path") or "").strip()
+            if section_path and section_path != "root":
+                parts.append(f"SECTION_PATH: {section_path}")
+            parts.append(source.retrieval_text or source.display_text)
+            evidence.append(
+                Evidence(
+                    evidence_id=f"E{len(evidence) + 1}",
+                    chunk_id=source.chunk_id,
+                    document_id=source.document_id,
+                    document_version_id=source.document_version_id,
+                    text="\n".join(parts),
+                    display_text=source.display_text,
+                    locator=source.locator,
+                    valid_from_epoch=source.valid_from_epoch,
+                    valid_to_epoch=source.valid_to_epoch,
+                    authority_rank=rank,
+                    permission_revision=source.permission_revision,
+                    authorized=True,
+                    current_version=source.current_version,
+                    source_role="hit" if isinstance(source, SearchHit) else "parent_context",
+                    parent_chunk_id=(
+                        source.parent_chunk_id if isinstance(source, SearchHit) else None
+                    ),
+                )
             )
-            for index, hit in enumerate(result.hits, start=1)
-        )
+
+        # Preserve hit ordering/IDs, then add each parent once with its own location.
+        # A parent that is also a hit already has a citable evidence ID.
+        for index, hit in enumerate(result.hits, start=1):
+            append_source(hit, max(1, self.final_evidence_count - index + 1))
+        hit_texts = {
+            (hit.document_id, hit.document_version_id, hit.retrieval_text or hit.display_text)
+            for hit in result.hits
+        }
+        for index, hit in enumerate(result.hits, start=1):
+            parent = hit.parent_source
+            if (
+                parent is not None
+                and (
+                    parent.document_id,
+                    parent.document_version_id,
+                    parent.retrieval_text or parent.display_text,
+                )
+                not in hit_texts
+            ):
+                append_source(parent, max(1, self.final_evidence_count - index + 1))
         return EvidencePackage(
             rag_run_id=new_uuid7(),
             tenant_id=tenant_id,
@@ -115,7 +153,9 @@ class SearchBackedEvidenceProvider:
             prompt_revision=self.prompt_revision,
             model_revision=self.model_revision,
             permission_revision=permission_revision,
-            evidence=evidence,
+            evidence=tuple(evidence),
             verifier_revision=self.verifier_revision,
             real_acceptance=result.real_acceptance,
+            retrieval_health=result.retrieval_health,
+            retrieval_warnings=result.warnings,
         )

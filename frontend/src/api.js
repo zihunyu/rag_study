@@ -28,6 +28,15 @@ export async function authorizedFetch(
 }
 
 export async function request(path, options = {}, fetchImpl = fetch) {
+  return (await requestResponse(path, options, fetchImpl)).body;
+}
+
+export async function requestPage(path, options = {}, fetchImpl = fetch) {
+  const { body, response } = await requestResponse(path, options, fetchImpl);
+  return { items: body, nextCursor: response.headers.get("X-Next-Cursor") || null };
+}
+
+async function requestResponse(path, options = {}, fetchImpl = fetch) {
   const { headers: optionHeaders, ...requestOptions } = options;
   const response = await authorizedFetch(apiUrl(path), {
     ...requestOptions,
@@ -47,7 +56,7 @@ export async function request(path, options = {}, fetchImpl = fetch) {
       body.code ?? validationCode ?? detailCode ?? `REQUEST_FAILED_HTTP_${response.status}`,
     );
   }
-  return body;
+  return { body, response };
 }
 
 export async function consumeSSE(response, onEvent) {

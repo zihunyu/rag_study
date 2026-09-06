@@ -17,6 +17,7 @@ from ragkb.domain.rag import (
     Feedback,
     QuestionDisposition,
 )
+from ragkb.domain.retrieval import RetrievalHealth
 from ragkb.infrastructure.sqlite import SQLiteDatabase
 
 
@@ -26,6 +27,8 @@ def _package(data: dict[str, Any]) -> EvidencePackage:
             **data,
             "evidence": tuple(Evidence(**item) for item in data["evidence"]),
             "disposition": QuestionDisposition(data["disposition"]),
+            "retrieval_health": RetrievalHealth(data.get("retrieval_health", "healthy")),
+            "retrieval_warnings": tuple(data.get("retrieval_warnings", ())),
         }
     )
 
@@ -38,6 +41,7 @@ def _result(data: dict[str, Any]) -> AskResult:
             "citations": tuple(Citation(**item) for item in data["citations"]),
             "evidence": tuple(Evidence(**item) for item in data["evidence"]),
             "warnings": tuple(data["warnings"]),
+            "retrieval_health": RetrievalHealth(data.get("retrieval_health", "healthy")),
         }
     )
 
