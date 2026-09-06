@@ -88,6 +88,42 @@ class SQLiteRetrievalControlPlane:
     ) -> AuthorizedChunk | None:
         return self.authorize_chunks((parent_chunk_id,), context).get(parent_chunk_id)
 
+    def has_readable_chunks(
+        self, document_id: str, version_id: str, context: SearchContext, *, permission_revision: int
+    ) -> bool:
+        if not context.space_ids:
+            return False
+        with self.database.connect() as connection:
+            return (
+                connection.execute(
+                    f"""
+                SELECT 1 FROM retrieval_projections
+                WHERE tenant_id=? AND space_id IN ({",".join("?" for _ in context.space_ids)})
+                  AND document_id=? AND document_version_id=?
+                  AND lifecycle_projection='SERVING' AND current_version=1
+                  AND classification_level<=? AND permission_revision=? AND permission_revision<=?
+                  AND valid_from_epoch<=? AND (valid_to_epoch=0 OR valid_to_epoch>?)
+                  AND (visibility='TENANT' OR EXISTS (
+                      SELECT 1 FROM json_each(acl_scope_tokens_json) acl
+                      JOIN json_each(?) subject ON acl.value=subject.value))
+                LIMIT 1
+                """,  # noqa: S608 - placeholder count only
+                    (
+                        context.tenant_id,
+                        *context.space_ids,
+                        document_id,
+                        version_id,
+                        context.clearance_level,
+                        permission_revision,
+                        context.active_permission_revision,
+                        context.as_of_epoch,
+                        context.as_of_epoch,
+                        json.dumps(context.subject_scope_tokens),
+                    ),
+                ).fetchone()
+                is not None
+            )
+
     def put_for_test(self, chunk: AuthorizedChunk) -> None:
         """Seed the local adapter only; production control-plane writes use MySQL migrations."""
         self.upsert_chunks((chunk,))

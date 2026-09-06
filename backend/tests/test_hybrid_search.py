@@ -99,7 +99,13 @@ def test_rrf_dedup_acl_parent_recheck_and_rerank() -> None:
             acl=("group:reader",),
         ),
         "chunk-2": _chunk("chunk-2", "unrelated noise", "checksum-2"),
-        "duplicate": _chunk("duplicate", "duplicate", "checksum-1"),
+        "duplicate": _chunk(
+            "duplicate",
+            "warranty is three years",
+            "checksum-1",
+            visibility="RESTRICTED",
+            acl=("group:reader",),
+        ),
         "unauthorized": _chunk(
             "unauthorized",
             "secret warranty",

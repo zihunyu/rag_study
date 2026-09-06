@@ -104,7 +104,7 @@ def test_mysql_document_page_loads_only_latest_version_and_matching_session(tmp_
     assert page.items[0]["version_id"] == "v-299"
     assert page.next_key is None
     assert all(count <= 1 for _, count in reads)
-    assert any(filters.get("document_version_id") == "v-299" for filters, _ in reads)
+    assert any(filters.get("document_version_ids") == ["v-299"] for filters, _ in reads)
     assert repository.get_document(document_id)["row_version"] == 1
 
     state = _empty_state()

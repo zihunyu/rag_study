@@ -36,6 +36,8 @@ class BufferedGenerationPort(Protocol):
 
 
 class ClaimVerifierPort(Protocol):
+    """Verify claims using their cited IDs, and conflicts using all supplied evidence."""
+
     revision: str
 
     def verify(

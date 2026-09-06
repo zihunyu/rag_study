@@ -34,3 +34,22 @@ class ResourceAuthorizationService:
         self, parent_chunk_id: str, context: SearchContext
     ) -> AuthorizedChunk | None:
         return self.authorize_chunks((parent_chunk_id,), context).get(parent_chunk_id)
+
+    def has_readable_chunks(
+        self, document_id: str, version_id: str, context: SearchContext, *, permission_revision: int
+    ) -> bool:
+        allowed = self.control_plane.has_readable_chunks(
+            document_id, version_id, context, permission_revision=permission_revision
+        )
+        # Refresh after the projection query, so a concurrent revoke/version/ACL
+        # switch cannot turn a retained projection into document access.
+        self.lifecycle.reload()
+        record = self.lifecycle.documents.get(document_id)
+        return bool(
+            allowed
+            and record
+            and self.lifecycle.is_accessible(document_id)
+            and not self.lifecycle.is_tombstoned(document_id)
+            and record.active_version_id == version_id
+            and record.acl_revision == permission_revision
+        )

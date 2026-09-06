@@ -8,8 +8,9 @@ rows changed by a transaction.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from ragkb.domain.uploads import OptimisticConcurrencyError
 
@@ -60,6 +61,10 @@ class MySQLNormalizedEntityStore:
         offset: int = 0,
         descending: bool = False,
         document_version_id: str | None = None,
+        entity_ids: Sequence[str] | None = None,
+        parent_ids: Sequence[str] | None = None,
+        document_version_ids: Sequence[str] | None = None,
+        latest_per: Literal["parent_id", "document_version_id"] | None = None,
     ) -> EntityMap:
         conditions = ["tenant_id=%s"]
         parameters: list[object] = [self.tenant_id]
@@ -76,16 +81,41 @@ class MySQLNormalizedEntityStore:
                 "JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.document_version_id'))=%s"
             )
             parameters.append(document_version_id)
+        version_field = "JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.document_version_id'))"
+        for field, values in (
+            ("entity_id", entity_ids),
+            ("parent_id", parent_ids),
+            (version_field, document_version_ids),
+        ):
+            if values is not None:
+                if not values:
+                    return {}
+                conditions.append(f"{field} IN ({','.join('%s' for _ in values)})")
+                parameters.extend(values)
         direction = "DESC" if descending else "ASC"
         paging = ""
         if limit is not None:
             paging = " LIMIT %s OFFSET %s"
             parameters.extend((limit, offset))
-        cursor.execute(
-            f"""
+        query = f"""
             SELECT entity_type, entity_id, logical_key, parent_id, ordinal,
                    payload_json, entity_revision
             FROM {self.table} WHERE {" AND ".join(conditions)}
+            """  # noqa: S608 - closed identifiers and bound values
+        if latest_per is not None:
+            partition = "parent_id" if latest_per == "parent_id" else version_field
+            query = f"""
+                SELECT * FROM (
+                    SELECT entity_type, entity_id, logical_key, parent_id, ordinal,
+                           payload_json, entity_revision,
+                           ROW_NUMBER() OVER (PARTITION BY {partition}
+                               ORDER BY ordinal DESC, entity_id DESC) AS entity_position
+                    FROM {self.table} WHERE {" AND ".join(conditions)}
+                ) ranked WHERE entity_position=1
+                """  # noqa: S608 - partition is a closed internal expression
+        cursor.execute(
+            query
+            + f"""
             ORDER BY entity_type, parent_id, ordinal {direction}, entity_id {direction}
             {paging}
             """,  # noqa: S608 - identifiers are closed internal constants

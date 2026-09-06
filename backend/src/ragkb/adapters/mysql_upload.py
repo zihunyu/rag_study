@@ -292,12 +292,12 @@ class MySQLUploadRepository:
         current_only: bool = False,
         after: PageKey | None = None,
     ) -> RepositoryPage:
-        state = self._read()
-        if space_id not in state["spaces"]:
-            raise ResourceNotFoundError(space_id)
+        self._ensure_legacy_migrated()
         connection = self.control.connect()
         try:
             cursor = connection.cursor()
+            if not self._entities.load(cursor, entity_type="spaces", entity_id=space_id):
+                raise ResourceNotFoundError(space_id)
             cursor.execute(
                 """
                 SELECT d.entity_id FROM upload_entities_v3 d
@@ -319,42 +319,52 @@ class MySQLUploadRepository:
             ]
             next_key = (0, document_ids[limit - 1]) if len(document_ids) > limit else None
             document_ids = document_ids[:limit]
-            latest_by_document: dict[str, dict[str, Any]] = {}
-            session_by_version: dict[str, dict[str, Any]] = {}
-            for document_id in document_ids:
-                if current_only:
-                    current = state["documents"][document_id].get("current_version_id")
-                    version = state["versions"].get(current) if current else None
-                else:
-                    rows = self._entities.load(
-                        cursor,
-                        entity_type="versions",
-                        parent_id=document_id,
-                        limit=1,
-                        descending=True,
-                    )
-                    version = next((row.payload for row in rows.values()), None)
-                if version is None or version["document_id"] != document_id:
-                    continue
-                latest_by_document[document_id] = version
-                sessions = self._entities.load(
-                    cursor,
-                    entity_type="sessions",
-                    parent_id=document_id,
-                    document_version_id=str(version["id"]),
-                    limit=1,
-                    descending=True,
+            document_rows = self._entities.load(
+                cursor, entity_type="documents", entity_ids=document_ids
+            )
+            documents = {key[1]: row.payload for key, row in document_rows.items()}
+            if current_only:
+                current_ids = [
+                    str(doc["current_version_id"])
+                    for doc in documents.values()
+                    if doc.get("current_version_id")
+                ]
+                version_rows = self._entities.load(
+                    cursor, entity_type="versions", entity_ids=current_ids
                 )
-                if sessions:
-                    session_by_version[str(version["id"])] = next(iter(sessions.values())).payload
-        finally:
-            connection.close()
-        counts: dict[str, int] = {}
-        version_ids = [str(item["id"]) for item in latest_by_document.values()]
-        if version_ids:
-            connection = self.control.connect()
-            try:
-                cursor = connection.cursor()
+            else:
+                version_rows = self._entities.load(
+                    cursor,
+                    entity_type="versions",
+                    parent_ids=document_ids,
+                    latest_per="parent_id",
+                )
+            latest_by_document: dict[str, dict[str, Any]] = {}
+            for row in version_rows.values():
+                loaded_version = row.payload
+                document_id = str(loaded_version["document_id"])
+                document = documents.get(document_id)
+                if document is None or document.get("state") == DocumentState.DELETED.value:
+                    continue
+                if current_only and document.get("current_version_id") != loaded_version["id"]:
+                    continue
+                latest_by_document[document_id] = loaded_version
+            version_ids = [str(item["id"]) for item in latest_by_document.values()]
+            sessions = self._entities.load(
+                cursor,
+                entity_type="sessions",
+                parent_ids=document_ids,
+                document_version_ids=version_ids,
+                latest_per="document_version_id",
+            )
+            session_by_version = {
+                str(row.payload["document_version_id"]): row.payload
+                for row in sessions.values()
+                if (session_version := latest_by_document.get(str(row.payload["document_id"])))
+                and session_version["id"] == row.payload["document_version_id"]
+            }
+            counts: dict[str, int] = {}
+            if version_ids:
                 placeholders = ",".join("%s" for _ in version_ids)
                 query = (
                     "SELECT document_version_id, COUNT(*) AS chunk_count "  # noqa: S608
@@ -363,10 +373,7 @@ class MySQLUploadRepository:
                     "AND COALESCE(JSON_EXTRACT(locator_json, '$.is_parent'), false)=false "
                     "GROUP BY document_version_id"
                 )
-                cursor.execute(
-                    query,
-                    (*version_ids, self.tenant_id, self.generation_id),
-                )
+                cursor.execute(query, (*version_ids, self.tenant_id, self.generation_id))
                 for row in cursor.fetchall():
                     version_id = str(
                         row["document_version_id"] if isinstance(row, dict) else row[0]
@@ -374,11 +381,14 @@ class MySQLUploadRepository:
                     counts[version_id] = int(
                         row["chunk_count"] if isinstance(row, dict) else row[1]
                     )
-            finally:
-                connection.close()
+        finally:
+            connection.close()
         results: list[dict[str, Any]] = []
-        for document_id, version in latest_by_document.items():
-            document = state["documents"].get(document_id)
+        for document_id in document_ids:
+            version = latest_by_document.get(document_id)
+            if version is None:
+                continue
+            document = documents.get(document_id)
             if document is None or document.get("state") == DocumentState.DELETED.value:
                 continue
             version_id = str(version["id"])

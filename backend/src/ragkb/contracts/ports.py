@@ -139,6 +139,10 @@ class HybridIndexPort(Protocol):
 class RetrievalControlPlanePort(Protocol):
     revision: str
 
+    def has_readable_chunks(
+        self, document_id: str, version_id: str, context: SearchContext, *, permission_revision: int
+    ) -> bool: ...
+
     def authorize_chunks(
         self, chunk_ids: Sequence[str], context: SearchContext
     ) -> Mapping[str, AuthorizedChunk]: ...

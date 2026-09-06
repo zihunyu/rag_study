@@ -123,5 +123,9 @@ class SQLCursor:
     def fetchall(self):
         return self.cursor.fetchall()
 
+    def executemany(self, sql, parameters):
+        for row in parameters:
+            self.execute(sql, row)
+
     def fetchone(self):
         return self.cursor.fetchone()

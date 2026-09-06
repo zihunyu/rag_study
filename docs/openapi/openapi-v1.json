@@ -1860,6 +1860,13 @@
             "title": "Document Version Id",
             "type": "string"
           },
+          "duplicate_sources": {
+            "items": {
+              "$ref": "#/components/schemas/SearchSourceResponse"
+            },
+            "title": "Duplicate Sources",
+            "type": "array"
+          },
           "fused_score": {
             "title": "Fused Score",
             "type": "number"

@@ -13,7 +13,7 @@ from ragkb.domain.retrieval import SearchContext, SearchHit, SearchSource
 
 
 class SearchBackedEvidenceProvider:
-    revision = "search-backed-evidence:g3-v2"
+    revision = "search-backed-evidence:conflict-pool:v3"
 
     def __init__(
         self,
@@ -90,7 +90,7 @@ class SearchBackedEvidenceProvider:
         evidence: list[Evidence] = []
         seen_sources: set[tuple[str, str, str]] = set()
 
-        def append_source(source: SearchHit | SearchSource, rank: int) -> None:
+        def append_source(source: SearchHit | SearchSource, *, review_only: bool = False) -> None:
             key = (source.document_id, source.document_version_id, source.chunk_id)
             if key in seen_sources:
                 return
@@ -111,11 +111,19 @@ class SearchBackedEvidenceProvider:
                     locator=source.locator,
                     valid_from_epoch=source.valid_from_epoch,
                     valid_to_epoch=source.valid_to_epoch,
-                    authority_rank=rank,
+                    # No governance-backed authority metadata is currently available.
+                    # Retrieval order is relevance, never institutional precedence.
+                    authority_rank=0,
                     permission_revision=source.permission_revision,
                     authorized=True,
                     current_version=source.current_version,
-                    source_role="hit" if isinstance(source, SearchHit) else "parent_context",
+                    source_role=(
+                        "conflict_context"
+                        if review_only
+                        else "hit"
+                        if isinstance(source, SearchHit)
+                        else "parent_context"
+                    ),
                     parent_chunk_id=(
                         source.parent_chunk_id if isinstance(source, SearchHit) else None
                     ),
@@ -124,13 +132,13 @@ class SearchBackedEvidenceProvider:
 
         # Preserve hit ordering/IDs, then add each parent once with its own location.
         # A parent that is also a hit already has a citable evidence ID.
-        for index, hit in enumerate(result.hits, start=1):
-            append_source(hit, max(1, self.final_evidence_count - index + 1))
+        for hit in result.hits:
+            append_source(hit)
         hit_texts = {
             (hit.document_id, hit.document_version_id, hit.retrieval_text or hit.display_text)
             for hit in result.hits
         }
-        for index, hit in enumerate(result.hits, start=1):
+        for hit in result.hits:
             parent = hit.parent_source
             if (
                 parent is not None
@@ -141,7 +149,9 @@ class SearchBackedEvidenceProvider:
                 )
                 not in hit_texts
             ):
-                append_source(parent, max(1, self.final_evidence_count - index + 1))
+                append_source(parent)
+        for source in result.review_sources:
+            append_source(source, review_only=True)
         return EvidencePackage(
             rag_run_id=new_uuid7(),
             tenant_id=tenant_id,

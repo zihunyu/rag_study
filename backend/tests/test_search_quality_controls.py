@@ -22,8 +22,16 @@ def test_identifier_queries_and_weighted_rrf_prefer_exact_channel() -> None:
     assert result[0][0].chunk_id == "exact"
 
 
-def test_near_duplicate_normalizes_unicode_spacing_and_punctuation() -> None:
-    assert near_duplicate("Employee hotel limit: 600.", "employee hotel limit 600", threshold=0.8)
+def test_near_duplicate_normalizes_safe_layout_without_erasing_semantic_text() -> None:
+    assert near_duplicate(
+        "Employee hotel limit: ６００.", "Employee  hotel limit: 600.", threshold=0.8
+    )
+    # Case and punctuation can bind entities or conditions. Conservative merging
+    # no longer assumes all such changes are cosmetic from a shingle score alone.
+    assert not near_duplicate(
+        "Employee hotel limit: 600.", "employee hotel limit 600", threshold=0.8
+    )
+    assert not near_duplicate("limit: 6.00", "limit: 600", threshold=0.8)
 
 
 def test_fake_index_is_named_as_a_fake() -> None:

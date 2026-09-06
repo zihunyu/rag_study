@@ -144,7 +144,8 @@ def ensure_document_readable(
     if record is None or runtime.lifecycle_store.is_tombstoned(document_id):
         raise ResourceNotFoundError(document_id)
     space_id = runtime.repository.get_document_space(document_id)
-    ensure_document_visible(runtime, document_id)
+    if not runtime.lifecycle_store.is_accessible(document_id):
+        raise ResourceNotFoundError(document_id)
     if version_id is not None and record.active_version_id != version_id:
         raise ResourceNotFoundError(document_id)
     active = record.active_version_id
@@ -158,15 +159,10 @@ def ensure_document_readable(
     ):
         raise ResourceNotFoundError(document_id)
     context = document_search_context(runtime, principal, space_id)
-    offset = 0
-    while chunk_ids := runtime.repository.list_chunk_ids(active, limit=100, offset=offset):
-        allowed = runtime.search_service.control_plane.authorize_chunks(chunk_ids, context)
-        if any(
-            chunk.document_id == document_id and chunk.document_version_id == active
-            for chunk in allowed.values()
-        ):
-            return
-        offset += len(chunk_ids)
+    if runtime.search_service.control_plane.has_readable_chunks(
+        document_id, active, context, permission_revision=record.acl_revision
+    ):
+        return
     raise ResourceNotFoundError(document_id)
 
 

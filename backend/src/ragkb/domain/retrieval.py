@@ -139,6 +139,7 @@ class SearchHit:
     retrieval_text: str = ""
     generation_context: str = ""
     parent_source: SearchSource | None = None
+    duplicate_sources: tuple[SearchSource, ...] = ()
 
 
 class RetrievalHealth(StrEnum):
@@ -155,6 +156,8 @@ class SearchResult:
     degraded: bool = False
     warnings: tuple[str, ...] = ()
     retrieval_health: RetrievalHealth = RetrievalHealth.HEALTHY
+    # Authorized reranking pool, retained for conflict review despite display quotas.
+    review_sources: tuple[SearchSource, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -115,6 +115,39 @@ class MySQLRetrievalControlPlane:
     ) -> AuthorizedChunk | None:
         return self.authorize_chunks((parent_chunk_id,), context).get(parent_chunk_id)
 
+    def has_readable_chunks(
+        self, document_id: str, version_id: str, context: SearchContext, *, permission_revision: int
+    ) -> bool:
+        if not context.space_ids:
+            return False
+        return bool(
+            self._fetch_all(
+                f"""
+            SELECT 1 AS readable FROM retrieval_chunk_projections
+            WHERE tenant_id=%s AND space_id IN ({",".join("%s" for _ in context.space_ids)})
+              AND document_id=%s AND document_version_id=%s AND index_generation_id=%s
+              AND lifecycle_projection='SERVING' AND current_version=true
+              AND classification_level<=%s AND permission_revision=%s AND permission_revision<=%s
+              AND valid_from_epoch<=%s AND (valid_to_epoch=0 OR valid_to_epoch>%s)
+              AND (visibility='TENANT' OR JSON_OVERLAPS(acl_scope_tokens_json, %s))
+            LIMIT 1
+            """,  # noqa: S608 - placeholder count only; all values are bound
+                (
+                    context.tenant_id,
+                    *context.space_ids,
+                    document_id,
+                    version_id,
+                    context.active_generation_id,
+                    context.clearance_level,
+                    permission_revision,
+                    context.active_permission_revision,
+                    context.as_of_epoch,
+                    context.as_of_epoch,
+                    json.dumps(context.subject_scope_tokens),
+                ),
+            )
+        )
+
     def upsert_chunks(self, chunks: Sequence[AuthorizedChunk]) -> None:
         if not chunks:
             return

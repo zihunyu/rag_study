@@ -26,6 +26,8 @@ from ragkb.contracts.rag import (
 from ragkb.domain.claim_coverage import render_verified_claims, verify_answer_claim_coverage
 from ragkb.domain.errors import InvalidProviderResponse, RetrievalFailClosed, TransientProviderError
 from ragkb.domain.ids import new_uuid7
+from ragkb.domain.numeric_facts import check_numeric_facts, normalize_numeric_text
+from ragkb.domain.policy_conflicts import conflicting_sources
 from ragkb.domain.rag import (
     AnswerStatus,
     AskResult,
@@ -41,61 +43,23 @@ from ragkb.domain.rag import (
 )
 from ragkb.domain.retrieval import RetrievalHealth, SecurityWatermarkNotReady
 
-_FACT_PATTERN = re.compile(
-    r"(?:(?:\d{1,4}(?:[-/.年]\d{1,2}){0,2}|\d+(?:\.\d+)?)|"
-    r"[零一二两三四五六七八九十百千万亿]+)\s*"
-    r"(?:%|元|年|月|日|天|小时|分钟|kg|公里|米)?",
-    re.IGNORECASE,
-)
 _URL_PATTERN = re.compile(r"https?://[^\s)\]}>]+", re.IGNORECASE)
 _CREDENTIAL_REQUEST_PATTERN = re.compile(
     r"(?:输入|提供|发送|告知|索取).{0,12}(?:密码|验证码|口令)|"
     r"(?:provide|send|enter|share|ask for).{0,20}(?:password|verification code|credential)",
     re.IGNORECASE,
 )
-_NUMBER_WORDS = {
-    "zero": "0",
-    "one": "1",
-    "two": "2",
-    "three": "3",
-    "four": "4",
-    "five": "5",
-    "six": "6",
-    "seven": "7",
-    "eight": "8",
-    "nine": "9",
-    "ten": "10",
-    "零": "0",
-    "一": "1",
-    "二": "2",
-    "两": "2",
-    "三": "3",
-    "四": "4",
-    "五": "5",
-    "六": "6",
-    "七": "7",
-    "八": "8",
-    "九": "9",
-    "十": "10",
-}
+_NUMERIC_REVIEW_REQUIRED = "NUMERIC_FACT_REQUIRES_SEMANTIC_REVIEW"
 
 
 def _normalized_fact_text(value: str) -> str:
-    normalized = value.casefold()
-    normalized = re.sub(r"\byears?\b", "年", normalized)
-    normalized = re.sub(r"\bmonths?\b", "月", normalized)
-    normalized = re.sub(r"\bdays?\b", "天", normalized)
-    for word, number in _NUMBER_WORDS.items():
-        normalized = re.sub(
-            rf"\b{word}\b" if word.isascii() else re.escape(word), number, normalized
-        )
-    return re.sub(r"\s+", "", normalized)
+    return normalize_numeric_text(value)
 
 
 class DeterministicClaimVerifier:
     """Fail-closed structural checks that run before any answer is marked verified."""
 
-    revision = "deterministic-claim-verifier:answer-coverage:v2"
+    revision = "deterministic-claim-verifier:structured-numeric-and-conflicts:v4"
 
     def __init__(self, allowed_output_domains: tuple[str, ...] = ()) -> None:
         self.allowed_output_domains = frozenset(
@@ -172,14 +136,7 @@ class DeterministicClaimVerifier:
                 continue
             cited_evidence = tuple(item for item in cited if item is not None)
             source = "\n".join(item.text for item in cited_evidence)
-            facts = tuple(
-                match.group(0).strip().casefold() for match in _FACT_PATTERN.finditer(claim.text)
-            )
-            normalized_source = _normalized_fact_text(source)
-            missing_fact = next(
-                (fact for fact in facts if _normalized_fact_text(fact) not in normalized_source),
-                None,
-            )
+            numeric_check = check_numeric_facts(claim.text, tuple(e.text for e in cited_evidence))
             unsupported_url = next(
                 (url for url in _URL_PATTERN.findall(claim.text) if url not in source), None
             )
@@ -194,14 +151,16 @@ class DeterministicClaimVerifier:
             )
             asks_for_credentials = bool(_CREDENTIAL_REQUEST_PATTERN.search(claim.text))
             verdict: Literal["SUPPORTED", "CONTRADICTED", "INSUFFICIENT"]
-            if missing_fact is not None:
-                verdict, reason = "CONTRADICTED", "EXACT_FACT_NOT_IN_EVIDENCE"
-            elif unsupported_url is not None:
+            if unsupported_url is not None:
                 verdict, reason = "INSUFFICIENT", "UNSUPPORTED_EXTERNAL_URL"
             elif disallowed_url is not None:
                 verdict, reason = "INSUFFICIENT", "OUTPUT_URL_DOMAIN_NOT_ALLOWED"
             elif asks_for_credentials:
                 verdict, reason = "INSUFFICIENT", "UNSUPPORTED_CREDENTIAL_REQUEST"
+            elif numeric_check == "mismatch":
+                verdict, reason = "CONTRADICTED", "EXACT_FACT_NOT_IN_EVIDENCE"
+            elif numeric_check == "uncertain":
+                verdict, reason = "INSUFFICIENT", _NUMERIC_REVIEW_REQUIRED
             else:
                 verdict, reason = "SUPPORTED", "STRUCTURE_AND_EXACT_FACTS_SUPPORTED"
             verdicts.append(ClaimVerdict(claim.text, claim.evidence_ids, verdict, reason))
@@ -210,6 +169,9 @@ class DeterministicClaimVerifier:
             self.revision,
             answer_claims_covered=True,
             evidence_support_verified=all(item.verdict == "SUPPORTED" for item in verdicts),
+            conflicting_evidence_ids=conflicting_sources(
+                evidence, at_epoch=int(time.time()), claims=claims
+            ),
         )
 
 
@@ -225,7 +187,21 @@ class CompositeClaimVerifier:
         self, question: str, draft: DraftAnswer, evidence: tuple[Evidence, ...]
     ) -> VerificationResult:
         structural = self.structural.verify(question, draft, evidence)
-        if not structural.supported:
+        numeric_review = (
+            bool(structural.verdicts)
+            and structural.citation_ids_valid
+            and structural.answer_claims_covered
+            and structural.conflict_checked
+            and structural.policy_checked
+            and not structural.conflicting_evidence_ids
+            and any(v.reason_code == _NUMERIC_REVIEW_REQUIRED for v in structural.verdicts)
+            and all(
+                v.verdict == "SUPPORTED"
+                or (v.verdict == "INSUFFICIENT" and v.reason_code == _NUMERIC_REVIEW_REQUIRED)
+                for v in structural.verdicts
+            )
+        )
+        if not structural.supported and not numeric_review:
             return VerificationResult(
                 structural.verdicts,
                 self.revision,
@@ -234,6 +210,7 @@ class CompositeClaimVerifier:
                 evidence_support_verified=structural.evidence_support_verified,
                 conflict_checked=structural.conflict_checked,
                 policy_checked=structural.policy_checked,
+                conflicting_evidence_ids=structural.conflicting_evidence_ids,
             )
         semantic = self.semantic.verify(question, draft, evidence)
         return VerificationResult(
@@ -244,10 +221,12 @@ class CompositeClaimVerifier:
                 structural.answer_claims_covered and semantic.answer_claims_covered
             ),
             evidence_support_verified=(
-                structural.evidence_support_verified and semantic.evidence_support_verified
+                (structural.evidence_support_verified or numeric_review)
+                and semantic.evidence_support_verified
             ),
             conflict_checked=structural.conflict_checked and semantic.conflict_checked,
             policy_checked=structural.policy_checked and semantic.policy_checked,
+            conflicting_evidence_ids=semantic.conflicting_evidence_ids,
         )
 
 
@@ -383,7 +362,7 @@ class TrustedQAService:
             return self._save(package, AnswerStatus.OUT_OF_SCOPE, verified=True)
         if package.disposition is QuestionDisposition.NEEDS_CLARIFICATION:
             return self._save(package, AnswerStatus.NEEDS_CLARIFICATION, verified=True)
-        if not package.evidence:
+        if not package.generation_evidence:
             if package.retrieval_health is RetrievalHealth.DEGRADED:
                 return self._save(
                     package,
@@ -392,8 +371,6 @@ class TrustedQAService:
                     retryable=True,
                 )
             return self._save(package, AnswerStatus.INSUFFICIENT_EVIDENCE, verified=True)
-        if package.conflict_detected:
-            return self._save(package, AnswerStatus.CONFLICTING_EVIDENCE, verified=True)
         if not all(
             evidence.authorized
             and evidence.current_version
@@ -412,11 +389,25 @@ class TrustedQAService:
                 AnswerStatus.SYSTEM_ERROR,
                 warnings=("PRE_GENERATION_PERMISSION_RECHECK_FAILED",),
             )
+        if package.conflict_detected:
+            with self.response_release_guard():
+                if not self._permission_recheck(package, subject_scope_tokens, clearance_level):
+                    return self._save(
+                        package,
+                        AnswerStatus.SYSTEM_ERROR,
+                        warnings=("FINAL_PERMISSION_RECHECK_FAILED",),
+                    )
+                return self._save(
+                    package,
+                    AnswerStatus.CONFLICTING_EVIDENCE,
+                    warnings=("UNRESOLVED_POLICY_CONFLICT",),
+                    verified=True,
+                )
         draft = self.cache.get(package) if self.cache is not None else None
         try:
             if draft is None:
                 with self.tracer.span("rag.ask.llm.generate"):
-                    draft = self.generator.generate(question, package.evidence)
+                    draft = self.generator.generate(question, package.generation_evidence)
         except InvalidProviderResponse:
             return self._save(
                 package, AnswerStatus.SYSTEM_ERROR, warnings=("GENERATION_PROTOCOL_INVALID",)
@@ -452,7 +443,7 @@ class TrustedQAService:
             return self._save(
                 package, AnswerStatus.SYSTEM_ERROR, warnings=("GENERATION_PROTOCOL_INVALID",)
             )
-        available = {item.evidence_id: item for item in package.evidence}
+        available = {item.evidence_id: item for item in package.generation_evidence}
         if (
             not draft.text.strip()
             or not draft.citation_ids
@@ -489,13 +480,34 @@ class TrustedQAService:
             )
         try:
             with self.tracer.span("rag.ask.claim.verify"):
-                verification = self.verifier.verify(question, draft, cited)
-        except (TransientProviderError, InvalidProviderResponse, ValueError):
+                verification = self.verifier.verify(question, draft, package.evidence)
+        except TransientProviderError:
             return self._save(
                 package,
                 AnswerStatus.SYSTEM_ERROR,
                 warnings=("CLAIM_VERIFIER_UNAVAILABLE",),
+                retryable=True,
             )
+        except (InvalidProviderResponse, ValueError):
+            return self._save(
+                package,
+                AnswerStatus.SYSTEM_ERROR,
+                warnings=("CLAIM_VERIFIER_PROTOCOL_INVALID",),
+            )
+        if verification.conflicting_evidence_ids:
+            with self.response_release_guard():
+                if not self._permission_recheck(package, subject_scope_tokens, clearance_level):
+                    return self._save(
+                        package,
+                        AnswerStatus.SYSTEM_ERROR,
+                        warnings=("FINAL_PERMISSION_RECHECK_FAILED",),
+                    )
+                return self._save(
+                    package,
+                    AnswerStatus.CONFLICTING_EVIDENCE,
+                    warnings=("UNRESOLVED_POLICY_CONFLICT",),
+                    verified=True,
+                )
         if not verification.supported:
             return self._save(
                 package,
@@ -632,7 +644,7 @@ class InMemoryVerifiedAnswerCache:
 def verified_answer_cache_key(package: EvidencePackage) -> str:
     payload = {
         "verifier_revision": package.verifier_revision,
-        "permission_policy_revision": "guarded-final-release:v3",
+        "permission_policy_revision": "guarded-final-release+full-pool-conflicts:v4",
         "tenant_id": package.tenant_id,
         "user_id": package.user_id,
         "permission_revision": package.permission_revision,

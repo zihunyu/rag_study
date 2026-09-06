@@ -38,7 +38,7 @@ class Evidence:
     permission_revision: int
     authorized: bool
     current_version: bool
-    source_role: Literal["hit", "parent_context"] = "hit"
+    source_role: Literal["hit", "parent_context", "conflict_context"] = "hit"
     parent_chunk_id: str | None = None
     display_text: str = ""
 
@@ -81,6 +81,10 @@ class EvidencePackage:
         if [item.evidence_id for item in self.evidence] != expected:
             raise ValueError("evidence IDs must be contiguous E1...En")
 
+    @property
+    def generation_evidence(self) -> tuple[Evidence, ...]:
+        return tuple(item for item in self.evidence if item.source_role != "conflict_context")
+
 
 @dataclass(frozen=True)
 class AtomicClaim:
@@ -122,6 +126,7 @@ class VerificationResult:
     evidence_support_verified: bool = True
     conflict_checked: bool = True
     policy_checked: bool = True
+    conflicting_evidence_ids: tuple[str, ...] = ()
 
     @property
     def supported(self) -> bool:
@@ -132,6 +137,7 @@ class VerificationResult:
             and self.evidence_support_verified
             and self.conflict_checked
             and self.policy_checked
+            and not self.conflicting_evidence_ids
             and all(item.verdict == "SUPPORTED" for item in self.verdicts)
         )
 

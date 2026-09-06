@@ -98,6 +98,17 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
                     channels=list(hit.channels),
                     parent_chunk_id=hit.parent_chunk_id,
                     parent_text=hit.parent_text,
+                    duplicate_sources=[
+                        SearchSourceResponse(
+                            chunk_id=source.chunk_id,
+                            document_id=source.document_id,
+                            document_version_id=source.document_version_id,
+                            display_text=source.display_text,
+                            retrieval_text=source.retrieval_text,
+                            locator=source.locator,
+                        )
+                        for source in hit.duplicate_sources
+                    ],
                     parent_source=(
                         SearchSourceResponse(
                             chunk_id=hit.parent_source.chunk_id,

@@ -25,6 +25,45 @@ ANSWER = {
 }
 
 
+@pytest.mark.parametrize("path", ["/api/v1/ask", "/api/v1/ask:stream"])
+@pytest.mark.parametrize(
+    "failure,warning,retryable",
+    [
+        (ProviderTimeout, "CLAIM_VERIFIER_UNAVAILABLE", True),
+        (InvalidProviderResponse, "CLAIM_VERIFIER_PROTOCOL_INVALID", False),
+        (ValueError, "CLAIM_VERIFIER_PROTOCOL_INVALID", False),
+    ],
+)
+def test_verifier_failures_preserve_retry_policy(
+    runtime, monkeypatch, path, failure, warning, retryable
+):
+    calls = []
+
+    def fail(*args):
+        calls.append(args)
+        raise failure("private-upstream-details")
+
+    monkeypatch.setattr(runtime.qa_service.verifier, "verify", fail)
+    client = TestClient(create_app(runtime))
+    for _ in range(2):
+        response = client.post(path, json={"question": "保修期多久？"})
+        assert response.status_code == 200
+        result = (
+            json.loads(response.text.split("event: result\ndata: ")[1])
+            if path.endswith(":stream")
+            else response.json()
+        )
+        assert result["status"] == "system_error"
+        assert result["warnings"] == [warning]
+        assert result["retryable"] is retryable
+        assert result["verified"] is False
+        assert result["answer"] is None and result["citations"] == []
+        saved = runtime.rag_repository.get_result(result["rag_run_id"])
+        assert saved.retryable is retryable and saved.warnings == (warning,)
+        assert "private-upstream-details" not in response.text
+    assert len(calls) == 2  # Neither failure is cached as an answer.
+
+
 def generator_for(tmp_path, output):
     settings, _ = _settings(tmp_path)
     transport = _MockTransport(

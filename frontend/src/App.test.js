@@ -34,6 +34,191 @@ function jsonResponse(payload, status = 200, headers = {}) {
   });
 }
 
+function deferred() {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+function uploadFile(name, content, read) {
+  const bytes = new TextEncoder().encode(content);
+  const file = new File([content], name, { type: "text/plain" });
+  Object.defineProperty(file, "slice", { value: (start, end) => ({
+    arrayBuffer: read ?? (async () => bytes.slice(start, end).buffer),
+  }) });
+  return file;
+}
+
+async function chooseFile(input, file) {
+  Object.defineProperty(input.element, "files", { value: file ? [file] : [], configurable: true });
+  await input.trigger("change");
+  await flushPromises();
+}
+
+describe("selection identity regressions", () => {
+  it.each([false, true])("keeps the latest citation within one answer (old failure: %s)", async (oldFails) => {
+    const old = deferred(), latest = deferred();
+    vi.stubGlobal("fetch", vi.fn(async (url) => {
+      const path = String(url);
+      if (path.endsWith("/spaces")) return jsonResponse([{ id: "a", name: "库 A" }]);
+      if (path.endsWith("/sources/E1")) return old.promise;
+      if (path.endsWith("/sources/E2")) return latest.promise;
+      if (path.includes("/ask")) return sseResponse('event: progress\ndata: {"stage":"verified"}\n\nevent: result\ndata: '+JSON.stringify({
+        rag_run_id: "same-answer", status: "answered", answer: "回答", verified: true,
+        citations: ["E1", "E2"].map((id) => ({ evidence_id: id, source_url: `/api/v1/sources/${id}`, locator: {} })),
+      })+'\n\n');
+      return jsonResponse([]);
+    }));
+    const wrapper = mount(App);
+    await flushPromises();
+    await wrapper.find("textarea").setValue("问题");
+    await button(wrapper, "从此知识库回答").trigger("click");
+    await flushPromises();
+    await wrapper.get('a[href$="/sources/E1"]').trigger("click");
+    await wrapper.get('a[href$="/sources/E2"]').trigger("click");
+    latest.resolve(jsonResponse({ text: "latest citation E2" }));
+    await flushPromises();
+    old.resolve(jsonResponse({ text: "stale citation E1" }, oldFails ? 503 : 200));
+    await flushPromises();
+    expect(wrapper.get(".source-content").text()).toContain("latest citation E2");
+    expect(wrapper.text()).not.toContain("stale citation E1");
+    expect(wrapper.text()).not.toContain("SOURCE_UNAVAILABLE");
+    wrapper.unmount();
+  });
+
+  it("accepts the same file's pending digest after switching knowledge bases", async () => {
+    const read = deferred();
+    vi.stubGlobal("fetch", vi.fn(async (url) => String(url).endsWith("/spaces")
+      ? jsonResponse([{ id: "a", name: "库 A" }, { id: "b", name: "库 B" }]) : jsonResponse([])));
+    const wrapper = mount(App);
+    await flushPromises();
+    await button(wrapper, "知识库").trigger("click");
+    await chooseFile(wrapper.get('[data-testid="initial-upload-file"]'), uploadFile("policy.txt", "policy", () => read.promise));
+    await wrapper.get('[data-testid="global-space-select"]').setValue("b");
+    await flushPromises();
+    expect(wrapper.text()).toContain("正在分块计算文件哈希");
+    expect(wrapper.text()).not.toContain("文件已就绪");
+    expect(wrapper.get('[data-testid="initial-upload-submit"]').attributes("disabled")).toBeDefined();
+    read.resolve(new TextEncoder().encode("policy").buffer);
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="initial-upload-hash"]').text()).toHaveLength(64));
+    expect(wrapper.get('[data-testid="initial-upload-submit"]').attributes("disabled")).toBeUndefined();
+    expect(wrapper.text()).toContain("文件已就绪");
+    expect(wrapper.get('[data-testid="global-space-select"]').element.value).toBe("b");
+    wrapper.unmount();
+  });
+
+  it.each(["cancel", "replace", "replace-error"])("ignores stale hashing after %s", async (action) => {
+    const read = deferred();
+    vi.stubGlobal("fetch", vi.fn(async (url) => String(url).endsWith("/spaces")
+      ? jsonResponse([{ id: "a", name: "库 A" }]) : jsonResponse([])));
+    const wrapper = mount(App);
+    await flushPromises();
+    await button(wrapper, "知识库").trigger("click");
+    const input = wrapper.get('[data-testid="initial-upload-file"]');
+    await chooseFile(input, uploadFile("old.txt", "old", () => read.promise));
+    await chooseFile(input, action === "cancel" ? null : uploadFile("new.txt", "new"));
+    if (action !== "cancel") await vi.waitFor(() => expect(wrapper.get('[data-testid="initial-upload-hash"]').text()).toHaveLength(64));
+    const digest = wrapper.get('[data-testid="initial-upload-hash"]').text();
+    if (action === "replace-error") read.reject(new Error("OLD_HASH_FAILURE"));
+    else read.resolve(new TextEncoder().encode("old").buffer);
+    await flushPromises();
+    expect(wrapper.get('[data-testid="initial-upload-hash"]').text()).toBe(digest);
+    expect(wrapper.text()).not.toContain("OLD_HASH_FAILURE");
+    expect(wrapper.get('[data-testid="initial-upload-submit"]').attributes("disabled") !== undefined).toBe(action === "cancel");
+    wrapper.unmount();
+  });
+
+  it("keeps a failed file hash failed on a space switch and recovers on a new file", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url) => String(url).endsWith("/spaces")
+      ? jsonResponse([{ id: "a", name: "库 A" }, { id: "b", name: "库 B" }]) : jsonResponse([])));
+    const wrapper = mount(App);
+    await flushPromises();
+    await button(wrapper, "知识库").trigger("click");
+    const input = wrapper.get('[data-testid="initial-upload-file"]');
+    await chooseFile(input, uploadFile("broken.txt", "broken", async () => { throw new Error("HASH_READ_FAILED"); }));
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="initial-upload-error"]').text()).toBe("HASH_READ_FAILED"));
+    await wrapper.get('[data-testid="global-space-select"]').setValue("b");
+    await flushPromises();
+    expect(wrapper.get(".workflow-status").attributes("data-phase")).toBe("FAILED");
+    expect(wrapper.get('[data-testid="initial-upload-submit"]').attributes("disabled")).toBeDefined();
+    await chooseFile(input, uploadFile("valid.txt", "valid"));
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="initial-upload-submit"]').attributes("disabled")).toBeUndefined());
+    expect(wrapper.get('[data-testid="initial-upload-error"]').text()).toBe("");
+    wrapper.unmount();
+  });
+
+  it.each(["stay", "switch-space", "switch-document", "stale-job-error"])("switches the displayed version and scopes ingestion completion: %s", async (action) => {
+    vi.stubGlobal("crypto", webcrypto);
+    const job = deferred(), oldMore = deferred();
+    let completed = false;
+    const document = (version) => ({ document_id: "doc", space_id: "a", version_id: version, filename: "policy.txt", processing_state: "VALIDATED" });
+    const otherDocument = { document_id: "other", space_id: "a", version_id: "other-v", filename: "other.txt" };
+    const chunk = (version, text) => ({ chunk_id: `${version}-chunk`, document_version_id: version, text, ordinal: 0, kind: "paragraph", locator: {} });
+    vi.stubGlobal("fetch", vi.fn(async (url) => {
+      const path = String(url);
+      if (path.endsWith("/spaces")) return jsonResponse([{ id: "a", name: "库 A" }, { id: "b", name: "库 B" }]);
+      if (path.includes("/spaces/a/documents")) return jsonResponse([document(completed ? "v2" : "v1"), otherDocument]);
+      if (path.includes("/spaces/b/documents")) return jsonResponse([]);
+      if (path.endsWith("/documents/doc/preview")) return jsonResponse({ row_version: 1 });
+      if (path.includes("/v1/chunks?cursor=")) return oldMore.promise;
+      if (path.endsWith("/v1/chunks")) return jsonResponse([chunk("v1", "version one content")], 200, { "X-Next-Cursor": "v1-cursor" });
+      if (path.endsWith("/v2/chunks/preview")) return jsonResponse([chunk("v2", "version two content")]);
+      if (path.endsWith("/other-v/chunks/preview")) return jsonResponse([chunk("other-v", "other document content")]);
+      if (path.endsWith("/quality-report")) return jsonResponse({ parser_revision: path.includes("/document-versions/v1/") ? "quality-v1" : "quality-v2" });
+      if (path.endsWith("/documents/doc/versions/upload-sessions")) return jsonResponse({ upload_session_id: "u2", upload_path: "/api/v1/upload-sessions/u2/content", row_version: 1 });
+      if (path.endsWith("/upload-sessions/u2/content")) return jsonResponse({ row_version: 2 });
+      if (path.endsWith("/upload-sessions/u2:complete")) { completed = true; return jsonResponse({ document_id: "doc", document_version_id: "v2", job_id: "job-v2" }); }
+      if (path.endsWith("/ingestion-jobs/job-v2")) return job.promise;
+      return jsonResponse([]);
+    }));
+    const wrapper = mount(App);
+    await flushPromises();
+    await button(wrapper, "知识库").trigger("click");
+    await button(wrapper, "查看分块").trigger("click");
+    await flushPromises();
+    expect(wrapper.get('[data-testid="chunk-panel"]').text()).toContain("version one content");
+    await button(wrapper, "加载更多分块").trigger("click");
+    await button(wrapper, "读取 Document row version").trigger("click");
+    await flushPromises();
+    await chooseFile(wrapper.get('[data-testid="version-upload-file"]'), uploadFile("policy-v2.txt", "new version"));
+    await vi.waitFor(() => expect(button(wrapper, "上传不可变新版本").attributes("disabled")).toBeUndefined());
+    await button(wrapper, "上传不可变新版本").trigger("click");
+    await flushPromises();
+    const panel = wrapper.get('[data-testid="chunk-panel"]');
+    expect(panel.get("h3").text()).toContain("v2");
+    expect(panel.text()).not.toContain("version one content");
+    expect(panel.text()).not.toContain("加载更多分块");
+    expect(wrapper.text()).not.toContain("quality-v1");
+    expect(wrapper.get('[data-testid="document-preview"]').element.checked).toBe(true);
+    oldMore.resolve(jsonResponse([chunk("v1", "old extra page")], 200, { "X-Next-Cursor": "old-next" }));
+    await flushPromises();
+    expect(panel.text()).not.toContain("old extra page");
+    if (action === "switch-space" || action === "stale-job-error") {
+      await wrapper.get('[data-testid="global-space-select"]').setValue("b");
+      await flushPromises();
+    } else if (action === "switch-document") {
+      await wrapper.findAll("button").filter((item) => item.text().includes("查看分块"))[1].trigger("click");
+      await flushPromises();
+    }
+    job.resolve(action === "stale-job-error" ? jsonResponse({}, 503) : jsonResponse({ state: "SUCCEEDED", attempt: 1 }));
+    await flushPromises();
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("old extra page");
+    if (action === "stay") {
+      expect(wrapper.get('[data-testid="chunk-panel"]').text()).toContain("version two content");
+      expect(wrapper.text()).toContain("quality-v2");
+      expect(fetch.mock.calls.some(([url]) => String(url).endsWith("/v2/chunks/preview"))).toBe(true);
+    } else {
+      expect(wrapper.text()).not.toContain("version two content");
+      expect(wrapper.text()).not.toContain("quality-v2");
+      expect(wrapper.get('[data-testid="initial-upload-error"]').text()).toBe("");
+      if (action === "switch-document") expect(wrapper.get('[data-testid="chunk-panel"]').text()).toContain("other document content");
+    }
+    expect(fetch.mock.calls.some(([url]) => String(url).includes("/v2/chunks") && String(url).includes("cursor="))).toBe(false);
+    wrapper.unmount();
+  });
+});
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });

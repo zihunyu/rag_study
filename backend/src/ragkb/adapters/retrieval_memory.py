@@ -246,6 +246,17 @@ class InMemoryRetrievalControlPlane:
             if (chunk := self._chunks.get(chunk_id)) is not None and self._allowed(chunk, context)
         }
 
+    def has_readable_chunks(
+        self, document_id: str, version_id: str, context: SearchContext, *, permission_revision: int
+    ) -> bool:
+        return any(
+            chunk.document_id == document_id
+            and chunk.document_version_id == version_id
+            and chunk.permission_revision == permission_revision
+            and self._allowed(chunk, context)
+            for chunk in self._chunks.values()
+        )
+
     def authorize_parent(
         self, parent_chunk_id: str, context: SearchContext
     ) -> AuthorizedChunk | None:

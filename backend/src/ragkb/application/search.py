@@ -8,6 +8,7 @@ import unicodedata
 from collections import Counter, defaultdict
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 from ragkb.application.tracing import InMemoryTracer, TracerPort
@@ -18,6 +19,7 @@ from ragkb.contracts.ports import (
     RetrievalControlPlanePort,
 )
 from ragkb.domain.errors import TransientProviderError
+from ragkb.domain.numeric_facts import NumericTextSignature, numeric_text_signature
 from ragkb.domain.retrieval import (
     AuthorizedChunk,
     IndexCandidate,
@@ -128,17 +130,64 @@ def _shingles(value: str, size: int = 3) -> frozenset[str]:
     )
 
 
-def near_duplicate(left: str, right: str, *, threshold: float) -> bool:
-    left_shingles = _shingles(left)
-    right_shingles = _shingles(right)
-    if not left_shingles or not right_shingles:
+@dataclass(frozen=True)
+class _DedupText:
+    text: str
+    signature: NumericTextSignature | None
+    shingles: frozenset[str]
+
+    @classmethod
+    def build(cls, text: str) -> _DedupText:
+        return cls(
+            re.sub(r"\s+", " ", unicodedata.normalize("NFKC", text)).strip(),
+            numeric_text_signature(text),
+            _shingles(text),
+        )
+
+
+def _same_meaning(left: _DedupText, right: _DedupText, *, threshold: float) -> bool:
+    if not left.shingles or not right.shingles:
         return False
-    similarity = len(left_shingles & right_shingles) / len(left_shingles | right_shingles)
+    if left.text != right.text and (left.signature is None or left.signature != right.signature):
+        return False
+    # Similarity proposes a merge; it does not establish semantic equivalence.
+    # Preserve words/punctuation that carry scope, negation and object bindings.
+    similarity = len(left.shingles & right.shingles) / len(left.shingles | right.shingles)
     return similarity >= threshold
 
 
+def near_duplicate(left: str, right: str, *, threshold: float) -> bool:
+    return _same_meaning(_DedupText.build(left), _DedupText.build(right), threshold=threshold)
+
+
+def _source(chunk: AuthorizedChunk) -> SearchSource:
+    return SearchSource(
+        chunk_id=chunk.chunk_id,
+        document_id=chunk.document_id,
+        document_version_id=chunk.document_version_id,
+        display_text=chunk.display_text,
+        retrieval_text=chunk.retrieval_text,
+        locator=chunk.locator,
+        valid_from_epoch=chunk.valid_from_epoch,
+        valid_to_epoch=chunk.valid_to_epoch,
+        permission_revision=chunk.permission_revision,
+        current_version=chunk.current_version,
+    )
+
+
+def _dedupe_context(chunk: AuthorizedChunk) -> tuple[object, ...]:
+    return (
+        chunk.valid_from_epoch,
+        chunk.valid_to_epoch,
+        chunk.visibility,
+        tuple(sorted(chunk.acl_scope_tokens)),
+        chunk.classification_level,
+        str(chunk.locator.get("section_path") or "root").strip(),
+    )
+
+
 class HybridSearchService:
-    revision = "hybrid-search-service:g2-v4"
+    revision = "hybrid-search-service:fact-preserving-dedup:v5"
 
     def __init__(
         self,
@@ -304,19 +353,43 @@ class HybridSearchService:
         candidate_ids = [candidate.chunk_id for candidate, _, _ in fused]
         authorized = self.control_plane.authorize_chunks(candidate_ids, context)
         authorized_candidates: list[tuple[AuthorizedChunk, float, tuple[SearchChannel, ...]]] = []
-        seen_checksums: set[str] = set()
+        duplicates: dict[str, list[AuthorizedChunk]] = defaultdict(list)
+        profiles: dict[str, _DedupText] = {}
+
+        def duplicate_text(left: str, right: str) -> bool:
+            # Per-request, bounded by the retrieved pool; do not retain tenant text
+            # globally or repeatedly parse the same body for every candidate pair.
+            for value in (left, right):
+                if value not in profiles:
+                    profiles[value] = _DedupText.build(value)
+            return _same_meaning(
+                profiles[left], profiles[right], threshold=self.near_duplicate_threshold
+            )
+
         for candidate, score, channels in fused:
             chunk = authorized.get(candidate.chunk_id)
-            if (
-                chunk is None
-                or not self._currently_authorized(chunk, context)
-                or chunk.content_checksum in seen_checksums
-            ):
+            if chunk is None or not self._currently_authorized(chunk, context):
                 continue
-            seen_checksums.add(chunk.content_checksum)
-            authorized_candidates.append((chunk, score, channels))
-            if len(authorized_candidates) >= self.rerank_top_k:
-                break
+            representative = next(
+                (
+                    selected
+                    for selected, _, _ in authorized_candidates
+                    if _dedupe_context(selected) == _dedupe_context(chunk)
+                    and duplicate_text(
+                        chunk.retrieval_text,
+                        selected.retrieval_text,
+                    )
+                    and duplicate_text(
+                        chunk.display_text,
+                        selected.display_text,
+                    )
+                ),
+                None,
+            )
+            if representative is not None:
+                duplicates[representative.chunk_id].append(chunk)
+            elif len(authorized_candidates) < self.rerank_top_k:
+                authorized_candidates.append((chunk, score, channels))
         if authorized_candidates:
             try:
                 with self.tracer.span("rag.retrieval.rerank"):
@@ -331,7 +404,6 @@ class HybridSearchService:
             order = ()
         requested = min(limit or self.final_evidence_count, self.final_evidence_count)
         hits: list[SearchHit] = []
-        selected_texts: list[str] = []
         document_counts: Counter[str] = Counter()
         section_counts: Counter[tuple[str, str, str]] = Counter()
         for position in order:
@@ -347,17 +419,8 @@ class HybridSearchService:
             if (
                 document_counts[chunk.document_id] >= self.max_chunks_per_document
                 or section_counts[section_key] >= self.max_chunks_per_section
-                or any(
-                    near_duplicate(
-                        chunk.retrieval_text,
-                        selected,
-                        threshold=self.near_duplicate_threshold,
-                    )
-                    for selected in selected_texts
-                )
             ):
                 continue
-            selected_texts.append(chunk.retrieval_text)
             document_counts[chunk.document_id] += 1
             section_counts[section_key] += 1
             parent = (
@@ -374,22 +437,7 @@ class HybridSearchService:
                 or not parent.locator.get("source_spans")
             ):
                 parent = None
-            parent_source = (
-                SearchSource(
-                    chunk_id=parent.chunk_id,
-                    document_id=parent.document_id,
-                    document_version_id=parent.document_version_id,
-                    display_text=parent.display_text,
-                    retrieval_text=parent.retrieval_text,
-                    locator=parent.locator,
-                    valid_from_epoch=parent.valid_from_epoch,
-                    valid_to_epoch=parent.valid_to_epoch,
-                    permission_revision=parent.permission_revision,
-                    current_version=parent.current_version,
-                )
-                if parent is not None
-                else None
-            )
+            parent_source = _source(parent) if parent is not None else None
             hits.append(
                 SearchHit(
                     chunk_id=chunk.chunk_id,
@@ -412,6 +460,7 @@ class HybridSearchService:
                     # owns prompt context, and parents have separate source IDs.
                     generation_context=chunk.retrieval_text,
                     parent_source=parent_source,
+                    duplicate_sources=tuple(_source(item) for item in duplicates[chunk.chunk_id]),
                 )
             )
             if len(hits) >= requested:
@@ -423,4 +472,9 @@ class HybridSearchService:
             degraded=bool(warnings),
             warnings=tuple(warnings),
             retrieval_health=(RetrievalHealth.DEGRADED if warnings else RetrievalHealth.HEALTHY),
+            review_sources=tuple(
+                _source(item)
+                for chunk, _, _ in authorized_candidates
+                for item in (chunk, *duplicates[chunk.chunk_id])
+            ),
         )

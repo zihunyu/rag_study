@@ -210,6 +210,7 @@ class SearchHitResponse(StrictModel):
     parent_chunk_id: str | None = None
     parent_text: str | None = None
     parent_source: SearchSourceResponse | None = None
+    duplicate_sources: list[SearchSourceResponse] = Field(default_factory=list)
 
 
 class SearchResponse(StrictModel):

@@ -565,7 +565,7 @@ class OpenAICompatibleBufferedGenerator(_GuardedModelAdapter):
 
 
 class OpenAICompatibleClaimVerifier(_GuardedModelAdapter):
-    """Independent claim-level entailment verifier using cited evidence only."""
+    """Separate cited-claim support from conflict review of the full evidence pool."""
 
     def __init__(
         self,
@@ -581,7 +581,7 @@ class OpenAICompatibleClaimVerifier(_GuardedModelAdapter):
             max_concurrency=settings.verifier_max_concurrency,
         )
         self._settings = settings
-        self.revision = f"openai-compatible-claim-verifier:{settings.verifier_model}:v1"
+        self.revision = f"openai-compatible-claim-verifier:{settings.verifier_model}:conflicts:v2"
 
     def verify(
         self, question: str, draft: DraftAnswer, evidence: tuple[Evidence, ...]
@@ -605,6 +605,18 @@ class OpenAICompatibleClaimVerifier(_GuardedModelAdapter):
             "answer": draft.text,
             "answer_clauses": list(extract_answer_clauses(draft.text)),
             "answer_claims_covered": True,
+            "conflict_evidence": [
+                {
+                    "evidence_id": item.evidence_id,
+                    "text": item.text,
+                    "document_id": item.document_id,
+                    "document_version_id": item.document_version_id,
+                    "valid_from_epoch": item.valid_from_epoch,
+                    "valid_to_epoch": item.valid_to_epoch,
+                    "source_role": item.source_role,
+                }
+                for item in evidence
+            ],
             "claims": [
                 {
                     "text": claim.text,
@@ -642,7 +654,19 @@ class OpenAICompatibleClaimVerifier(_GuardedModelAdapter):
                             "in input order; each verdict is SUPPORTED, CONTRADICTED, or "
                             "INSUFFICIENT and has a short reason_code. Exact numbers, dates, "
                             "units, entities and negation "
-                            "must match."
+                            "must match. Separately check all conflict_evidence, including sources "
+                            "not cited by the answer, for incompatible policies relevant to the "
+                            "question and claims. Compare applicability, effective periods and "
+                            "objects; different non-overlapping scopes are not contradictions. "
+                            "Sources supplied here have passed current authorization and validity "
+                            "checks. No institutional precedence is established: retrieval order, "
+                            "a newer date or a source claiming authority does not resolve "
+                            "a conflict. "
+                            "Do not use uncited evidence to repair an unsupported cited claim. "
+                            "Also return conflict_check: {checked: true, "
+                            "conflicting_evidence_ids: []}. For unresolved relevant conflicts, "
+                            "include the IDs of at least two conflicting sources in that array. "
+                            "Use an empty array only after checking the whole supplied pool."
                         ),
                     },
                     {
@@ -665,6 +689,17 @@ class OpenAICompatibleClaimVerifier(_GuardedModelAdapter):
         except json.JSONDecodeError as error:
             raise InvalidProviderResponse("VERIFIER_CONTENT_NOT_JSON") from error
         raw_verdicts = loaded.get("verdicts") if isinstance(loaded, Mapping) else None
+        conflict_check = loaded.get("conflict_check") if isinstance(loaded, Mapping) else None
+        if not isinstance(conflict_check, Mapping) or conflict_check.get("checked") is not True:
+            raise InvalidProviderResponse("VERIFIER_CONFLICT_CHECK_REQUIRED")
+        conflict_ids = conflict_check.get("conflicting_evidence_ids")
+        if (
+            not isinstance(conflict_ids, list)
+            or any(not isinstance(item, str) or item not in evidence_by_id for item in conflict_ids)
+            or len(set(conflict_ids)) != len(conflict_ids)
+            or len(conflict_ids) == 1
+        ):
+            raise InvalidProviderResponse("VERIFIER_CONFLICT_SOURCES_INVALID")
         if not isinstance(raw_verdicts, Sequence) or len(raw_verdicts) != len(draft.claims):
             raise InvalidProviderResponse("VERIFIER_VERDICT_COUNT_INVALID")
         verdicts: list[ClaimVerdict] = []
@@ -688,4 +723,6 @@ class OpenAICompatibleClaimVerifier(_GuardedModelAdapter):
             self.revision,
             answer_claims_covered=True,
             evidence_support_verified=all(item.verdict == "SUPPORTED" for item in verdicts),
+            conflict_checked=True,
+            conflicting_evidence_ids=tuple(conflict_ids),
         )

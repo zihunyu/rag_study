@@ -184,7 +184,8 @@ def test_independent_verifier_requires_one_supported_verdict_per_claim(tmp_path:
                 {
                     "message": {
                         "content": (
-                            '{"verdicts":[{"verdict":"SUPPORTED","reason_code":"ENTAILED"}]}'
+                            '{"verdicts":[{"verdict":"SUPPORTED","reason_code":"ENTAILED"}],'
+                            '"conflict_check":{"checked":true,"conflicting_evidence_ids":[]}}'
                         )
                     }
                 }
