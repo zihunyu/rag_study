@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import ipaddress
 import json
@@ -13,6 +14,8 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
+from ragkb.adapters.cancellable_http import cancellable_request
+from ragkb.application.cancellation import cancellation_active, run_cancellable
 from ragkb.config import EnvSettings
 from ragkb.contracts.provider_execution import ProviderExecutionError
 
@@ -180,7 +183,12 @@ class MinerUHttpTransport:
         if page_ranges:
             file_item["page_ranges"] = page_ranges
         try:
-            response = httpx.post(
+            post = (
+                (lambda url, **kwargs: cancellable_request("POST", url, **kwargs))
+                if cancellation_active()
+                else httpx.post
+            )
+            response = post(
                 f"{self._base_url}/file-urls/batch",
                 headers=self._headers(token),
                 json={
@@ -219,7 +227,12 @@ class MinerUHttpTransport:
             raise ProviderExecutionError("MINERU_SIGNED_UPLOAD_URL_FORBIDDEN")
         try:
             with source.open("rb") as handle:
-                response = httpx.put(
+                put = (
+                    (lambda url, **kwargs: cancellable_request("PUT", url, **kwargs))
+                    if cancellation_active()
+                    else httpx.put
+                )
+                response = put(
                     file_url,
                     content=handle,
                     headers={},
@@ -243,7 +256,12 @@ class MinerUHttpTransport:
 
     def batch_status(self, token: str, batch_id: str, timeout_seconds: float) -> Mapping[str, Any]:
         try:
-            response = httpx.get(
+            get = (
+                (lambda url, **kwargs: cancellable_request("GET", url, **kwargs))
+                if cancellation_active()
+                else httpx.get
+            )
+            response = get(
                 f"{self._base_url}/extract-results/batch/{batch_id}",
                 headers=self._headers(token),
                 timeout=timeout_seconds,
@@ -259,6 +277,8 @@ class MinerUHttpTransport:
         return _official_response(response, "MINERU_BATCH_STATUS")
 
     def download_zip(self, full_zip_url: str, timeout_seconds: float) -> bytes:
+        if cancellation_active():
+            return run_cancellable(lambda: self._download_zip(full_zip_url, timeout_seconds))
         current = full_zip_url
         for redirect in range(self._max_redirects + 1):
             if not self._signed_url_allowed(current):
@@ -306,6 +326,57 @@ class MinerUHttpTransport:
                 raise ProviderExecutionError(
                     "MINERU_RESULT_TRANSPORT_FAILURE", outcome_unknown=True
                 ) from error
+        raise ProviderExecutionError("MINERU_RESULT_DOWNLOAD_FAILED")
+
+    async def _download_zip(self, full_zip_url: str, timeout_seconds: float) -> bytes:
+        current = full_zip_url
+        try:
+            async with asyncio.timeout(timeout_seconds), httpx.AsyncClient() as client:
+                for redirect in range(self._max_redirects + 1):
+                    if not self._signed_url_allowed(current):
+                        raise ProviderExecutionError("MINERU_RESULT_URL_FORBIDDEN")
+                    async with client.stream(
+                        "GET", current, timeout=timeout_seconds, follow_redirects=False
+                    ) as response:
+                        if response.status_code in {301, 302, 303, 307, 308}:
+                            if redirect >= self._max_redirects:
+                                raise ProviderExecutionError("MINERU_RESULT_REDIRECT_LIMIT")
+                            location = response.headers.get("location")
+                            if not location:
+                                raise ProviderExecutionError("MINERU_RESULT_REDIRECT_INVALID")
+                            current = urljoin(current, location)
+                            continue
+                        if not 200 <= response.status_code < 300:
+                            raise ProviderExecutionError(
+                                "MINERU_RESULT_DOWNLOAD_FAILED",
+                                status_code=response.status_code,
+                                outcome_unknown=response.status_code >= 500,
+                            )
+                        declared = response.headers.get("content-length")
+                        try:
+                            declared_size = int(declared) if declared else 0
+                        except ValueError as error:
+                            raise ProviderExecutionError(
+                                "MINERU_RESULT_CONTENT_LENGTH_INVALID"
+                            ) from error
+                        if declared_size > self._max_download_bytes:
+                            raise ProviderExecutionError("MINERU_RESULT_DOWNLOAD_TOO_LARGE")
+                        chunks: list[bytes] = []
+                        total = 0
+                        async for chunk in response.aiter_bytes():
+                            total += len(chunk)
+                            if total > self._max_download_bytes:
+                                raise ProviderExecutionError("MINERU_RESULT_DOWNLOAD_TOO_LARGE")
+                            chunks.append(chunk)
+                        return b"".join(chunks)
+        except (httpx.TimeoutException, TimeoutError) as error:
+            raise ProviderExecutionError(
+                "MINERU_RESULT_DOWNLOAD_TIMEOUT", outcome_unknown=True
+            ) from error
+        except httpx.RequestError as error:
+            raise ProviderExecutionError(
+                "MINERU_RESULT_TRANSPORT_FAILURE", outcome_unknown=True
+            ) from error
         raise ProviderExecutionError("MINERU_RESULT_DOWNLOAD_FAILED")
 
 

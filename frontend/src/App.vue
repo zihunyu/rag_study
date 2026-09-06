@@ -92,6 +92,19 @@ const citations = computed(() =>
     href: sourceUrl(citation.source_url),
   })),
 );
+const answerMessage = computed(() => {
+  if (result.value?.answer) return result.value.answer;
+  if (result.value?.status === "needs_clarification") {
+    const labels = { subject: "具体对象或制度名称", product: "产品名称", version: "版本", region: "适用地区", time_period: "时间范围" };
+    const fields = (result.value.clarification_fields ?? []).map((field) => labels[field]).filter(Boolean);
+    return fields.length ? `请补充${fields.join("、")}后重新提问。` : "请补充具体对象和必要条件后重新提问。";
+  }
+  return {
+    out_of_scope: "这里可以根据知识库资料回答问题，暂不支持代办、交易或执行外部操作。请改为询问相关知识或办理规则。",
+    insufficient_evidence: "现有资料不足以回答这个问题，请补充相关资料或调整问题。",
+    conflicting_evidence: "相关资料存在冲突，暂时无法给出可靠答案。请确认适用版本或联系知识库维护者。",
+  }[result.value?.status] ?? "答案仅在引用与权限复核后显示。";
+});
 const selectedSpace = computed(() =>
   spaces.value.find((item) => item.id === selectedSpaceId.value) ?? null,
 );
@@ -281,7 +294,7 @@ async function ask() {
     );
     if (revision !== answerRevision || spaceId !== selectedSpaceId.value) return;
     result.value = answer;
-    stage.value = result.value.retryable ? "服务暂不可用，可重试" : result.value.verified ? "已验证" : "验证失败";
+    stage.value = result.value.retryable ? "服务暂不可用，可重试" : result.value.status === "needs_clarification" ? "需要补充信息" : result.value.status === "out_of_scope" ? "超出服务范围" : result.value.verified ? "已验证" : "验证失败";
   } catch (cause) { if (revision === answerRevision && spaceId === selectedSpaceId.value) { error.value = cause.message; stage.value = "system_error"; } }
 }
 
@@ -799,7 +812,7 @@ async function generateAcceptance() {
       <header><div><span>KNOWLEDGE BASE WORKSPACE</span><h2>企业知识库</h2></div><div class="session"><label>当前知识库</label><select v-model="selectedSpaceId" data-testid="global-space-select" @change="changeSpace"><option v-if="!spaces.length" value="">尚未创建</option><option v-for="item in spaces" :key="item.id" :value="item.id">{{ item.name }}</option></select><button v-if="oidcEnabled && !authenticatedUser" @click="signIn">OIDC 登录</button><button v-if="oidcEnabled && authenticatedUser" @click="signOut">退出 {{ authenticatedUser.profile?.name ?? authenticatedUser.profile?.sub }}</button></div></header>
       <section v-if="tab==='ask'">
         <article class="hero-card"><span class="eyebrow">在指定知识库中检索</span><h3>{{ selectedSpace?.name ?? '请先创建知识库' }}</h3><label>问答知识库</label><select v-model="selectedSpaceId" @change="changeSpace"><option v-for="item in spaces" :key="item.id" :value="item.id">{{ item.name }}</option></select><label>问题</label><textarea v-model="question" rows="5" placeholder="例如：这份制度的有效期是多久？"/><button class="primary" :disabled="!selectedSpaceId || !question.trim()" @click="ask">从此知识库回答</button><span class="stage">{{ stage }}</span></article>
-        <article><h3>{{ result?.status ?? '尚未运行' }}</h3><p v-if="result?.retryable" data-testid="retryable-error" role="alert">服务暂不可用，未能完成本次问答。请稍后重试。</p><p v-else-if="result?.degraded" data-testid="retrieval-degraded" role="status">部分检索服务暂不可用，本次结果可能不完整。</p><p class="answer">{{ result?.answer ?? (result?.status === 'insufficient_evidence' ? '现有资料不足以回答这个问题，请补充相关资料或调整问题。' : '答案仅在引用与权限复核后显示。') }}</p><a v-for="citation in citations" :key="citation.evidence_id" :href="citation.href" @click.prevent="openCitation(citation)">{{ citation.evidence_id }} · 签名来源</a><pre v-if="citationSource" class="source-content">{{ citationSource }}</pre><form v-if="result" @submit.prevent="submitFeedback"><select v-model="feedback.rating"><option :value="5">有帮助</option><option :value="1">无帮助</option></select><input v-model="feedback.comment" placeholder="反馈说明"><button>提交反馈</button></form><p class="error">{{ error }}</p></article>
+        <article><h3>{{ result?.status ?? '尚未运行' }}</h3><p v-if="result?.retryable" data-testid="retryable-error" role="alert">服务暂不可用，未能完成本次问答。请稍后重试。</p><p v-else-if="result?.degraded" data-testid="retrieval-degraded" role="status">部分检索服务暂不可用，本次结果可能不完整。</p><p class="answer">{{ answerMessage }}</p><a v-for="citation in citations" :key="citation.evidence_id" :href="citation.href" @click.prevent="openCitation(citation)">{{ citation.evidence_id }} · 签名来源</a><pre v-if="citationSource" class="source-content">{{ citationSource }}</pre><form v-if="result" @submit.prevent="submitFeedback"><select v-model="feedback.rating"><option :value="5">有帮助</option><option :value="1">无帮助</option></select><input v-model="feedback.comment" placeholder="反馈说明"><button>提交反馈</button></form><p class="error">{{ error }}</p></article>
       </section>
       <section v-if="tab==='admin'">
         <p v-if="capabilities" class="muted" data-testid="parser-capabilities">

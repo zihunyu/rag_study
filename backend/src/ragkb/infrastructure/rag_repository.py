@@ -29,6 +29,7 @@ def _package(data: dict[str, Any]) -> EvidencePackage:
             "disposition": QuestionDisposition(data["disposition"]),
             "retrieval_health": RetrievalHealth(data.get("retrieval_health", "healthy")),
             "retrieval_warnings": tuple(data.get("retrieval_warnings", ())),
+            "clarification_fields": tuple(data.get("clarification_fields", ())),
         }
     )
 
@@ -42,6 +43,7 @@ def _result(data: dict[str, Any]) -> AskResult:
             "evidence": tuple(Evidence(**item) for item in data["evidence"]),
             "warnings": tuple(data["warnings"]),
             "retrieval_health": RetrievalHealth(data.get("retrieval_health", "healthy")),
+            "clarification_fields": tuple(data.get("clarification_fields", ())),
         }
     )
 

@@ -11,6 +11,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from ragkb.application.cancellation import cancellation_scope, check_cancelled
 from ragkb.application.lease_guard import LeaseGuard
 from ragkb.application.tracing import InMemoryTracer, TracerPort
 from ragkb.contracts.jobs import PersistentJobQueuePort, QueueJob, QueueLeaseError
@@ -205,13 +206,17 @@ class LocalIngestionWorker:
             ingestion_scope = getattr(self.repository, "ingestion_scope", None)
             if callable(ingestion_scope):
                 scope.enter_context(ingestion_scope(job))
+            scope.enter_context(cancellation_scope(guard.poll))
             guard.check()
             version = self.repository.get_version(version_id)
             initialized = True
             source_format = str(job.payload["source_format"])
             source = self.storage.path_for("original", str(version["original_key"]))
             with self.tracer.span("document.parse", {"source_format": source_format}):
-                document = self.parser_router.parse(source_format, source, version_id)
+                document = self.parser_router.parse(
+                    source_format, source, version_id, cancel_check=guard.poll
+                )
+            check_cancelled()
             chunking = (
                 self._chunk(document, tenant_id=str(job.payload["tenant_id"]))
                 if self.chunker is not None

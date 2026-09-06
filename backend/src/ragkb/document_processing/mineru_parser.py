@@ -6,6 +6,7 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
+from ragkb.application.cancellation import check_cancelled
 from ragkb.application.provider_runners import MinerUExecutionRunner
 from ragkb.document_processing.parser_common import canonical_document, checksum
 from ragkb.domain.documents import CanonicalDocument, CanonicalNode, NodeType, SourceLocator
@@ -37,6 +38,7 @@ class MinerUProductionParser:
         self.is_ocr = is_ocr
 
     def parse(self, source: Path, document_version_id: str) -> CanonicalDocument:
+        check_cancelled()
         source_hash = checksum(source)
         anonymous_id = hashlib.sha256(
             f"{document_version_id}:{source_hash}".encode(), usedforsecurity=False
@@ -47,12 +49,14 @@ class MinerUProductionParser:
             source_hash,
             is_ocr=self.is_ocr,
         )
+        check_cancelled()
         artifact_id = evidence.get("artifact_id")
         if not isinstance(artifact_id, str):
             raise ValueError("MINERU_ARTIFACT_ID_MISSING")
         raw_nodes = self.result_store.read_mineru_nodes(artifact_id)
         nodes: list[CanonicalNode] = []
         for raw in raw_nodes:
+            check_cancelled()
             text = str(raw.get("display_text", "")).strip()
             locator = raw.get("locator")
             if not text or not isinstance(locator, dict):

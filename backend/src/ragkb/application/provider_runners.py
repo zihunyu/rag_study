@@ -15,6 +15,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlparse
 
+from ragkb.application.cancellation import cancellable_sleep, check_cancelled
+from ragkb.contracts.jobs import QueueLeaseError
 from ragkb.contracts.provider_execution import (
     CheckpointStorePort,
     EmbeddingBatchTransportPort,
@@ -24,6 +26,7 @@ from ragkb.contracts.provider_execution import (
     ProviderExecutionError,
     ResultStorePort,
 )
+from ragkb.domain.errors import IngestionCancelled
 
 
 def _canonical_hash(value: object) -> str:
@@ -285,6 +288,7 @@ class MinerUExecutionRunner:
             total_size = 0
             content_entries: list[zipfile.ZipInfo] = []
             for entry in entries:
+                check_cancelled()
                 path = PurePosixPath(entry.filename.replace("\\", "/"))
                 if path.is_absolute() or ".." in path.parts:
                     raise ProviderExecutionError("MINERU_RESULT_ZIP_PATH_INVALID")
@@ -306,6 +310,7 @@ class MinerUExecutionRunner:
         result_hash = hashlib.sha256(payload, usedforsecurity=False).hexdigest()
         nodes: list[dict[str, object]] = []
         for index, item in enumerate(content):
+            check_cancelled()
             if not isinstance(item, Mapping):
                 raise ProviderExecutionError("MINERU_CONTENT_ITEM_INVALID")
             item_type = str(item.get("type", "")).casefold()
@@ -390,6 +395,7 @@ class MinerUExecutionRunner:
         *,
         is_ocr: bool = True,
     ) -> dict[str, object]:
+        check_cancelled()
         self._guard()
         if _file_hash(source) != expected_sha256.casefold():
             raise ProviderExecutionError("MINERU_INPUT_SNAPSHOT_MISMATCH")
@@ -428,9 +434,11 @@ class MinerUExecutionRunner:
             self.checkpoints.save("mineru", anonymous_id, checkpoint)
         deadline = self.clock() + self.timeout_seconds
         try:
+            check_cancelled()
             token = lease.secret_value()
             full_zip_url: str | None = None
             if checkpoint["state"] == "ASSIGNED":
+                check_cancelled()
                 self._reserve_request(manifest)
                 checkpoint.update(state="UNKNOWN_OUTCOME", operation="CREATE_BATCH")
                 self.checkpoints.save("mineru", anonymous_id, checkpoint)
@@ -454,6 +462,8 @@ class MinerUExecutionRunner:
                     or not file_url
                 ):
                     raise ProviderExecutionError("MINERU_CREATE_BATCH_SCHEMA_INVALID")
+                checkpoint["batch_id"] = batch_id
+                check_cancelled()
                 self._reserve_request(manifest)
                 checkpoint.update(
                     state="UNKNOWN_OUTCOME",
@@ -466,10 +476,12 @@ class MinerUExecutionRunner:
                 checkpoint.pop("operation", None)
                 self.checkpoints.save("mineru", anonymous_id, checkpoint)
             while checkpoint["state"] == "SUBMITTED":
+                check_cancelled()
                 if self.clock() >= deadline:
                     raise ProviderExecutionError("MINERU_TIMEOUT")
                 if int(checkpoint["poll_count"]) >= self.max_polls_per_file:
                     raise ProviderExecutionError("MINERU_POLL_BUDGET_EXCEEDED")
+                check_cancelled()
                 self._reserve_request(manifest)
                 status = self.transport.batch_status(
                     token, str(checkpoint["batch_id"]), self.timeout_seconds
@@ -502,7 +514,7 @@ class MinerUExecutionRunner:
                     remaining = deadline - self.clock()
                     if remaining <= 0:
                         raise ProviderExecutionError("MINERU_TIMEOUT")
-                    self.sleeper(min(self.poll_interval_seconds, remaining))
+                    cancellable_sleep(min(self.poll_interval_seconds, remaining), self.sleeper)
                     continue
                 if state in {"failed", "error", "canceled", "cancelled"}:
                     raise ProviderExecutionError(
@@ -520,12 +532,14 @@ class MinerUExecutionRunner:
                 if not isinstance(raw_zip_url, str) or not raw_zip_url:
                     raise ProviderExecutionError("MINERU_STATUS_SCHEMA_INVALID")
                 full_zip_url = raw_zip_url
+                check_cancelled()
                 self._reserve_request(manifest)
                 checkpoint.update(state="UNKNOWN_OUTCOME", operation="DOWNLOAD_RESULT")
                 self.checkpoints.save("mineru", anonymous_id, checkpoint)
                 result_zip = self.transport.download_zip(full_zip_url, self.timeout_seconds)
                 checkpoint["state"] = "RESULT_RECEIVED"
                 checkpoint.pop("operation", None)
+                check_cancelled()
                 nodes, locator_count, result_hash = self.validate_result_zip(
                     result_zip, anonymous_id
                 )
@@ -535,6 +549,7 @@ class MinerUExecutionRunner:
                     result_hash=result_hash,
                 )
                 self.checkpoints.save("mineru", anonymous_id, checkpoint)
+                check_cancelled()
                 artifact = self.result_store.persist_mineru_result(
                     anonymous_id,
                     result_hash,
@@ -586,12 +601,22 @@ class MinerUExecutionRunner:
                     "automatic_retries": 0,
                     "secret_values_in_output": False,
                 }
+                check_cancelled()
                 checkpoint.update(state="COMPLETED", evidence=evidence)
                 checkpoint.pop("batch_id", None)
                 self.checkpoints.save("mineru", anonymous_id, checkpoint)
                 self.pool.record_success(lease.slot)
                 return evidence
             raise ProviderExecutionError("MINERU_CHECKPOINT_STATE_INVALID")
+        except (IngestionCancelled, QueueLeaseError) as error:
+            # An interrupted client does not prove the remote task was cancelled.
+            # Preserve UNKNOWN_OUTCOME / the known batch for reconciliation; never
+            # retry a possibly submitted request or poison the provider token pool.
+            if isinstance(error, IngestionCancelled):
+                checkpoint["interruption"] = "CANCEL_REQUESTED"
+                self.checkpoints.save("mineru", anonymous_id, checkpoint)
+            # A lost owner must not overwrite checkpoints used by a new owner.
+            raise
         except Exception as error:
             if isinstance(error, ProviderExecutionError):
                 code = error.code

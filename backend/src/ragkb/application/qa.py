@@ -24,7 +24,12 @@ from ragkb.contracts.rag import (
     VerifiedAnswerCachePort,
 )
 from ragkb.domain.claim_coverage import render_verified_claims, verify_answer_claim_coverage
-from ragkb.domain.errors import InvalidProviderResponse, RetrievalFailClosed, TransientProviderError
+from ragkb.domain.errors import (
+    InvalidProviderResponse,
+    QuestionAssessmentFailed,
+    RetrievalFailClosed,
+    TransientProviderError,
+)
 from ragkb.domain.ids import new_uuid7
 from ragkb.domain.numeric_facts import check_numeric_facts, normalize_numeric_text
 from ragkb.domain.policy_conflicts import conflicting_sources
@@ -278,6 +283,9 @@ class TrustedQAService:
             retrieval_health=package.retrieval_health,
             degraded=package.retrieval_health is not RetrievalHealth.HEALTHY,
             retryable=retryable,
+            clarification_fields=(
+                package.clarification_fields if status is AnswerStatus.NEEDS_CLARIFICATION else ()
+            ),
         )
         self.repository.save_run(package, result)
         return result
@@ -328,7 +336,7 @@ class TrustedQAService:
                         clearance_level=clearance_level,
                         space_id=space_id,
                     )
-        except (RetrievalFailClosed, TransientProviderError) as error:
+        except (RetrievalFailClosed, TransientProviderError, QuestionAssessmentFailed) as error:
             package = EvidencePackage(
                 rag_run_id=new_uuid7(),
                 tenant_id=tenant_id,
@@ -343,13 +351,25 @@ class TrustedQAService:
                 evidence=(),
                 verifier_revision=self.verifier.revision,
                 real_acceptance=False,
-                retrieval_health=RetrievalHealth.UNAVAILABLE,
+                retrieval_health=(
+                    RetrievalHealth.HEALTHY
+                    if isinstance(error, QuestionAssessmentFailed)
+                    else RetrievalHealth.UNAVAILABLE
+                ),
             )
             return self._save(
                 package,
                 AnswerStatus.SYSTEM_ERROR,
-                warnings=("RETRIEVAL_OR_PERMISSION_FAIL_CLOSED",),
-                retryable=isinstance(error, (TransientProviderError, SecurityWatermarkNotReady)),
+                warnings=(
+                    error.code
+                    if isinstance(error, QuestionAssessmentFailed)
+                    else "RETRIEVAL_OR_PERMISSION_FAIL_CLOSED",
+                ),
+                retryable=(
+                    error.retryable
+                    if isinstance(error, QuestionAssessmentFailed)
+                    else isinstance(error, (TransientProviderError, SecurityWatermarkNotReady))
+                ),
             )
         if package.retrieval_health is RetrievalHealth.UNAVAILABLE:
             return self._save(
@@ -359,9 +379,19 @@ class TrustedQAService:
                 retryable=True,
             )
         if package.disposition is QuestionDisposition.OUT_OF_SCOPE:
-            return self._save(package, AnswerStatus.OUT_OF_SCOPE, verified=True)
+            return self._save(
+                package,
+                AnswerStatus.OUT_OF_SCOPE,
+                verified=True,
+                warnings=(package.disposition_reason,) if package.disposition_reason else (),
+            )
         if package.disposition is QuestionDisposition.NEEDS_CLARIFICATION:
-            return self._save(package, AnswerStatus.NEEDS_CLARIFICATION, verified=True)
+            return self._save(
+                package,
+                AnswerStatus.NEEDS_CLARIFICATION,
+                verified=True,
+                warnings=(package.disposition_reason,) if package.disposition_reason else (),
+            )
         if not package.generation_evidence:
             if package.retrieval_health is RetrievalHealth.DEGRADED:
                 return self._save(

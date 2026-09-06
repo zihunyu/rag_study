@@ -245,6 +245,7 @@ class AskResponse(StrictModel):
     retrieval_health: RetrievalHealth = RetrievalHealth.HEALTHY
     degraded: bool = False
     retryable: bool = False
+    clarification_fields: list[str] = Field(default_factory=list)
 
 
 class EvidenceSourceResponse(StrictModel):

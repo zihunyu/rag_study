@@ -24,6 +24,37 @@ class QuestionDisposition(StrEnum):
     OUT_OF_SCOPE = "out_of_scope"
 
 
+CLARIFICATION_FIELDS = frozenset({"subject", "product", "version", "region", "time_period"})
+
+
+@dataclass(frozen=True)
+class QuestionAssessment:
+    disposition: QuestionDisposition = QuestionDisposition.ANSWERABLE
+    reason_code: str = "standalone_question"
+    clarification_fields: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        expected = {
+            QuestionDisposition.ANSWERABLE: {"standalone_question"},
+            QuestionDisposition.NEEDS_CLARIFICATION: {"missing_context"},
+            QuestionDisposition.OUT_OF_SCOPE: {"unsupported_operation", "outside_knowledge_qa"},
+        }
+        if (
+            not isinstance(self.disposition, QuestionDisposition)
+            or not isinstance(self.reason_code, str)
+            or self.reason_code not in expected[self.disposition]
+            or not isinstance(self.clarification_fields, tuple)
+            or any(
+                not isinstance(field, str) or field not in CLARIFICATION_FIELDS
+                for field in self.clarification_fields
+            )
+            or len(set(self.clarification_fields)) != len(self.clarification_fields)
+            or bool(self.clarification_fields)
+            != (self.disposition is QuestionDisposition.NEEDS_CLARIFICATION)
+        ):
+            raise ValueError("QUESTION_ASSESSMENT_INVALID")
+
+
 @dataclass(frozen=True)
 class Evidence:
     evidence_id: str
@@ -75,6 +106,9 @@ class EvidencePackage:
     real_acceptance: bool = False
     retrieval_health: RetrievalHealth = RetrievalHealth.HEALTHY
     retrieval_warnings: tuple[str, ...] = ()
+    disposition_reason: str = ""
+    clarification_fields: tuple[str, ...] = ()
+    question_assessor_revision: str = ""
 
     def __post_init__(self) -> None:
         expected = [f"E{index}" for index in range(1, len(self.evidence) + 1)]
@@ -162,6 +196,7 @@ class AskResult:
     retrieval_health: RetrievalHealth = RetrievalHealth.HEALTHY
     degraded: bool = False
     retryable: bool = False
+    clarification_fields: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

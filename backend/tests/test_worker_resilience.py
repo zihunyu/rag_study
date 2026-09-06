@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import io
 import threading
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -11,7 +13,7 @@ from ragkb.api.app import create_app
 from ragkb.application.worker import LocalIngestionWorker
 from ragkb.document_processing.parsers import ParserRouter
 from ragkb.domain.documents import CanonicalDocument
-from ragkb.domain.errors import ProviderUnavailable
+from ragkb.domain.errors import IngestionCancelled, ProviderUnavailable
 from ragkb.runtime import run_worker_iteration
 from ragkb.runtime_components import RuntimeComponents, build_runtime_components
 
@@ -51,11 +53,18 @@ class _SelectiveParserRouter:
         self.delegate = ParserRouter()
 
     def parse(
-        self, source_format: str, source: Path, document_version_id: str
+        self,
+        source_format: str,
+        source: Path,
+        document_version_id: str,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> CanonicalDocument:
         if source.name == "bad.txt":
             raise RuntimeError("sensitive bad document content must not be logged")
-        return self.delegate.parse(source_format, source, document_version_id)
+        return self.delegate.parse(
+            source_format, source, document_version_id, cancel_check=cancel_check
+        )
 
 
 class _BlockingParserRouter:
@@ -67,12 +76,23 @@ class _BlockingParserRouter:
         self.delegate = ParserRouter()
 
     def parse(
-        self, source_format: str, source: Path, document_version_id: str
+        self,
+        source_format: str,
+        source: Path,
+        document_version_id: str,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> CanonicalDocument:
         self.started.set()
-        if not self.release.wait(timeout=5):
-            raise RuntimeError("test parser release timed out")
-        return self.delegate.parse(source_format, source, document_version_id)
+        deadline = time.monotonic() + 5
+        while not self.release.wait(timeout=0.05):
+            if cancel_check is not None and cancel_check():
+                raise IngestionCancelled("INGEST_CANCELLED")
+            if time.monotonic() > deadline:
+                raise RuntimeError("test parser release timed out")
+        return self.delegate.parse(
+            source_format, source, document_version_id, cancel_check=cancel_check
+        )
 
 
 def test_bad_task_is_safely_recorded_and_next_good_task_still_runs(tmp_path: Path) -> None:
@@ -153,7 +173,6 @@ def test_running_cancel_is_acknowledged_before_artifact_or_chunk_write(tmp_path:
     )
     assert cancelled.status_code == 202
     assert cancelled.json()["state"] == "CANCEL_REQUESTED"
-    release.set()
     thread.join(timeout=5)
 
     assert not thread.is_alive()

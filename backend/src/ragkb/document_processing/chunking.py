@@ -10,6 +10,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
+from ragkb.application.cancellation import check_cancelled
 from ragkb.contracts.ports import EmbeddingPort
 from ragkb.domain.documents import CanonicalDocument, CanonicalNode, NodeType, SourceLocator
 from ragkb.domain.entities import Chunk
@@ -130,6 +131,7 @@ def _windows(
     windows: list[tuple[str, int, int]] = []
     token_start = 0
     while token_start < len(spans):
+        check_cancelled()
         token_end = min(len(spans), token_start + size)
         if token_end < len(spans):
             minimum_end = min(token_end, token_start + config.min_tokens)
@@ -187,6 +189,7 @@ class TokenAwareChunker:
         children: list[Chunk] = []
         heading = ""
         for node in document.nodes:
+            check_cancelled()
             if node.node_type is NodeType.HEADING:
                 heading = node.display_text.strip()
                 if self.config.strategy == "structure":
@@ -369,6 +372,7 @@ class SemanticChunker(TokenAwareChunker):
             current = []
 
         for index, node in enumerate(nodes):
+            check_cancelled()
             if node.node_type is NodeType.HEADING:
                 flush()
                 heading = node.display_text.strip()

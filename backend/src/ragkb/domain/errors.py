@@ -35,6 +35,12 @@ class InvalidProviderResponse(RAGError):
     """The provider replied, but violated the configured response contract."""
 
 
+class QuestionAssessmentFailed(RAGError):
+    def __init__(self, code: str, *, retryable: bool) -> None:
+        super().__init__(code)
+        self.retryable = retryable
+
+
 class ConfigurationError(RAGError):
     pass
 

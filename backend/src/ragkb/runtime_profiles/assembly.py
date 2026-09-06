@@ -306,6 +306,7 @@ def build_runtime_components(
         verifier_revision=verifier.revision,
         final_evidence_count=settings.retrieval_final_evidence_count,
         release_provider=retrieval_release,
+        question_assessor=retrieval.question_assessor,
     )
     answer_cache = profile_factory.build_answer_cache(settings, persistence)
     qa_service = TrustedQAService(

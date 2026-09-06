@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterable, Mapping, Sequence
+from collections.abc import AsyncIterable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
@@ -81,7 +81,12 @@ class ParserRouterPort(Protocol):
     revision: str
 
     def parse(
-        self, source_format: str, source: Path, document_version_id: str
+        self,
+        source_format: str,
+        source: Path,
+        document_version_id: str,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> CanonicalDocument: ...
 
 

@@ -31,6 +31,7 @@ from ragkb.contracts.ports import (
 from ragkb.contracts.rag import (
     BufferedGenerationPort,
     ClaimVerifierPort,
+    QuestionAssessmentPort,
     RAGRunRepositoryPort,
     VerifiedAnswerCachePort,
 )
@@ -66,6 +67,7 @@ class RetrievalAdapters:
     generator: BufferedGenerationPort
     verifier: ClaimVerifierPort
     indexing_sink: IndexingSink
+    question_assessor: QuestionAssessmentPort | None = None
 
 
 @dataclass(frozen=True)

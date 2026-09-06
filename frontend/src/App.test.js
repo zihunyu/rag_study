@@ -55,6 +55,31 @@ async function chooseFile(input, file) {
   await flushPromises();
 }
 
+describe("question disposition results", () => {
+  it.each([
+    ["needs_clarification", ["subject", "region"], "请补充具体对象或制度名称、适用地区后重新提问。"],
+    ["out_of_scope", [], "暂不支持代办、交易或执行外部操作"],
+  ])("shows an actionable %s message without treating it as missing evidence", async (status, fields, message) => {
+    vi.stubGlobal("fetch", vi.fn(async (url) => {
+      if (String(url).endsWith("/spaces")) return jsonResponse([{ id: "a", name: "知识库" }]);
+      if (String(url).includes("/ask")) return sseResponse('event: result\ndata: '+JSON.stringify({
+        rag_run_id: "question-assessment", status, answer: null, verified: true,
+        clarification_fields: fields, citations: [], warnings: [], retryable: false,
+      })+'\n\n');
+      return jsonResponse([]);
+    }));
+    const wrapper = mount(App);
+    await flushPromises();
+    await wrapper.find("textarea").setValue("它的保修期多久？");
+    await button(wrapper, "从此知识库回答").trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain(message);
+    expect(wrapper.text()).not.toContain("知识库未提供足够证据");
+    expect(wrapper.findAll('a[href*="/sources/"]')).toHaveLength(0);
+    wrapper.unmount();
+  });
+});
+
 describe("selection identity regressions", () => {
   it.each([false, true])("keeps the latest citation within one answer (old failure: %s)", async (oldFails) => {
     const old = deferred(), latest = deferred();

@@ -16,7 +16,7 @@ class LeaseGuard:
         self.thread = Thread(target=self._renew, name="rag-lease-renewal", daemon=True)
 
     def _renew(self) -> None:
-        while not self.stopped.wait(max(0.01, self.seconds / 3)):
+        while not self.stopped.wait(max(0.01, min(0.25, self.seconds / 3))):
             try:
                 self.check()
             except Exception:
@@ -37,6 +37,12 @@ class LeaseGuard:
 
     def start(self) -> None:
         self.thread.start()
+
+    def poll(self) -> bool:
+        """Cheap parser polling; the renewal thread refreshes cancellation from the queue."""
+        if self.lost.is_set():
+            raise QueueLeaseError("INGEST_LEASE_LOST")
+        return self.cancelled.is_set()
 
     def stop(self) -> None:
         self.stopped.set()

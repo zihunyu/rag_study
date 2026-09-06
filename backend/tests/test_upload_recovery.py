@@ -21,7 +21,9 @@ class _FailingQueue:
 class _ExplodingParserRouter:
     revision = "exploding-parser:g1-test"
 
-    def parse(self, source_format: str, source: Path, document_version_id: str) -> Any:
+    def parse(
+        self, source_format: str, source: Path, document_version_id: str, *, cancel_check=None
+    ) -> Any:
         raise RuntimeError("simulated parser crash")
 
 

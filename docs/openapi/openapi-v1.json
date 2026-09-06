@@ -75,6 +75,13 @@
             "title": "Citations",
             "type": "array"
           },
+          "clarification_fields": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Clarification Fields",
+            "type": "array"
+          },
           "degraded": {
             "default": false,
             "title": "Degraded",

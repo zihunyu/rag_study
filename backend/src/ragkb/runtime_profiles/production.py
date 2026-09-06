@@ -23,6 +23,7 @@ from ragkb.adapters.model_http import (
     OpenAICompatibleBufferedGenerator,
     OpenAICompatibleClaimVerifier,
     OpenAICompatibleEmbeddingAdapter,
+    OpenAICompatibleQuestionAssessor,
     OpenAICompatibleRerankerAdapter,
 )
 from ragkb.adapters.mysql_control import MySQLControlPlaneAdapter
@@ -165,6 +166,11 @@ class ProductionRuntimeFactory:
             ),
             index=index,
             generator=generator,
+            question_assessor=OpenAICompatibleQuestionAssessor(
+                settings,
+                transport=generator_transport,
+                external_call_approved=settings.real_provider_calls_enabled,
+            ),
             verifier=verifier,
             indexing_sink=ZillizChunkIndexingSink(
                 index,

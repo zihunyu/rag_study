@@ -5,15 +5,22 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 
+from ragkb.application.question_assessment import ConservativeQuestionAssessor
 from ragkb.application.search import HybridSearchService
 from ragkb.contracts.ports import RetrievalReleasePort
+from ragkb.contracts.rag import QuestionAssessmentPort
+from ragkb.domain.errors import (
+    InvalidProviderResponse,
+    QuestionAssessmentFailed,
+    TransientProviderError,
+)
 from ragkb.domain.ids import new_uuid7
-from ragkb.domain.rag import Evidence, EvidencePackage
+from ragkb.domain.rag import Evidence, EvidencePackage, QuestionAssessment, QuestionDisposition
 from ragkb.domain.retrieval import SearchContext, SearchHit, SearchSource
 
 
 class SearchBackedEvidenceProvider:
-    revision = "search-backed-evidence:conflict-pool:v3"
+    revision = "search-backed-evidence:question-assessment:v4"
 
     def __init__(
         self,
@@ -29,6 +36,7 @@ class SearchBackedEvidenceProvider:
         verifier_revision: str = "",
         release_provider: RetrievalReleasePort | None = None,
         clock: Callable[[], float] = time.time,
+        question_assessor: QuestionAssessmentPort | None = None,
     ) -> None:
         self.search_service = search_service
         self.space_id = space_id
@@ -41,6 +49,7 @@ class SearchBackedEvidenceProvider:
         self.verifier_revision = verifier_revision
         self.release_provider = release_provider
         self.clock = clock
+        self.question_assessor = question_assessor or ConservativeQuestionAssessor()
 
     def build_package(
         self,
@@ -52,7 +61,38 @@ class SearchBackedEvidenceProvider:
         clearance_level: int = 0,
         space_id: str | None = None,
     ) -> EvidencePackage:
+        try:
+            assessment = self.question_assessor.assess(question)
+            if not isinstance(assessment, QuestionAssessment):
+                raise ValueError("QUESTION_ASSESSMENT_INVALID")
+        except TransientProviderError as error:
+            raise QuestionAssessmentFailed(
+                "QUESTION_ASSESSOR_UNAVAILABLE", retryable=True
+            ) from error
+        except (InvalidProviderResponse, ValueError) as error:
+            raise QuestionAssessmentFailed(
+                "QUESTION_ASSESSOR_PROTOCOL_INVALID", retryable=False
+            ) from error
         query_time = int(self.clock())
+        if assessment.disposition is not QuestionDisposition.ANSWERABLE:
+            return EvidencePackage(
+                rag_run_id=new_uuid7(),
+                tenant_id=tenant_id,
+                user_id=user_id,
+                query=question,
+                query_time_epoch=query_time,
+                index_generation_id="not_retrieved",
+                retrieval_revision=self.search_service.revision,
+                prompt_revision=self.prompt_revision,
+                model_revision=self.model_revision,
+                permission_revision=0,
+                evidence=(),
+                verifier_revision=self.verifier_revision,
+                disposition=assessment.disposition,
+                disposition_reason=assessment.reason_code,
+                clarification_fields=assessment.clarification_fields,
+                question_assessor_revision=self.question_assessor.revision,
+            )
         selected_space_id = space_id or self.space_id
         release = (
             self.release_provider.current_release(tenant_id, selected_space_id)
@@ -168,4 +208,6 @@ class SearchBackedEvidenceProvider:
             real_acceptance=result.real_acceptance,
             retrieval_health=result.retrieval_health,
             retrieval_warnings=result.warnings,
+            disposition_reason=assessment.reason_code,
+            question_assessor_revision=self.question_assessor.revision,
         )

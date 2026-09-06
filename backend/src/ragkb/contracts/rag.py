@@ -10,8 +10,15 @@ from ragkb.domain.rag import (
     Evidence,
     EvidencePackage,
     Feedback,
+    QuestionAssessment,
     VerificationResult,
 )
+
+
+class QuestionAssessmentPort(Protocol):
+    revision: str
+
+    def assess(self, question: str) -> QuestionAssessment: ...
 
 
 class EvidenceProviderPort(Protocol):

@@ -7,11 +7,13 @@ import multiprocessing
 import os
 import sys
 import tempfile
+import time
 from multiprocessing.connection import Connection
 from pathlib import Path
 
 from pydantic import TypeAdapter
 
+from ragkb.application.cancellation import check_cancelled
 from ragkb.contracts.ports import ParsingDeferred
 from ragkb.domain.documents import CanonicalDocument
 from ragkb.engineering_security.process_limits import limit_native_process
@@ -54,6 +56,7 @@ class IsolatedNativeParser:
         self.source_format, self.timeout = source_format, timeout
 
     def parse(self, source: Path, document_version_id: str) -> CanonicalDocument:
+        check_cancelled()
         context = multiprocessing.get_context("spawn")
         temporary = tempfile.TemporaryDirectory(prefix="rag-native-parser-")
         receiver, sender = context.Pipe(duplex=False)
@@ -72,9 +75,16 @@ class IsolatedNativeParser:
         try:
             process.start()
             sender.close()
-            if not receiver.poll(self.timeout):
-                raise ParsingDeferred("NATIVE_PARSE_TIMEOUT", "native parser timed out")
+            deadline = time.monotonic() + self.timeout
+            while True:
+                check_cancelled()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ParsingDeferred("NATIVE_PARSE_TIMEOUT", "native parser timed out")
+                if receiver.poll(min(0.1, remaining)):
+                    break
             payload = json.loads(receiver.recv_bytes(maxlength=64 * 1024**2))
+            check_cancelled()
             if "error" in payload:
                 raise ParsingDeferred(payload["error"], "native parser could not process content")
             document = payload["document"]
