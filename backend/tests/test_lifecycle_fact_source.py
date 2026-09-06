@@ -45,9 +45,9 @@ def _upload(
 ) -> tuple[str, str, str]:
     content = f"fact source {key}".encode()
     create_path = (
-        f"/api/v1/documents/{document_id}/versions/upload-sessions"
+        f"/api/documents/{document_id}/versions/upload-sessions"
         if document_id
-        else f"/api/v1/spaces/{space_id}/upload-sessions"
+        else f"/api/spaces/{space_id}/upload-sessions"
     )
     created = client.post(
         create_path,
@@ -63,12 +63,12 @@ def _upload(
         },
     )
     uploaded = client.put(
-        f"/api/v1/upload-sessions/{created.json()['upload_session_id']}/content",
+        f"/api/upload-sessions/{created.json()['upload_session_id']}/content",
         headers={"If-Match": created.headers["etag"]},
         content=content,
     )
     completed = client.post(
-        f"/api/v1/upload-sessions/{created.json()['upload_session_id']}:complete",
+        f"/api/upload-sessions/{created.json()['upload_session_id']}:complete",
         headers={"If-Match": uploaded.headers["etag"], "Idempotency-Key": f"complete-{key}"},
     ).json()
     return completed["document_id"], completed["document_version_id"], completed["job_id"]
@@ -86,7 +86,7 @@ def _process_next(components, client: TestClient, version_id: str) -> None:
     ).run_once()
     assert (
         client.post(
-            f"/api/v1/document-versions/{version_id}/review",
+            f"/api/document-versions/{version_id}/review",
             headers={"Idempotency-Key": f"approve-{version_id}"},
             json={
                 "decision": "APPROVED",
@@ -107,9 +107,8 @@ def _client_for_roles(components, *roles: str) -> TestClient:
         tenant_id=components.tenant_id,
         user_id="test-user",
         roles=tuple(roles),
-        scope_tokens=tuple(f"role:{role}" for role in roles) + (
-            (f"space:{components.space_id}:manage",) if "knowledge_maintainer" in roles else ()
-        ),
+        scope_tokens=tuple(f"role:{role}" for role in roles)
+        + ((f"space:{components.space_id}:manage",) if "knowledge_maintainer" in roles else ()),
         auth_mode="test",
     )
     return TestClient(
@@ -129,19 +128,19 @@ def test_draft_is_hidden_from_reader_but_available_to_management_until_publish(
     record = components.lifecycle_store.documents[document_id]
     assert record.lifecycle_state is LifecycleState.DRAFT
     assert record.visible is False
-    assert reader.get(f"/api/v1/documents/{document_id}").status_code == 404
-    assert reader.get(f"/api/v1/documents/{document_id}/versions").status_code == 404
-    assert maintainer.get(f"/api/v1/documents/{document_id}/preview").status_code == 200
-    assert maintainer.get(f"/api/v1/ingestion-jobs/{job_id}").status_code == 200
+    assert reader.get(f"/api/documents/{document_id}").status_code == 404
+    assert reader.get(f"/api/documents/{document_id}/versions").status_code == 404
+    assert maintainer.get(f"/api/documents/{document_id}/preview").status_code == 200
+    assert maintainer.get(f"/api/ingestion-jobs/{job_id}").status_code == 200
     _process_next(components, admin, version_id)
 
     published = admin.post(
-        f"/api/v1/document-versions/{version_id}:publish",
+        f"/api/document-versions/{version_id}:publish",
         headers={"Idempotency-Key": "publish-draft"},
     )
 
     assert published.status_code == 200
-    assert reader.get(f"/api/v1/documents/{document_id}").status_code == 200
+    assert reader.get(f"/api/documents/{document_id}").status_code == 200
 
 
 def test_publish_second_version_and_rollback_keep_fact_source_atomic_and_restart_safe(
@@ -152,10 +151,10 @@ def test_publish_second_version_and_rollback_keep_fact_source_atomic_and_restart
     document_id, first_version, _ = _upload(client, components.space_id)
     _process_next(components, client, first_version)
     client.post(
-        f"/api/v1/document-versions/{first_version}:publish",
+        f"/api/document-versions/{first_version}:publish",
         headers={"Idempotency-Key": "publish-v1"},
     )
-    document_etag = client.get(f"/api/v1/documents/{document_id}").headers["etag"]
+    document_etag = client.get(f"/api/documents/{document_id}").headers["etag"]
     _, second_version, _ = _upload(
         client,
         components.space_id,
@@ -166,11 +165,11 @@ def test_publish_second_version_and_rollback_keep_fact_source_atomic_and_restart
     _process_next(components, client, second_version)
 
     second = client.post(
-        f"/api/v1/document-versions/{second_version}:publish",
+        f"/api/document-versions/{second_version}:publish",
         headers={"Idempotency-Key": "publish-v2"},
     )
     rollback = client.post(
-        f"/api/v1/documents/{document_id}:rollback",
+        f"/api/documents/{document_id}:rollback",
         headers={"Idempotency-Key": "rollback-v1"},
         json={"version_id": first_version},
     )
@@ -229,14 +228,14 @@ def test_draft_delete_is_irreversible_and_repeated_delete_preserves_cleanup(
     client = TestClient(create_app(components))
     document_id, version_id, _ = _upload(client, components.space_id)
     deleted = client.delete(
-        f"/api/v1/documents/{document_id}", headers={"Idempotency-Key": "delete-one"}
+        f"/api/documents/{document_id}", headers={"Idempotency-Key": "delete-one"}
     )
     cleaned = client.post(
-        f"/api/v1/documents/{document_id}/cleanup/local_file:run",
+        f"/api/documents/{document_id}/cleanup/local_file:run",
         headers={"Idempotency-Key": "cleanup"},
     )
     repeated = client.delete(
-        f"/api/v1/documents/{document_id}", headers={"Idempotency-Key": "delete-two"}
+        f"/api/documents/{document_id}", headers={"Idempotency-Key": "delete-two"}
     )
 
     assert deleted.status_code == cleaned.status_code == repeated.status_code == 200
@@ -248,22 +247,27 @@ def test_draft_delete_is_irreversible_and_repeated_delete_preserves_cleanup(
 
     commands = (
         client.post(
-            f"/api/v1/document-versions/{version_id}:publish",
+            f"/api/document-versions/{version_id}:publish",
             headers={"Idempotency-Key": "publish-after-delete"},
         ),
         client.post(
-            f"/api/v1/documents/{document_id}:rollback",
+            f"/api/documents/{document_id}:rollback",
             headers={"Idempotency-Key": "rollback-after-delete"},
             json={"version_id": version_id},
         ),
         client.put(
-            f"/api/v1/resources/document/{document_id}/permissions",
+            f"/api/resources/document/{document_id}/permissions",
             headers={"Idempotency-Key": "acl-after-delete", "If-Match": '"1"'},
-            json={"security_projection": {"visibility": "TENANT", "classification_level": 0,
-                                          "acl_scope_tokens": []}},
+            json={
+                "security_projection": {
+                    "visibility": "TENANT",
+                    "classification_level": 0,
+                    "acl_scope_tokens": [],
+                }
+            },
         ),
         client.post(
-            f"/api/v1/documents/{document_id}:revoke",
+            f"/api/documents/{document_id}:revoke",
             headers={"Idempotency-Key": "revoke-after-delete"},
         ),
     )

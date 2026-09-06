@@ -246,7 +246,7 @@ def test_source_map_is_available_in_search_api(tmp_path, monkeypatch):
         ),
         security_watermark=0,
     )
-    response = TestClient(create_app(components)).post("/api/v1/search", json={"query": "保修期"})
+    response = TestClient(create_app(components)).post("/api/search", json={"query": "保修期"})
     assert response.status_code == 200
     assert len(response.json()["hits"]) == 1
     source = response.json()["hits"][0]["duplicate_sources"][0]

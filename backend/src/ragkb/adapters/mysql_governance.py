@@ -34,13 +34,12 @@ def _empty() -> dict[str, Any]:
 
 
 class MySQLGovernanceRepository:
-    revision = "mysql-governance-normalized:g5-g6-v3"
+    revision = "mysql-governance-normalized"
 
     def __init__(self, control: MySQLControlPlaneAdapter, tenant_id: str) -> None:
         self.control = control
         self.tenant_id = tenant_id
-        self._entities = MySQLNormalizedEntityStore("governance_entities_v3", tenant_id)
-        self._legacy_checked = False
+        self._entities = MySQLNormalizedEntityStore("governance_entities", tenant_id)
 
     @staticmethod
     def _hashed_id(kind: str, key: str) -> str:
@@ -124,21 +123,7 @@ class MySQLGovernanceRepository:
         }
         return state
 
-    def _load_legacy(self, cursor: Any) -> dict[str, Any]:
-        cursor.execute(
-            "SELECT state_json FROM governance_state_v2 WHERE tenant_id=%s", (self.tenant_id,)
-        )
-        row = cursor.fetchone()
-        if row is None:
-            return _empty()
-        value = row["state_json"] if isinstance(row, dict) else row[0]
-        loaded = json.loads(value) if isinstance(value, str) else value
-        if not isinstance(loaded, dict):
-            raise ValueError("MYSQL_GOVERNANCE_STATE_INVALID")
-        return loaded
-
     def _mutate[Result](self, callback: Callable[[dict[str, Any]], Result]) -> Result:
-        self._ensure_legacy_migrated()
         connection = self.control.connect()
         try:
             cursor = connection.cursor()
@@ -161,7 +146,6 @@ class MySQLGovernanceRepository:
             connection.close()
 
     def _read(self) -> dict[str, Any]:
-        self._ensure_legacy_migrated()
 
         def load(kind: str) -> Any:
             connection = self.control.connect()
@@ -172,27 +156,6 @@ class MySQLGovernanceRepository:
                 connection.close()
 
         return LazyAggregateState(_empty, load)
-
-    def _ensure_legacy_migrated(self) -> None:
-        if self._legacy_checked:
-            return
-        connection = self.control.connect()
-        try:
-            cursor = connection.cursor()
-            state = self._load_legacy(cursor)
-            if any(state.values()):
-                before = self._entities.load(cursor)
-                self._entities.sync(cursor, before, {**self._to_entities(state), **before})
-                cursor.execute(
-                    "DELETE FROM governance_state_v2 WHERE tenant_id=%s", (self.tenant_id,)
-                )
-            connection.commit()
-            self._legacy_checked = True
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
 
     def record_event(
         self, trace_id: str, event_type: str, severity: str, payload: dict[str, object]
@@ -232,7 +195,7 @@ class MySQLGovernanceRepository:
             cursor = connection.cursor()
             cursor.execute(
                 "SELECT JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.severity')) AS severity, "
-                "COUNT(*) AS total FROM governance_entities_v3 "
+                "COUNT(*) AS total FROM governance_entities "
                 "WHERE tenant_id=%s AND entity_type='events' GROUP BY severity",
                 (self.tenant_id,),
             )

@@ -107,7 +107,7 @@ def test_mysql_upload_addressed_rows_review_gate_restart_and_failures(tmp_path):
     repository.mark_version_processing(version)
     repository.mark_version_quarantined(version, "parser")
     repository.mark_version_cancelled(version)
-    control.fail_match = "UPDATE upload_entities_v3"
+    control.fail_match = "UPDATE upload_entities"
     with pytest.raises(ConnectionError):
         repository.mark_version_processing(version)
     control.fail_match = None
@@ -130,7 +130,7 @@ def test_mysql_stale_lifecycle_does_not_delete_newer_rows_or_restore_revoked(tmp
     actual.reload()
     assert "b" in actual.documents
     assert not actual.is_accessible("a")
-    assert not any("DELETE FROM lifecycle_entities_v3" in sql for sql, _ in control.statements)
+    assert not any("DELETE FROM lifecycle_entities" in sql for sql, _ in control.statements)
 
 
 def test_mysql_run_reference_feedback_round_trip(tmp_path):
@@ -148,7 +148,7 @@ def test_mysql_run_reference_feedback_round_trip(tmp_path):
     signer = HMACReferenceSigner(SecretStr("a-valid-reference-test-key-32bytes"), reference)
     url = signer.source_url(answer.rag_run_id, "E1", "tenant-1", "user-1", _evidence().document_id)
     parts = url.split("/")
-    assert signer.resolve(parts[4], parts[6], "tenant-1", "user-1") == (answer.rag_run_id, "E1")
+    assert signer.resolve(parts[-4], parts[-2], "tenant-1", "user-1") == (answer.rag_run_id, "E1")
     assert reference.revoke_document(_evidence().document_id) >= 1
 
 

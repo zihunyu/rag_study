@@ -15,29 +15,26 @@ class SQLControl:
         self.fail_match = None
         with sqlite3.connect(path) as connection:
             for kind in ("upload", "governance", "lifecycle"):
-                connection.execute(
-                    f"CREATE TABLE {kind}_state_v2(tenant_id TEXT PRIMARY KEY, state_json TEXT)"
-                )
-                connection.execute(f"""CREATE TABLE {kind}_entities_v3(
+                connection.execute(f"""CREATE TABLE {kind}_entities(
                     tenant_id TEXT, entity_type TEXT, entity_id TEXT, logical_key TEXT,
                     parent_id TEXT, ordinal INTEGER, payload_json TEXT, entity_revision INTEGER,
                     created_at TEXT, updated_at TEXT, PRIMARY KEY(tenant_id,
                     entity_type,
                     entity_id))""")
             connection.executescript("""
-                CREATE TABLE rag_run_documents_v2(run_id TEXT PRIMARY KEY,
+                CREATE TABLE rag_run_documents(run_id TEXT PRIMARY KEY,
                     tenant_id TEXT,
                     user_id TEXT,
                     status TEXT,
                     package_json TEXT,
                     result_json TEXT,
                     created_at TEXT);
-                CREATE TABLE rag_feedback_v2(feedback_id TEXT PRIMARY KEY,
+                CREATE TABLE rag_feedback(feedback_id TEXT PRIMARY KEY,
                     run_id TEXT,
                     user_id TEXT,
                     feedback_json TEXT,
                     created_at TEXT);
-                CREATE TABLE reference_tokens_v2(opaque_id TEXT PRIMARY KEY,
+                CREATE TABLE reference_tokens(opaque_id TEXT PRIMARY KEY,
                     token_kind TEXT,
                     tenant_id TEXT,
                     user_id TEXT,
@@ -47,7 +44,7 @@ class SQLControl:
                     expires_at REAL,
                     revoked INTEGER,
                     created_at TEXT);
-                CREATE TABLE publication_outbox_v3(tenant_id TEXT, operation TEXT,
+                CREATE TABLE publication_outbox(tenant_id TEXT, operation TEXT,
                     idempotency_key TEXT,
                     document_id TEXT,
                     target_version_id TEXT,

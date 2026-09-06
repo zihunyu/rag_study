@@ -12,10 +12,10 @@ clearance、有效期、SERVING、当前版本和权限修订都必须匹配。�
 
 | 用途 | GET 路径 |
 | --- | --- |
-| 管理文档列表 | `/api/v1/spaces/{space_id}/documents/preview` |
-| 管理文档详情及 ETag | `/api/v1/documents/{document_id}/preview` |
-| 全部版本 | `/api/v1/documents/{document_id}/versions/preview` |
-| 指定版本分片 | `/api/v1/document-versions/{version_id}/chunks/preview` |
+| 管理文档列表 | `/api/spaces/{space_id}/documents/preview` |
+| 管理文档详情及 ETag | `/api/documents/{document_id}/preview` |
+| 全部版本 | `/api/documents/{document_id}/versions/preview` |
+| 指定版本分片 | `/api/document-versions/{version_id}/chunks/preview` |
 
 这些入口要求同租户的 `admin`，或同时具有 `knowledge_maintainer` 角色和目标知识库
 `space:{space_id}:manage` scope。预览不能访问已删除文档。质量报告和版本上传等

@@ -9,24 +9,12 @@ from typing import Any
 from ragkb.adapters.mysql_control import MySQLControlPlaneAdapter
 from ragkb.config import EnvSettings
 from ragkb.infrastructure.mysql_migrations import (
-    MYSQL_G3_MIGRATIONS,
     MYSQL_MIGRATIONS,
+    PROJECT_TABLES,
     apply_mysql_migrations,
 )
 
 MYSQL_APPROVAL = "MYSQL_DATABASE_CREATE_AND_MIGRATE_APPROVED"
-PROJECT_TABLES = frozenset(
-    {
-        "schema_migrations",
-        "index_profiles",
-        "index_generations",
-        "retrieval_releases",
-        "index_entries",
-        "retrieval_outbox",
-        "retrieval_chunk_projections",
-        "retrieval_release_state",
-    }
-)
 
 
 class MySQLProvisionError(RuntimeError):
@@ -163,7 +151,7 @@ def provision_mysql_control_plane(
             raise MySQLProvisionError("validate_database", error) from error
     finally:
         database_connection.close()
-    planned_migration_count = len((*MYSQL_MIGRATIONS, *MYSQL_G3_MIGRATIONS))
+    planned_migration_count = len(MYSQL_MIGRATIONS)
     if not (
         second["applied_count"] == 0
         and second["skipped_count"] == planned_migration_count

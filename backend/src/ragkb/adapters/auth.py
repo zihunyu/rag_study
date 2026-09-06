@@ -23,7 +23,7 @@ class AuthorizationError(RuntimeError):
 
 
 class LocalSingleUserAuthenticator:
-    revision = "local-single-user-auth:g3-dev-v1"
+    revision = "local-single-user-auth"
 
     def __init__(self, settings: EnvSettings, *, tenant_id: str | None = None) -> None:
         self.settings = settings
@@ -45,7 +45,7 @@ class LocalSingleUserAuthenticator:
 
 
 class OIDCJWTAuthenticator:
-    revision = "oidc-jwt-auth:g3-v1"
+    revision = "oidc-jwt-auth"
 
     def __init__(
         self,
@@ -123,7 +123,7 @@ def unavailable_oidc_decoder(token: str, issuer: str, audience: str) -> Mapping[
 class OIDCDiscoveryJWTDecoder:
     """HTTPS discovery and cached JWKS verification for production bearer tokens."""
 
-    revision = "oidc-discovery-jwks-pyjwt:v1"
+    revision = "oidc-discovery-jwks-pyjwt"
 
     def __init__(self, settings: EnvSettings) -> None:
         self.settings = settings

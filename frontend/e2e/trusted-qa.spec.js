@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 
 test("ask progress releases the verified answer and citation", async ({ page }) => {
-  await page.route("**/api/v1/ask:stream", async (route) => {
+  await page.route("**/api/ask:stream", async (route) => {
     await route.fulfill({
       status: 200,
       contentType: "text/event-stream",
@@ -13,7 +13,7 @@ test("ask progress releases the verified answer and citation", async ({ page }) 
         'event: progress\ndata: {"stage":"verified"}\n\n' +
         'event: result\ndata: {"rag_run_id":"run-1","status":"answered",' +
         '"answer":"保修期为三年。","citations":[{"evidence_id":"E1",' +
-        '"source_url":"/api/v1/source"}],"verified":true}\n\n',
+        '"source_url":"/api/source"}],"verified":true}\n\n',
     });
   });
   await page.goto("/");
@@ -29,9 +29,9 @@ test("upload, worker indexing, publish, ask, and citation use the real local bac
 }, testInfo) => {
   const runtimeConfig = await page.request.get(`http://127.0.0.1:${process.env.RAGKB_E2E_WEB_PORT || "4173"}/runtime-config.js`);
   expect(runtimeConfig.ok()).toBeTruthy();
-  expect(await runtimeConfig.text()).toContain(`http://127.0.0.1:${process.env.RAGKB_E2E_API_PORT || "8000"}/api/v1`);
+  expect(await runtimeConfig.text()).toContain(`http://127.0.0.1:${process.env.RAGKB_E2E_API_PORT || "8000"}/api`);
   const policy = testInfo.outputPath("policy.md");
-  const content = Buffer.from("# Product policy\nWarranty is three years.\n", "utf8");
+  const content = Buffer.from("# 产品政策\nThinkPad P16 Gen 3 21FA 的保修期为三年。\n", "utf8");
   writeFileSync(policy, content);
   await page.goto("/");
   await page.getByRole("button", { name: "知识库", exact: true }).click();
@@ -57,15 +57,18 @@ test("upload, worker indexing, publish, ask, and citation use the real local bac
   await expect(page.getByText("解析入库完成", { exact: false })).toBeVisible();
   await expect(page.getByTestId("document-list")).toContainText("policy.md");
   await page.getByTestId("view-chunks").click();
-  await expect(page.getByTestId("chunk-panel")).toContainText("Warranty is three years.");
+  await expect(page.getByTestId("chunk-panel")).toContainText("ThinkPad P16 Gen 3 21FA 的保修期为三年。");
   await page.getByPlaceholder("复核说明").fill("browser e2e");
   await page.getByRole("button", { name: "提交复核", exact: true }).click();
   await page.getByRole("button", { name: "发布文档", exact: true }).click();
   await expect(page.getByTestId("document-list")).toContainText("SERVING");
 
   await page.getByRole("button", { name: "知识问答" }).click();
-  await page.locator("textarea").fill("What is the warranty period?");
+  await page.locator("textarea").fill("ThinkPad 21FA 保修期多久？");
   await page.getByRole("button", { name: "从此知识库回答" }).click();
-  await expect(page.getByText("根据已验证证据，设备保修期为三年。")).toBeVisible();
-  await expect(page.getByRole("link", { name: /E1/ })).toBeVisible();
+  await expect(page.getByText("设备保修期为三年。", { exact: false })).toBeVisible();
+  const citation = page.getByRole("link", { name: /E1/ }).first();
+  await expect(citation).toBeVisible();
+  await citation.click();
+  await expect(page.locator(".source-content")).toContainText("保修期为三年");
 });

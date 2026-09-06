@@ -19,7 +19,7 @@ def _pymysql_connect(**kwargs: Any) -> Any:
 
 
 class MySQLControlPlaneAdapter:
-    revision = "mysql-control-plane:pymysql-pool:g4-v2"
+    revision = "mysql-control-plane:pymysql-pool"
 
     def __init__(
         self,

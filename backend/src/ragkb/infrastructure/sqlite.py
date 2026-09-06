@@ -1,15 +1,16 @@
-"""Shared SQLite connection and G1 schema initialization."""
+"""Shared SQLite connection and current schema initialization."""
 
 from __future__ import annotations
 
 import sqlite3
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
 from ragkb.infrastructure.ingestion_fencing import check_sqlite_fence
 
-SCHEMA_VERSION = 19
+SCHEMA_REVISION = "ragkb-current-schema"
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS review_projection_outbox (
@@ -32,6 +33,7 @@ CREATE TABLE IF NOT EXISTS job_queue (
     request_hash TEXT NOT NULL,
     state TEXT NOT NULL,
     attempt INTEGER NOT NULL DEFAULT 0,
+    fence_token INTEGER NOT NULL DEFAULT 0,
     max_attempts INTEGER NOT NULL,
     available_at REAL NOT NULL,
     lease_owner TEXT,
@@ -138,8 +140,8 @@ CREATE TABLE IF NOT EXISTS chunks (
     content_sha256 TEXT NOT NULL,
     token_count INTEGER NOT NULL,
     kind TEXT NOT NULL DEFAULT 'paragraph',
-    chunking_revision TEXT NOT NULL DEFAULT 'node-per-chunk:g1-v1',
-    tokenizer_id TEXT NOT NULL DEFAULT 'whitespace-estimate:g1-v1',
+    chunking_revision TEXT NOT NULL DEFAULT 'node-per-chunk',
+    tokenizer_id TEXT NOT NULL DEFAULT 'whitespace-estimate',
     status TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS local_search_index (
@@ -468,7 +470,7 @@ CREATE TABLE IF NOT EXISTS audit_events (
     action TEXT NOT NULL,
     resource_id TEXT NOT NULL,
     trace_id TEXT NOT NULL,
-    governance_revision TEXT NOT NULL DEFAULT 'lifecycle-orchestration:g3-v1',
+    governance_revision TEXT NOT NULL DEFAULT 'lifecycle-orchestration',
     previous_hash TEXT NOT NULL,
     event_hash TEXT NOT NULL UNIQUE
 );
@@ -506,37 +508,6 @@ CREATE INDEX IF NOT EXISTS idx_reference_document
     ON reference_tokens(document_id, revoked);
 """
 
-CHUNK_V2_COLUMNS = {
-    "kind": "kind TEXT NOT NULL DEFAULT 'paragraph'",
-    "chunking_revision": ("chunking_revision TEXT NOT NULL DEFAULT 'node-per-chunk:g1-v1'"),
-    "tokenizer_id": "tokenizer_id TEXT NOT NULL DEFAULT 'whitespace-estimate:g1-v1'",
-}
-AUDIT_V6_COLUMNS = {
-    "governance_revision": (
-        "governance_revision TEXT NOT NULL DEFAULT 'lifecycle-orchestration:g3-v1'"
-    )
-}
-LIFECYCLE_V7_COLUMNS = {
-    "tenant_id": "tenant_id TEXT NOT NULL DEFAULT 'local'",
-    "version_history_json": "version_history_json TEXT NOT NULL DEFAULT '[]'",
-}
-UPLOAD_SESSION_V10_COLUMNS = {
-    "target_document_id": "target_document_id TEXT",
-    "target_document_row_version": "target_document_row_version INTEGER",
-}
-UAT_V14_COLUMNS = {
-    "pilot_id": "pilot_id TEXT NOT NULL DEFAULT ''",
-    "step_results_json": "step_results_json TEXT NOT NULL DEFAULT '[]'",
-    "row_version": "row_version INTEGER NOT NULL DEFAULT 1",
-}
-OBSERVATION_V14_COLUMNS = {"row_version": "row_version INTEGER NOT NULL DEFAULT 1"}
-DEFECT_V14_COLUMNS = {"row_version": "row_version INTEGER NOT NULL DEFAULT 1"}
-INCIDENT_V14_COLUMNS = {"row_version": "row_version INTEGER NOT NULL DEFAULT 1"}
-DOCUMENT_REVIEW_V15_COLUMNS = {
-    "security_revision": "security_revision TEXT",
-    "security_projection_json": "security_projection_json TEXT",
-}
-
 
 class SQLiteDatabase:
     def __init__(self, path: Path) -> None:
@@ -545,61 +516,32 @@ class SQLiteDatabase:
     def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as connection:
-            connection.executescript(SCHEMA_SQL)
-            existing_chunk_columns = {
-                str(row["name"])
-                for row in connection.execute("PRAGMA table_info(chunks)").fetchall()
+            # Backend and Worker may initialize the same fresh database together.
+            connection.execute("BEGIN IMMEDIATE")
+            tables = {
+                row["name"]
+                for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+                if not row["name"].startswith("sqlite_")
             }
-            for name, definition in CHUNK_V2_COLUMNS.items():
-                if name not in existing_chunk_columns:
-                    connection.execute(f"ALTER TABLE chunks ADD COLUMN {definition}")  # noqa: S608
-            existing_audit_columns = {
-                str(row["name"])
-                for row in connection.execute("PRAGMA table_info(audit_events)").fetchall()
-            }
-            for name, definition in AUDIT_V6_COLUMNS.items():
-                if name not in existing_audit_columns:
-                    connection.execute(  # noqa: S608
-                        f"ALTER TABLE audit_events ADD COLUMN {definition}"
-                    )
-            existing_lifecycle_columns = {
-                str(row["name"])
-                for row in connection.execute("PRAGMA table_info(lifecycle_records)").fetchall()
-            }
-            for name, definition in LIFECYCLE_V7_COLUMNS.items():
-                if name not in existing_lifecycle_columns:
-                    connection.execute(  # noqa: S608
-                        f"ALTER TABLE lifecycle_records ADD COLUMN {definition}"
-                    )
-            existing_upload_columns = {
-                str(row["name"])
-                for row in connection.execute("PRAGMA table_info(upload_sessions)").fetchall()
-            }
-            for name, definition in UPLOAD_SESSION_V10_COLUMNS.items():
-                if name not in existing_upload_columns:
-                    connection.execute(  # noqa: S608
-                        f"ALTER TABLE upload_sessions ADD COLUMN {definition}"
-                    )
-            for table, columns in (
-                ("job_queue", {"fence_token": "fence_token INTEGER NOT NULL DEFAULT 0"}),
-                ("uat_cases", UAT_V14_COLUMNS),
-                ("observation_windows", OBSERVATION_V14_COLUMNS),
-                ("governance_defects", DEFECT_V14_COLUMNS),
-                ("incidents", INCIDENT_V14_COLUMNS),
-                ("document_reviews", DOCUMENT_REVIEW_V15_COLUMNS),
-            ):
-                existing = {
-                    str(row["name"])
-                    for row in connection.execute(f"PRAGMA table_info({table})").fetchall()  # noqa: S608
-                }
-                for name, definition in columns.items():
-                    if name not in existing:
-                        connection.execute(  # noqa: S608
-                            f"ALTER TABLE {table} ADD COLUMN {definition}"
-                        )
+            if tables:
+                revision = (
+                    connection.execute(
+                        "SELECT value FROM schema_metadata WHERE key = 'schema_revision'"
+                    ).fetchone()
+                    if "schema_metadata" in tables
+                    else None
+                )
+                if revision is None or revision["value"] != SCHEMA_REVISION:
+                    raise RuntimeError("SQLITE_SCHEMA_UNSUPPORTED_USE_NEW_DATABASE")
+            statement = ""
+            for line in SCHEMA_SQL.splitlines(keepends=True):
+                statement += line
+                if sqlite3.complete_statement(statement):
+                    connection.execute(statement)
+                    statement = ""
             connection.execute(
-                "INSERT OR REPLACE INTO schema_metadata(key, value) VALUES('schema_version', ?)",
-                (str(SCHEMA_VERSION),),
+                "INSERT OR IGNORE INTO schema_metadata(key, value) VALUES('schema_revision', ?)",
+                (SCHEMA_REVISION,),
             )
             connection.commit()
 
@@ -607,10 +549,23 @@ class SQLiteDatabase:
     def connect(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self.path, timeout=10, isolation_level=None)
         connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA journal_mode = WAL")
-        connection.execute("PRAGMA busy_timeout = 10000")
         try:
+            connection.execute("PRAGMA busy_timeout = 10000")
+            # Concurrent first opens can race while switching the journal mode;
+            # SQLite may report SQLITE_BUSY immediately despite busy_timeout.
+            deadline = time.monotonic() + 10
+            while True:
+                try:
+                    connection.execute("PRAGMA journal_mode = WAL")
+                    break
+                except sqlite3.OperationalError as error:
+                    if (
+                        error.sqlite_errorcode != sqlite3.SQLITE_BUSY
+                        or time.monotonic() >= deadline
+                    ):
+                        raise
+                    time.sleep(0.01)
+            connection.execute("PRAGMA foreign_keys = ON")
             yield connection
         finally:
             connection.close()

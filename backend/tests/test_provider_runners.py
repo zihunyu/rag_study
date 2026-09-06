@@ -903,7 +903,7 @@ def test_embedding_budget_snapshot_and_network_guards_precede_calls(tmp_path: Pa
     assert network.calls == []
 
 
-def test_dashscope_v4_batch_11_fails_before_network_or_checkpoint(tmp_path: Path) -> None:
+def test_dashscope_embedding_batch_11_fails_before_network_or_checkpoint(tmp_path: Path) -> None:
     transport = _EmbeddingTransport(dimension=3)
     checkpoint_path = tmp_path / "must-not-exist.json"
     contract = embedding_provider_contract(
@@ -922,7 +922,7 @@ def test_dashscope_v4_batch_11_fails_before_network_or_checkpoint(tmp_path: Path
     assert not checkpoint_path.exists()
 
 
-def test_dashscope_v4_batch_10_uses_67_batches_and_new_attempt_checkpoint(
+def test_dashscope_embedding_batch_10_uses_67_batches_and_new_attempt_checkpoint(
     tmp_path: Path,
 ) -> None:
     contract = embedding_provider_contract(

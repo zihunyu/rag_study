@@ -57,7 +57,7 @@ class MinerUTokenLease(AbstractContextManager["MinerUTokenLease"]):
 
 
 class MinerUTokenPool[ResultT]:
-    revision = "mineru-token-pool:v1"
+    revision = "mineru-token-pool"
 
     def __init__(
         self,

@@ -8,7 +8,7 @@ from ragkb.infrastructure.sqlite import SQLiteDatabase
 
 
 class SQLitePublicationReadiness:
-    revision = "sqlite-publication-readiness:g3-v1"
+    revision = "sqlite-publication-readiness"
 
     def __init__(self, database: SQLiteDatabase) -> None:
         self.database = database

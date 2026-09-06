@@ -49,7 +49,7 @@ def _result(data: dict[str, Any]) -> AskResult:
 
 
 class SQLiteRAGRunRepository:
-    revision = "sqlite-rag-run:g3-v1"
+    revision = "sqlite-rag-run"
 
     def __init__(self, database: SQLiteDatabase) -> None:
         self.database = database

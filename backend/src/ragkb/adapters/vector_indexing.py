@@ -121,7 +121,7 @@ class IndexSagaPort(Protocol):
 class ZillizSafeProjectionWriter:
     """Bounded, idempotent projection batches with retryable failure context."""
 
-    revision = "zilliz-batch-writer:g2-v2"
+    revision = "zilliz-batch-writer"
 
     @staticmethod
     def _matches(expected: Any, actual: Any) -> bool:
@@ -264,7 +264,7 @@ class ZillizSafeProjectionWriter:
 class ZillizChunkIndexingSink:
     """Embed chunks, batch them to a vector DB, and persist display projections."""
 
-    revision = "zilliz-chunk-indexing-sink:v1"
+    revision = "zilliz-chunk-indexing-sink"
 
     def __init__(
         self,

@@ -26,14 +26,14 @@ class ReferenceStorePort(Protocol):
 
 
 class HMACReferenceSigner:
-    revision = "hmac-reference:g3-v2"
+    revision = "hmac-reference"
 
     def __init__(
         self,
         key: SecretStr | Mapping[str, SecretStr],
         store: ReferenceStorePort,
         *,
-        active_kid: str = "local-v1",
+        active_kid: str = "local",
         ttl_seconds: int = 900,
         clock: Callable[[], float] = time.time,
     ) -> None:
@@ -87,7 +87,7 @@ class HMACReferenceSigner:
                 "document_id": document_id,
             }
         )
-        return f"/api/v1/rag-runs/{run_token}/evidence/{evidence_token}/source"
+        return f"/api/rag-runs/{run_token}/evidence/{evidence_token}/source"
 
     def _verify(
         self,
@@ -98,13 +98,9 @@ class HMACReferenceSigner:
     ) -> dict[str, Any]:
         try:
             parts = token.split(".")
-            if len(parts) == 3:
-                kid, opaque_id, encoded_signature = parts
-            elif len(parts) == 2:
-                kid = self._active_kid
-                opaque_id, encoded_signature = parts
-            else:
+            if len(parts) != 3:
                 raise ValueError("invalid reference token parts")
+            kid, opaque_id, encoded_signature = parts
             key = self._keys.get(kid)
             if key is None:
                 raise ValueError("unknown reference key ID")

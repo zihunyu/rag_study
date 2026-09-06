@@ -23,14 +23,14 @@ from ragkb.domain.lifecycle import (
 
 
 class MySQLLifecycleStore(InMemoryLifecycleStore):
-    revision = "mysql-lifecycle-normalized-outbox:g4-v3"
+    revision = "mysql-lifecycle-normalized-outbox"
     durable_publication_intents = True
 
     def __init__(self, control: MySQLControlPlaneAdapter, tenant_id: str) -> None:
         super().__init__()
         self.control = control
         self.tenant_id = tenant_id
-        self._entities = MySQLNormalizedEntityStore("lifecycle_entities_v3", tenant_id)
+        self._entities = MySQLNormalizedEntityStore("lifecycle_entities", tenant_id)
         self._loaded_entities: EntityMap = {}
         self._committed_state = self.snapshot_state()
 
@@ -185,20 +185,7 @@ class MySQLLifecycleStore(InMemoryLifecycleStore):
             cursor = connection.cursor()
             entities = self._entities.load(cursor)
             self._loaded_entities = entities
-            if entities:
-                loaded = self._from_entities(entities)
-            else:
-                cursor.execute(
-                    "SELECT state_json FROM lifecycle_state_v2 WHERE tenant_id=%s",
-                    (self.tenant_id,),
-                )
-                row = cursor.fetchone()
-                if row is None:
-                    self._apply_loaded({})
-                    self._committed_state = self.snapshot_state()
-                    return
-                value = row["state_json"] if isinstance(row, dict) else row[0]
-                loaded = json.loads(value) if isinstance(value, str) else value
+            loaded = self._from_entities(entities)
         finally:
             connection.close()
         if not isinstance(loaded, dict):
@@ -223,7 +210,7 @@ class MySQLLifecycleStore(InMemoryLifecycleStore):
         cursor.execute(
             """
             SELECT entity_id, payload_json, entity_revision
-            FROM upload_entities_v3
+            FROM upload_entities
             WHERE tenant_id=%s AND entity_type='documents' AND entity_id=%s FOR UPDATE
             """,
             (self.tenant_id, document_id),
@@ -247,7 +234,7 @@ class MySQLLifecycleStore(InMemoryLifecycleStore):
             document["row_version"] = int(document["row_version"]) + 1
         cursor.execute(
             """
-            UPDATE upload_entities_v3
+            UPDATE upload_entities
             SET payload_json=%s, entity_revision=entity_revision+1, updated_at=NOW(6)
             WHERE tenant_id=%s AND entity_type='documents' AND entity_id=%s
               AND entity_revision=%s
@@ -264,7 +251,7 @@ class MySQLLifecycleStore(InMemoryLifecycleStore):
         cursor.execute(
             """
             SELECT entity_id, payload_json, entity_revision
-            FROM upload_entities_v3
+            FROM upload_entities
             WHERE tenant_id=%s AND entity_type='versions' AND parent_id=%s FOR UPDATE
             """,
             (self.tenant_id, document_id),
@@ -283,7 +270,7 @@ class MySQLLifecycleStore(InMemoryLifecycleStore):
             version["publication_state"] = target_state
             cursor.execute(
                 """
-                UPDATE upload_entities_v3
+                UPDATE upload_entities
                 SET payload_json=%s, entity_revision=entity_revision+1, updated_at=NOW(6)
                 WHERE tenant_id=%s AND entity_type='versions' AND entity_id=%s
                   AND entity_revision=%s
@@ -298,7 +285,7 @@ class MySQLLifecycleStore(InMemoryLifecycleStore):
             if cursor.rowcount != 1:
                 raise ValueError("PUBLICATION_VERSION_CONCURRENT_UPDATE")
             cursor.execute(
-                "SELECT payload_json, entity_revision FROM upload_entities_v3 "
+                "SELECT payload_json, entity_revision FROM upload_entities "
                 "WHERE tenant_id=%s AND entity_type='candidates' AND entity_id=%s FOR UPDATE",
                 (self.tenant_id, item_id),
             )
@@ -312,7 +299,7 @@ class MySQLLifecycleStore(InMemoryLifecycleStore):
             )
             candidate["projection_state"] = "SERVING" if item_id == version_id else "RETIRED"
             cursor.execute(
-                "UPDATE upload_entities_v3 SET payload_json=%s, entity_revision=entity_revision+1, "
+                "UPDATE upload_entities SET payload_json=%s, entity_revision=entity_revision+1, "
                 "updated_at=NOW(6) WHERE tenant_id=%s "
                 "AND entity_type='candidates' AND entity_id=%s",
                 (json.dumps(candidate, sort_keys=True), self.tenant_id, item_id),
@@ -341,19 +328,18 @@ class MySQLLifecycleStore(InMemoryLifecycleStore):
             # Absence from a stale in-memory snapshot is never a deletion command.
             after = {**before, **after}
             self._entities.sync(cursor, before, after)
-            cursor.execute("DELETE FROM lifecycle_state_v2 WHERE tenant_id=%s", (tenant_id,))
             base_operation = operation.removesuffix(":intent") if operation else None
             if operation and operation.endswith(":intent") and key and response is not None:
                 cursor.execute(
                     """
-                    INSERT INTO publication_outbox_v3(
+                    INSERT INTO publication_outbox(
                         tenant_id, operation, idempotency_key, document_id,
                         target_version_id, generation_id, state, attempt_count,
                         payload_json, created_at, updated_at
                     ) VALUES (%s, %s, %s, %s, %s, %s, 'PENDING', 1, %s, NOW(6), NOW(6))
                     AS incoming ON DUPLICATE KEY UPDATE
                         state='PENDING',
-                        attempt_count=publication_outbox_v3.attempt_count+1,
+                        attempt_count=publication_outbox.attempt_count+1,
                         payload_json=incoming.payload_json, updated_at=NOW(6)
                     """,
                     (
@@ -381,7 +367,7 @@ class MySQLLifecycleStore(InMemoryLifecycleStore):
                 )
                 cursor.execute(
                     """
-                    UPDATE publication_outbox_v3
+                    UPDATE publication_outbox
                     SET state='APPLIED', error_code=NULL, updated_at=NOW(6)
                     WHERE tenant_id=%s AND operation=%s AND idempotency_key=%s
                       AND state IN ('PENDING', 'FAILED_RETRYABLE')
@@ -417,7 +403,7 @@ class MySQLLifecycleStore(InMemoryLifecycleStore):
             cursor = connection.cursor()
             cursor.execute(
                 """
-                UPDATE publication_outbox_v3
+                UPDATE publication_outbox
                 SET state='FAILED_RETRYABLE', error_code=%s, updated_at=NOW(6)
                 WHERE tenant_id=%s AND operation=%s AND idempotency_key=%s
                   AND state='PENDING'

@@ -157,8 +157,8 @@ def test_table_chunks_repeat_the_reviewed_header_context() -> None:
         language="zh",
         source_format="xlsx",
         nodes=(node,),
-        parser_revision="test-table:v1",
-        normalization_revision="test-normalization:v1",
+        parser_revision="test-table",
+        normalization_revision="test-normalization",
         content_checksum="a" * 64,
     )
 
@@ -228,7 +228,7 @@ def test_semantic_chunker_preserves_types_spans_table_context_and_tokenizer() ->
 
 def test_semantic_boundary_embeddings_are_preloaded_in_one_batch() -> None:
     class _Embedding:
-        revision = "batch-embedding:v1"
+        revision = "batch-embedding"
         dimension = 2
 
         def __init__(self) -> None:

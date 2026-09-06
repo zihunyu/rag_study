@@ -138,7 +138,7 @@ class CleanupApprovalRequired(PermissionError):
 
 
 class LifecycleService:
-    revision = "lifecycle-orchestration:g3-v1"
+    revision = "lifecycle-orchestration"
 
     def __init__(
         self,

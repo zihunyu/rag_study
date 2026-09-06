@@ -133,26 +133,26 @@ def embedding_provider_contract(
 
     parsed = urlparse(base_url)
     host = (parsed.hostname or "").casefold()
-    dashscope_v4 = bool(
+    dashscope_embedding = bool(
         host in {"dashscope.aliyuncs.com", "dashscope-intl.aliyuncs.com"}
         and "/compatible-mode/" in parsed.path.casefold()
         and model.casefold() == "text-embedding-v4"
     )
-    provider_max_batch_size = 10 if dashscope_v4 else configured_batch_size
+    provider_max_batch_size = 10 if dashscope_embedding else configured_batch_size
     planned_batch_size = min(configured_batch_size, provider_max_batch_size)
     configured_required_batches = math.ceil(chunk_count / configured_batch_size)
     required_new_batches = math.ceil(chunk_count / planned_batch_size)
     issues: list[str] = []
-    if dashscope_v4 and configured_batch_size > provider_max_batch_size:
+    if dashscope_embedding and configured_batch_size > provider_max_batch_size:
         issues.append("EMBEDDING_BATCH_SIZE_EXCEEDS_DASHSCOPE_TEXT_EMBEDDING_V4_LIMIT")
-    if dashscope_v4 and dimension != 1024:
+    if dashscope_embedding and dimension != 1024:
         issues.append("EMBEDDING_DIMENSION_MISMATCH_DASHSCOPE_TEXT_EMBEDDING_V4")
     if configured_required_batches > approved_max_batches:
         issues.append("EMBEDDING_REQUIRED_BATCHES_EXCEED_APPROVED_ATTEMPT_BUDGET")
     return {
         "provider_contract": (
             "DASHSCOPE_OPENAI_COMPATIBLE_TEXT_EMBEDDING_V4"
-            if dashscope_v4
+            if dashscope_embedding
             else "GENERIC_OPENAI_COMPATIBLE"
         ),
         "configured_batch_size": configured_batch_size,
@@ -185,7 +185,7 @@ def mineru_provider_error_category(provider_error_code: str | None) -> str:
 
 
 class MinerUExecutionRunner:
-    revision = "mineru-execution-runner:v2"
+    revision = "mineru-execution-runner"
 
     def __init__(
         self,
@@ -684,7 +684,7 @@ class MinerUExecutionRunner:
 
 
 class MinerUDocxRecoveryRunner:
-    revision = "mineru-docx-recovery-runner:v1"
+    revision = "mineru-docx-recovery-runner"
 
     def __init__(
         self,
@@ -735,7 +735,7 @@ class MinerUDocxRecoveryRunner:
         lease = self.pool.acquire_slot(int(str(original_failed["token_slot"])))
         checkpoint: dict[str, object] = {
             "state": "ASSIGNED",
-            "attempt_revision": "mineru-docx-recovery:v1",
+            "attempt_revision": "mineru-docx-recovery",
             "scope": "docx",
             "anonymous_sample_id": anonymous_id,
             "batch_id": str(original_failed["batch_id"]),
@@ -837,7 +837,7 @@ class MinerUDocxRecoveryRunner:
             )
             evidence = {
                 "sample_id": anonymous_id,
-                "attempt_revision": "mineru-docx-recovery:v1",
+                "attempt_revision": "mineru-docx-recovery",
                 "scope": "docx",
                 "state": "COMPLETED",
                 "request_count": checkpoint["request_count"],
@@ -901,7 +901,7 @@ class MinerUDocxRecoveryRunner:
 
 
 class MinerUCapabilityProbe:
-    revision = "mineru-capability-probe:v1"
+    revision = "mineru-capability-probe"
 
     def __init__(self, configured_base_url: str, *, custom_deployment: bool = False) -> None:
         self.configured_base_url = configured_base_url
@@ -961,7 +961,7 @@ class EmbeddingChunk:
 
 
 class EmbeddingExecutionRunner:
-    revision = "embedding-execution-runner:v2"
+    revision = "embedding-execution-runner"
 
     def __init__(
         self,

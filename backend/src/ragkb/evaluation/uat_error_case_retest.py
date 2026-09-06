@@ -80,7 +80,7 @@ def prepare_retest_cases(
         except (KeyError, TypeError, UatRemediationError) as error:
             blocked.append(
                 {
-                    "revision": "uat-error-retest-preflight:v1",
+                    "revision": "uat-error-retest-preflight",
                     "test_case_id": test_case_id,
                     "selected_case_sha256": text_sha256(selected_id),
                     "question_sha256": text_sha256(question),
@@ -114,7 +114,7 @@ def prepare_retest_cases(
             }
         )
     manifest = {
-        "revision": "uat-error-retest-preflight-manifest:v1",
+        "revision": "uat-error-retest-preflight-manifest",
         "selected_case_count": len(selected_case_ids),
         "eligible_case_count": len(eligible),
         "blocked_case_count": len(blocked),

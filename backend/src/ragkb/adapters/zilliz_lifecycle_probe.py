@@ -177,7 +177,7 @@ def synthetic_records(settings: EnvSettings) -> tuple[list[dict[str, Any]], dict
             "category_ids": [f"{marker}_category"],
             "tag_ids": ["automated-test"],
             "product_ids": [f"{marker}_product"],
-            "applicable_versions": ["test-v1"],
+            "applicable_versions": ["test-version"],
             "region_codes": ["test-region"],
             "retrieval_text": text,
             settings.zilliz_cloud_dense_field: vector(vector_position),

@@ -39,7 +39,7 @@ def test_quality_report_and_single_document_review_are_persisted_and_idempotent(
     client = TestClient(create_app(components))
     content = b"synthetic review document"
     created = client.post(
-        f"/api/v1/spaces/{components.space_id}/upload-sessions",
+        f"/api/spaces/{components.space_id}/upload-sessions",
         headers={"Idempotency-Key": "review-create"},
         json={
             "filename": "review.txt",
@@ -54,7 +54,7 @@ def test_quality_report_and_single_document_review_are_persisted_and_idempotent(
         content=content,
     )
     completed = client.post(
-        f"/api/v1/upload-sessions/{created.json()['upload_session_id']}:complete",
+        f"/api/upload-sessions/{created.json()['upload_session_id']}:complete",
         headers={"If-Match": uploaded.headers["etag"], "Idempotency-Key": "complete"},
     ).json()
     assert LocalIngestionWorker(
@@ -66,14 +66,14 @@ def test_quality_report_and_single_document_review_are_persisted_and_idempotent(
     ).run_once()
     version_id = completed["document_version_id"]
 
-    quality = client.get(f"/api/v1/document-versions/{version_id}/quality-report")
+    quality = client.get(f"/api/document-versions/{version_id}/quality-report")
     missing_security = client.post(
-        f"/api/v1/document-versions/{version_id}/review",
+        f"/api/document-versions/{version_id}/review",
         headers={"Idempotency-Key": "missing-security"},
         json={"decision": "APPROVED", "comment": "must fail closed"},
     )
     empty_restricted_acl = client.post(
-        f"/api/v1/document-versions/{version_id}/review",
+        f"/api/document-versions/{version_id}/review",
         headers={"Idempotency-Key": "empty-restricted"},
         json={
             "decision": "APPROVED",
@@ -95,24 +95,24 @@ def test_quality_report_and_single_document_review_are_persisted_and_idempotent(
         },
     }
     first = client.post(
-        f"/api/v1/document-versions/{version_id}/review",
+        f"/api/document-versions/{version_id}/review",
         headers={"Idempotency-Key": "review-key"},
         json=body,
     )
     replay = client.post(
-        f"/api/v1/document-versions/{version_id}/review",
+        f"/api/document-versions/{version_id}/review",
         headers={"Idempotency-Key": "review-key"},
         json=body,
     )
     conflict = client.post(
-        f"/api/v1/document-versions/{version_id}/review",
+        f"/api/document-versions/{version_id}/review",
         headers={"Idempotency-Key": "review-key"},
         json={**body, "decision": "REJECTED"},
     )
     reader = TestClient(
         create_app(replace(components, authenticator=_ReaderAuth(components.tenant_id)))
     )
-    forbidden = reader.get(f"/api/v1/document-versions/{version_id}/quality-report")
+    forbidden = reader.get(f"/api/document-versions/{version_id}/quality-report")
 
     assert quality.status_code == 200
     assert missing_security.status_code == 422

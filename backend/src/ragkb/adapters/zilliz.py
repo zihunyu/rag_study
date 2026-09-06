@@ -105,7 +105,7 @@ def build_zilliz_filter(context: SearchContext) -> str:
 
 
 class MilvusHybridAdapter:
-    revision = "milvus-hybrid-pymilvus:v1"
+    revision = "milvus-hybrid-pymilvus"
 
     def __init__(
         self,
@@ -432,4 +432,4 @@ class MilvusHybridAdapter:
 
 
 class ZillizCloudAdapter(MilvusHybridAdapter):
-    revision = "zilliz-cloud-pymilvus:g2-v2"
+    revision = "zilliz-cloud-pymilvus"

@@ -10,7 +10,7 @@ from ragkb.domain.rag import AtomicClaim, DraftAnswer, DraftAnswerStatus, Eviden
 
 
 class RedisVerifiedAnswerCache:
-    revision = "redis-verified-answer-cache:v1"
+    revision = "redis-verified-answer-cache"
 
     def __init__(self, redis: RedisCacheRateLimitAdapter, *, ttl_seconds: int) -> None:
         self.redis = redis

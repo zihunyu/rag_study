@@ -80,6 +80,6 @@ not_retrieved。verified=true 只表示通过结构化业务状态检查，不�
 | 拒答生成期间权限失效 | system_error / FINAL_PERMISSION_RECHECK_FAILED，无答案 |
 
 模型适配器不再接受缺失 status 的旧 JSON，包括看似完整的非空答案。
-生成器 revision 增加 `structured-status:v2`，使生产证据包和答案缓存体现此次协议变更。
+生成器 revision 增加 `structured-status`，使生产证据包和答案缓存体现此次协议变更。
 内部现有生成器构造 `DraftAnswer` 时默认状态为 answered；空草稿不会隐式变成拒答。
 已有非空已回答缓存仍可解码；Redis 和内存答案缓存都拒绝保存拒答结果。

@@ -47,7 +47,7 @@ def test_single_frame_tiff_derives_deterministic_lossless_anonymous_png(
 
     assert first["derived_sha256"] == second["derived_sha256"]
     assert first["derived_path"] == second["derived_path"]
-    assert first["converter_revision"] == "single-frame-tiff-to-png:v1"
+    assert first["converter_revision"] == "single-frame-tiff-to-png"
     assert first["width"] == 7 and first["height"] == 5
     assert first["mode"] == "L" and first["frame_count"] == 1
     assert source.read_bytes() == source_before
@@ -142,7 +142,7 @@ def test_libreoffice_docx_pdf_is_anonymous_atomic_and_source_preserving(
     result = deriver.derive(source, "anonymous-docx", source_hash)
 
     assert result["page_count"] == 2
-    assert result["converter_revision"] == "libreoffice-docx-to-pdf:v1"
+    assert result["converter_revision"] == "libreoffice-docx-to-pdf"
     assert result["libreoffice_version"] == "26.8.0.3"
     assert (
         result["derived_sha256"] == hashlib.sha256(result["derived_path"].read_bytes()).hexdigest()

@@ -16,8 +16,8 @@ function sseResponse(frames) {
 
 test("relative signed source uses configured backend origin", () => {
   assert.equal(
-    sourceUrl("/api/v1/rag-runs/run/evidence/item/source", "http://127.0.0.1:8000/api/v1"),
-    "http://127.0.0.1:8000/api/v1/rag-runs/run/evidence/item/source",
+    sourceUrl("/api/rag-runs/run/evidence/item/source", "http://127.0.0.1:8000/api"),
+    "http://127.0.0.1:8000/api/rag-runs/run/evidence/item/source",
   );
 });
 
@@ -125,7 +125,7 @@ test("production requests attach the OIDC bearer token", async () => {
     return new Response("{}", { status: 200 });
   };
 
-  await authorizedFetch("https://api.example.test/api/v1/spaces", {}, fakeFetch, async () =>
+  await authorizedFetch("https://api.example.test/api/spaces", {}, fakeFetch, async () =>
     "signed-access-token",
   );
 

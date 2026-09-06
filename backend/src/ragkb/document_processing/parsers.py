@@ -36,7 +36,7 @@ __all__ = [
 
 
 class ParserRouter:
-    revision = "parser-router:g1-v2"
+    revision = "parser-router"
 
     def __init__(self, overrides: Mapping[str, ParserPort] | None = None) -> None:
         self._scanned_pdf_stub = ImageParserRoute("pdf_scanned")

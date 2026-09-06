@@ -30,7 +30,7 @@ def test_uuid7_is_time_ordered_and_has_expected_version() -> None:
     assert first < second
 
 
-def test_locator_and_canonical_document_v1() -> None:
+def test_locator_and_canonical_document() -> None:
     locator = SourceLocator(page=1, bbox=(0, 0, 100, 20), char_range=(0, 5))
     node = CanonicalNode(
         node_id="n1",
@@ -45,8 +45,8 @@ def test_locator_and_canonical_document_v1() -> None:
         language="en",
         source_format="pdf_text",
         nodes=(node,),
-        parser_revision="test:v1",
-        normalization_revision="normalization:v1",
+        parser_revision="test",
+        normalization_revision="normalization",
         content_checksum="a" * 64,
     )
 
@@ -65,7 +65,7 @@ def test_locator_rejects_invalid_ranges() -> None:
         SourceLocator()
 
 
-def test_chunk_v1_requires_traceable_revisioned_non_empty_content() -> None:
+def test_chunk_requires_traceable_revisioned_non_empty_content() -> None:
     locator = SourceLocator(sheet="Budget", cell_range="A1:B1", row=1)
     chunk = Chunk(
         id=new_uuid7(),
@@ -82,9 +82,9 @@ def test_chunk_v1_requires_traceable_revisioned_non_empty_content() -> None:
         kind="table",
     )
 
-    assert chunk.chunking_revision == "node-per-chunk:g1-v1"
+    assert chunk.chunking_revision == "node-per-chunk"
     assert chunk.locator.to_dict()["row"] == 1
-    assert chunk.tokenizer_id == "whitespace-estimate:g1-v1"
+    assert chunk.tokenizer_id == "whitespace-estimate"
     with pytest.raises(ValueError):
         Chunk(
             id=new_uuid7(),

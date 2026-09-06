@@ -90,7 +90,7 @@ describe("selection identity regressions", () => {
       if (path.endsWith("/sources/E2")) return latest.promise;
       if (path.includes("/ask")) return sseResponse('event: progress\ndata: {"stage":"verified"}\n\nevent: result\ndata: '+JSON.stringify({
         rag_run_id: "same-answer", status: "answered", answer: "回答", verified: true,
-        citations: ["E1", "E2"].map((id) => ({ evidence_id: id, source_url: `/api/v1/sources/${id}`, locator: {} })),
+        citations: ["E1", "E2"].map((id) => ({ evidence_id: id, source_url: `/api/sources/${id}`, locator: {} })),
       })+'\n\n');
       return jsonResponse([]);
     }));
@@ -190,7 +190,7 @@ describe("selection identity regressions", () => {
       if (path.endsWith("/v2/chunks/preview")) return jsonResponse([chunk("v2", "version two content")]);
       if (path.endsWith("/other-v/chunks/preview")) return jsonResponse([chunk("other-v", "other document content")]);
       if (path.endsWith("/quality-report")) return jsonResponse({ parser_revision: path.includes("/document-versions/v1/") ? "quality-v1" : "quality-v2" });
-      if (path.endsWith("/documents/doc/versions/upload-sessions")) return jsonResponse({ upload_session_id: "u2", upload_path: "/api/v1/upload-sessions/u2/content", row_version: 1 });
+      if (path.endsWith("/documents/doc/versions/upload-sessions")) return jsonResponse({ upload_session_id: "u2", upload_path: "/api/upload-sessions/u2/content", row_version: 1 });
       if (path.endsWith("/upload-sessions/u2/content")) return jsonResponse({ row_version: 2 });
       if (path.endsWith("/upload-sessions/u2:complete")) { completed = true; return jsonResponse({ document_id: "doc", document_version_id: "v2", job_id: "job-v2" }); }
       if (path.endsWith("/ingestion-jobs/job-v2")) return job.promise;
@@ -415,7 +415,7 @@ describe("trusted QA UI", () => {
       calls.push([String(url), options]);
       if (String(url).endsWith("/spaces")) return jsonResponse([{ id: "a", name: "库 A" }]);
       if (String(url).includes("/sources/")) return jsonResponse({ text: "authorized source evidence" });
-      if (String(url).includes("/ask")) return sseResponse('event: progress\ndata: {"stage":"verified"}\n\nevent: result\ndata: {"status":"answered","answer":"证据回答","verified":true,"citations":[{"evidence_id":"E1","source_url":"/api/v1/sources/ref?signature=synthetic","locator":{}}]}\n\n');
+      if (String(url).includes("/ask")) return sseResponse('event: progress\ndata: {"stage":"verified"}\n\nevent: result\ndata: {"status":"answered","answer":"证据回答","verified":true,"citations":[{"evidence_id":"E1","source_url":"/api/sources/ref?signature=synthetic","locator":{}}]}\n\n');
       return jsonResponse([]);
     }));
     const wrapper = mount(App);
@@ -500,14 +500,14 @@ describe("trusted QA UI", () => {
                   version_no: 1,
                   processing_state: "VALIDATED",
                   publication_state: "STAGED",
-                  parser_revision: "parser:v1",
+                  parser_revision: "parser",
                   chunk_count: 1,
                   job_id: "job-1",
                 }],
           );
         }
         if (path.endsWith("/spaces/space-1/upload-sessions")) {
-          return jsonResponse({ upload_session_id: "upload-1", upload_path: "/api/v1/upload-sessions/upload-1/content", row_version: 1 });
+          return jsonResponse({ upload_session_id: "upload-1", upload_path: "/api/upload-sessions/upload-1/content", row_version: 1 });
         }
         if (path.endsWith("/upload-sessions/upload-1/content")) {
           return jsonResponse({ row_version: 2 });
@@ -519,7 +519,7 @@ describe("trusted QA UI", () => {
           return jsonResponse({ id: "job-1", operation: "process_document", state: "SUCCEEDED", attempt: 1, max_attempts: 3, cancel_requested: false, error_code: null });
         }
         if (path.endsWith("/document-versions/version-1/quality-report")) {
-          return jsonResponse({ document_version_id: "version-1", source_format: "md", parser_revision: "parser:v1", node_count: 1, locator_coverage: 1, issue_codes: [], disposition: "PASS", real_acceptance: false });
+          return jsonResponse({ document_version_id: "version-1", source_format: "md", parser_revision: "parser", node_count: 1, locator_coverage: 1, issue_codes: [], disposition: "PASS", real_acceptance: false });
         }
         if (path.endsWith("/document-versions/version-1/chunks/preview")) {
           return jsonResponse([{ chunk_id: "chunk-1", document_version_id: "version-1", parent_chunk_id: null, ordinal: 0, kind: "paragraph", token_count: 3, status: "STAGED", text: "policy content", locator: { line_start: 1 } }]);

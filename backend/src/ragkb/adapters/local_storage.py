@@ -179,8 +179,7 @@ class LocalFileStorage:
                     if size > max_bytes:
                         raise StorageIntegrityError("DOC_SIZE_LIMIT")
                     reservation = await asyncio.to_thread(
-                        self._grow_quarantine_reservation,
-                        target, reservation, size, quota_bytes
+                        self._grow_quarantine_reservation, target, reservation, size, quota_bytes
                     )
                     digest.update(chunk)
                     await asyncio.to_thread(handle.write, chunk)

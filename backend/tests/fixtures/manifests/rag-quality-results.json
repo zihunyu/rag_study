@@ -1,5 +1,5 @@
 {
-  "dataset_revision": "rag-quality-v1",
+  "dataset_revision": "rag-quality",
   "provider": "local-real-retrieval-deterministic-generation",
   "results": [
     {

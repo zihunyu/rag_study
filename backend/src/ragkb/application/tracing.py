@@ -31,7 +31,7 @@ class TracerPort(Protocol):
 class InMemoryTracer:
     """Records the same span tree locally that an OTLP exporter receives in production."""
 
-    revision = "rag-tracing:v1"
+    revision = "rag-tracing"
 
     def __init__(self, max_spans: int = 2048) -> None:
         if max_spans < 1:
@@ -94,7 +94,7 @@ class InMemoryTracer:
 class OpenTelemetryTracer:
     """Thin bridge around an SDK tracer configured by the deployment."""
 
-    revision = "opentelemetry-rag-tracing:v1"
+    revision = "opentelemetry-rag-tracing"
 
     def __init__(self, tracer: Any) -> None:
         self._tracer = tracer

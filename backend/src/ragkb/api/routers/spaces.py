@@ -40,7 +40,7 @@ def build_spaces_router(runtime: RuntimeComponents) -> APIRouter:
         if runtime.repository.get_space(space_id)["tenant_id"] != tenant_id:
             raise ResourceNotFoundError(space_id)
 
-    @router.get("/api/v1/spaces", response_model=list[SpaceResponse], tags=["spaces"])
+    @router.get("/api/spaces", response_model=list[SpaceResponse], tags=["spaces"])
     def spaces(request: Request) -> list[SpaceResponse]:
         principal = _principal(request)
         _require_role(principal, "reader", "knowledge_maintainer", "admin")
@@ -56,7 +56,7 @@ def build_spaces_router(runtime: RuntimeComponents) -> APIRouter:
         ]
 
     @router.post(
-        "/api/v1/spaces",
+        "/api/spaces",
         response_model=SpaceResponse,
         status_code=status.HTTP_201_CREATED,
         tags=["spaces"],
@@ -87,7 +87,7 @@ def build_spaces_router(runtime: RuntimeComponents) -> APIRouter:
         )
 
     @router.get(
-        "/api/v1/spaces/{space_id}/documents",
+        "/api/spaces/{space_id}/documents",
         response_model=list[KnowledgeDocumentResponse],
         tags=["spaces", "documents"],
     )
@@ -102,7 +102,7 @@ def build_spaces_router(runtime: RuntimeComponents) -> APIRouter:
         return list_documents(space_id, request, response, limit, offset, cursor, preview=False)
 
     @router.get(
-        "/api/v1/spaces/{space_id}/documents/preview",
+        "/api/spaces/{space_id}/documents/preview",
         response_model=list[KnowledgeDocumentResponse],
         tags=["spaces", "management-preview"],
     )

@@ -15,7 +15,7 @@ from ragkb.domain.state_machines import JobState
 
 
 class RedisPersistentJobQueue:
-    revision = "redis-persistent-queue:dlq:g4-v2"
+    revision = "redis-persistent-queue:dlq"
 
     def __init__(self, redis: RedisCacheRateLimitAdapter) -> None:
         self.redis = redis
@@ -24,7 +24,7 @@ class RedisPersistentJobQueue:
         self.dead_letters_key = redis._key("queue", "dead-letters")
         self.lock_key = redis._key("queue", "mutation-lock")
         self.due_keys = tuple(redis._key("queue", kind) for kind in ("fresh", "retry", "leased"))
-        self.index_marker = redis._key("queue", "indexed-v3")
+        self.index_marker = redis._key("queue", "indexed")
         self.dead_index = redis._key("queue", "dead-index")
         self.terminal_index = redis._key("queue", "terminal-index")
         self._indexed = False

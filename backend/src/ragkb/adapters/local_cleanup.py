@@ -13,7 +13,7 @@ class LocalContentRepositoryPort(Protocol):
 
 
 class LocalOriginalCleanupExecutor:
-    revision = "local-content-lineage-cleanup:g3-v2"
+    revision = "local-content-lineage-cleanup"
     allowed_partitions = frozenset({"original", "artifacts", "quarantine", "temp"})
 
     def __init__(self, storage: LocalFileStorage, repository: LocalContentRepositoryPort) -> None:

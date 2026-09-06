@@ -36,10 +36,10 @@ def test_reader_cannot_enumerate_draft_or_restricted_chunks(tmp_path):
     reader = TestClient(
         create_app(replace(runtime, authenticator=_PrincipalAuthenticator(principal)))
     )
-    assert reader.get(f"/api/v1/spaces/{runtime.space_id}/documents").json() == []
-    assert reader.get(f"/api/v1/document-versions/{version}/chunks").status_code == 404
+    assert reader.get(f"/api/spaces/{runtime.space_id}/documents").json() == []
+    assert reader.get(f"/api/document-versions/{version}/chunks").status_code == 404
     restricted = admin.post(
-        f"/api/v1/document-versions/{version}/review",
+        f"/api/document-versions/{version}/review",
         headers={"Idempotency-Key": "restricted"},
         json={
             "decision": "APPROVED",
@@ -54,25 +54,25 @@ def test_reader_cannot_enumerate_draft_or_restricted_chunks(tmp_path):
     assert restricted.status_code == 200
     assert (
         admin.post(
-            f"/api/v1/document-versions/{version}:publish", headers={"Idempotency-Key": "publish"}
+            f"/api/document-versions/{version}:publish", headers={"Idempotency-Key": "publish"}
         ).status_code
         == 200
     )
-    assert reader.get(f"/api/v1/spaces/{runtime.space_id}/documents").json() == []
-    assert reader.get(f"/api/v1/document-versions/{version}/chunks").status_code == 404
-    assert reader.get(f"/api/v1/documents/{document}").status_code == 404
+    assert reader.get(f"/api/spaces/{runtime.space_id}/documents").json() == []
+    assert reader.get(f"/api/document-versions/{version}/chunks").status_code == 404
+    assert reader.get(f"/api/documents/{document}").status_code == 404
 
 
 def test_new_version_keeps_custom_space_and_old_review_replay_is_inert(tmp_path):
     runtime = _components(tmp_path)
     client = TestClient(create_app(runtime))
-    space = client.post("/api/v1/spaces", json={"name": "other"}).json()["id"]
+    space = client.post("/api/spaces", json={"name": "other"}).json()["id"]
     document, version, _ = _upload(client, space)
     _process_next(runtime, client, version)
 
     def review(key, visibility, scopes):
         return client.post(
-            f"/api/v1/document-versions/{version}/review",
+            f"/api/document-versions/{version}/review",
             headers={"Idempotency-Key": key},
             json={
                 "decision": "APPROVED",
@@ -96,7 +96,7 @@ def test_new_version_keeps_custom_space_and_old_review_replay_is_inert(tmp_path)
             "SELECT visibility FROM retrieval_projections WHERE document_version_id=?", (version,)
         ).fetchall()
     assert scopes and all(row["visibility"] == "RESTRICTED" for row in scopes)
-    etag = client.get(f"/api/v1/documents/{document}/preview").headers["etag"]
+    etag = client.get(f"/api/documents/{document}/preview").headers["etag"]
     _, new_version, _ = _upload(client, space, key="new", document_id=document, document_etag=etag)
     assert runtime.repository.get_document_space(document) == space
     assert new_version != version
@@ -153,7 +153,7 @@ def test_oidc_preflight_and_live_ignore_observability_failure(tmp_path, monkeypa
     monkeypatch.setattr(runtime.observability, "request_completed", failed)
     client = TestClient(create_app(runtime))
     response = client.options(
-        "/api/v1/spaces",
+        "/api/spaces",
         headers={
             "Origin": "http://127.0.0.1:5173",
             "Access-Control-Request-Method": "GET",
@@ -162,8 +162,8 @@ def test_oidc_preflight_and_live_ignore_observability_failure(tmp_path, monkeypa
     )
     assert response.status_code == 200
     assert client.get("/health/live").status_code == 200
-    assert client.get("/api/v1/spaces").status_code == 200
-    response = client.get("/api/v1/spaces", headers={"Origin": "http://127.0.0.1:5173"})
+    assert client.get("/api/spaces").status_code == 200
+    response = client.get("/api/spaces", headers={"Origin": "http://127.0.0.1:5173"})
     assert "ETag" in response.headers["access-control-expose-headers"]
     from ragkb.adapters.auth import AuthenticationError
 
@@ -172,10 +172,10 @@ def test_oidc_preflight_and_live_ignore_observability_failure(tmp_path, monkeypa
             raise AuthenticationError("token required")
 
     protected = TestClient(create_app(replace(runtime, authenticator=RequiresBearer())))
-    assert protected.get("/api/v1/spaces").status_code == 401
+    assert protected.get("/api/spaces").status_code == 401
     assert (
         protected.options(
-            "/api/v1/spaces",
+            "/api/spaces",
             headers={
                 "Origin": "http://127.0.0.1:5173",
                 "Access-Control-Request-Method": "POST",
@@ -347,7 +347,7 @@ def test_cache_key_changes_with_verifier_revision(tmp_path):
     answer = service.ask("保修期多久？", "tenant-1", "user-1")
     package = repository.get_package(answer.rag_run_id)
     assert verified_answer_cache_key(package) != verified_answer_cache_key(
-        replace(package, verifier_revision="different-verifier:v2")
+        replace(package, verifier_revision="different-verifier")
     )
 
 
@@ -425,6 +425,6 @@ def test_access_metrics_shutdown_drains_app_owned_work_and_rejects_new_work(tmp_
     runtime = _components(tmp_path)
     app = create_app(runtime)
     with TestClient(app) as client:
-        assert client.get("/api/v1/spaces").status_code == 200
+        assert client.get("/api/spaces").status_code == 200
     assert app.state.access_metrics.snapshot()["pending"] == 0
     assert app.state.access_metrics.close(0)

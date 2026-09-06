@@ -1,4 +1,4 @@
-"""OpenAPI v1 request and response models."""
+"""OpenAPI request and response models."""
 
 from __future__ import annotations
 

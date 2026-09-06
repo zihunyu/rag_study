@@ -211,7 +211,7 @@ FORMAT_BY_EXTENSION = {
 
 
 class UploadFileValidator:
-    revision = "file-validator:archive-resource-limits:g1-v2"
+    revision = "file-validator:archive-resource-limits"
 
     def __init__(
         self,

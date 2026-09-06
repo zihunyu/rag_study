@@ -16,8 +16,7 @@ from ragkb.domain.ids import new_uuid7
 def _assert_contract(document, repository_root: Path) -> None:
     schema = json.loads(
         (
-            repository_root
-            / "backend/src/ragkb/contracts/schemas/canonical-document-v1.schema.json"
+            repository_root / "backend/src/ragkb/contracts/schemas/canonical-document.schema.json"
         ).read_text(encoding="utf-8")
     )
     jsonschema.Draft202012Validator(schema).validate(document.to_dict())
@@ -158,7 +157,7 @@ def test_blank_pdf_and_image_routes_use_offline_stub_without_claiming_real_suppo
     assert pdf_result.real_acceptance is False
 
 
-def test_canonical_output_validates_against_v1_schema(tmp_path: Path) -> None:
+def test_canonical_output_validates_against_current_schema(tmp_path: Path) -> None:
     source = tmp_path / "sample.txt"
     source.write_text("traceable text", encoding="utf-8")
     document = ParserRouter().parse("txt", source, new_uuid7())

@@ -92,8 +92,8 @@ class Chunk:
     token_count: int
     parent_chunk_id: str | None = None
     kind: str = "paragraph"
-    chunking_revision: str = "node-per-chunk:g1-v1"
-    tokenizer_id: str = "whitespace-estimate:g1-v1"
+    chunking_revision: str = "node-per-chunk"
+    tokenizer_id: str = "whitespace-estimate"
     status: str = "STAGED"
     metadata: dict[str, object] = field(default_factory=dict)
 

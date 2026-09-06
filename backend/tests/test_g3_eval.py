@@ -12,7 +12,7 @@ def _paths() -> tuple[Path, Path]:
     root = Path(__file__).resolve().parents[2]
     return (
         root / "backend/tests/fixtures/manifests/g3-eval-dataset.yaml",
-        root / "backend/src/ragkb/contracts/schemas/g3-eval-dataset-v1.schema.json",
+        root / "backend/src/ragkb/contracts/schemas/g3-eval-dataset.schema.json",
     )
 
 

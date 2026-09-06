@@ -12,7 +12,7 @@ from ragkb.domain.ids import new_uuid7
 
 
 class ImageParserRoute:
-    revision = "offline-ocr-stub:g4-v1"
+    revision = "offline-ocr-stub"
 
     def __init__(self, source_format: str = "image") -> None:
         self.source_format = source_format
@@ -41,7 +41,7 @@ class ImageParserRoute:
 
 
 class OfflineOfficeConversionStubParser:
-    revision = "offline-office-conversion-stub:g4-v1"
+    revision = "offline-office-conversion-stub"
 
     def __init__(self, source_format: str) -> None:
         self.source_format = source_format
@@ -67,7 +67,7 @@ class OfflineOfficeConversionStubParser:
 
 
 class OfflineASRStubParser:
-    revision = "offline-asr-stub:g4-v1"
+    revision = "offline-asr-stub"
 
     def parse(self, source: Path, document_version_id: str) -> CanonicalDocument:
         if not source.read_bytes():

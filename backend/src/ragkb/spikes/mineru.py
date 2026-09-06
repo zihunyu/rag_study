@@ -58,7 +58,7 @@ def run_mineru_spike(loaded: EnvLoadResult, manifest_path: Path) -> dict[str, ob
     schema = json.loads(
         (
             loaded.repository_root
-            / "backend/src/ragkb/contracts/schemas/canonical-document-v1.schema.json"
+            / "backend/src/ragkb/contracts/schemas/canonical-document.schema.json"
         ).read_text(encoding="utf-8")
     )
     pool_ready = loaded.configured["MINERU_TOKENS"]

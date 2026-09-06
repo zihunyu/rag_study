@@ -27,7 +27,7 @@ def _create_session(
     key: str = "create-1",
 ):
     return client.post(
-        f"/api/v1/spaces/{space_id}/upload-sessions",
+        f"/api/spaces/{space_id}/upload-sessions",
         headers={"Idempotency-Key": key},
         json={
             "filename": filename,
@@ -55,12 +55,12 @@ def _complete_session(
         key=f"create-{key}",
     )
     uploaded = client.put(
-        f"/api/v1/upload-sessions/{created.json()['upload_session_id']}/content",
+        f"/api/upload-sessions/{created.json()['upload_session_id']}/content",
         headers={"If-Match": created.headers["etag"]},
         content=content,
     )
     completed = client.post(
-        f"/api/v1/upload-sessions/{created.json()['upload_session_id']}:complete",
+        f"/api/upload-sessions/{created.json()['upload_session_id']}:complete",
         headers={"If-Match": uploaded.headers["etag"], "Idempotency-Key": f"complete-{key}"},
     )
     assert completed.status_code == 202
@@ -72,7 +72,7 @@ def test_direct_browser_preflight_allows_frontend_without_reverse_proxy(tmp_path
     client = TestClient(create_app(components))
 
     response = client.options(
-        "/api/v1/spaces",
+        "/api/spaces",
         headers={
             "Origin": "http://127.0.0.1:5173",
             "Access-Control-Request-Method": "GET",
@@ -94,13 +94,13 @@ def test_upload_complete_document_job_and_worker_flow(tmp_path: Path) -> None:
     assert created.status_code == 201
     session_id = created.json()["upload_session_id"]
     uploaded = client.put(
-        f"/api/v1/upload-sessions/{session_id}/content",
+        f"/api/upload-sessions/{session_id}/content",
         headers={"If-Match": created.headers["etag"]},
         content=content,
     )
     assert uploaded.status_code == 200
     completed = client.post(
-        f"/api/v1/upload-sessions/{session_id}:complete",
+        f"/api/upload-sessions/{session_id}:complete",
         headers={"If-Match": uploaded.headers["etag"], "Idempotency-Key": "complete-1"},
     )
     assert completed.status_code == 202
@@ -110,7 +110,7 @@ def test_upload_complete_document_job_and_worker_flow(tmp_path: Path) -> None:
         "original", components.repository.get_versions(result["document_id"])[0]["original_key"]
     )
 
-    job_before = client.get(f"/api/v1/ingestion-jobs/{result['job_id']}")
+    job_before = client.get(f"/api/ingestion-jobs/{result['job_id']}")
     assert job_before.json()["state"] == "QUEUED"
     assert (
         LocalIngestionWorker(
@@ -122,9 +122,9 @@ def test_upload_complete_document_job_and_worker_flow(tmp_path: Path) -> None:
         ).run_once()
         is True
     )
-    job_after = client.get(f"/api/v1/ingestion-jobs/{result['job_id']}")
+    job_after = client.get(f"/api/ingestion-jobs/{result['job_id']}")
     assert job_after.json()["state"] == "SUCCEEDED"
-    versions = client.get(f"/api/v1/documents/{result['document_id']}/versions/preview")
+    versions = client.get(f"/api/documents/{result['document_id']}/versions/preview")
     assert versions.json()[0]["processing_state"] == "VALIDATED"
     with components.database.connect() as connection:
         chunk = connection.execute(
@@ -136,13 +136,13 @@ def test_upload_complete_document_job_and_worker_flow(tmp_path: Path) -> None:
         ).fetchone()
     assert dict(chunk) == {
         "kind": "heading",
-        "chunking_revision": "node-per-chunk:g1-v1",
-        "tokenizer_id": "whitespace-estimate:g1-v1",
+        "chunking_revision": "node-per-chunk",
+        "tokenizer_id": "whitespace-estimate",
         "status": "STAGED",
     }
 
     replay = client.post(
-        f"/api/v1/upload-sessions/{session_id}:complete",
+        f"/api/upload-sessions/{session_id}:complete",
         headers={"If-Match": uploaded.headers["etag"], "Idempotency-Key": "complete-1"},
     )
     assert replay.status_code == 202
@@ -172,12 +172,12 @@ def test_stale_if_match_is_rejected(tmp_path: Path) -> None:
     session_id = created.json()["upload_session_id"]
 
     first = client.put(
-        f"/api/v1/upload-sessions/{session_id}/content",
+        f"/api/upload-sessions/{session_id}/content",
         headers={"If-Match": created.headers["etag"]},
         content=content,
     )
     stale = client.put(
-        f"/api/v1/upload-sessions/{session_id}/content",
+        f"/api/upload-sessions/{session_id}/content",
         headers={"If-Match": created.headers["etag"]},
         content=content,
     )
@@ -199,12 +199,12 @@ def test_malware_fixture_stays_in_quarantine(tmp_path: Path) -> None:
     )
     session_id = created.json()["upload_session_id"]
     uploaded = client.put(
-        f"/api/v1/upload-sessions/{session_id}/content",
+        f"/api/upload-sessions/{session_id}/content",
         headers={"If-Match": created.headers["etag"]},
         content=content,
     )
     rejected = client.post(
-        f"/api/v1/upload-sessions/{session_id}:complete",
+        f"/api/upload-sessions/{session_id}:complete",
         headers={"If-Match": uploaded.headers["etag"], "Idempotency-Key": "complete"},
     )
 
@@ -222,12 +222,12 @@ def test_abort_removes_quarantine_content(tmp_path: Path) -> None:
     created = _create_session(client, components.space_id, content)
     session_id = created.json()["upload_session_id"]
     uploaded = client.put(
-        f"/api/v1/upload-sessions/{session_id}/content",
+        f"/api/upload-sessions/{session_id}/content",
         headers={"If-Match": created.headers["etag"]},
         content=content,
     )
     aborted = client.post(
-        f"/api/v1/upload-sessions/{session_id}:abort",
+        f"/api/upload-sessions/{session_id}:abort",
         headers={"If-Match": uploaded.headers["etag"], "Idempotency-Key": "abort"},
     )
 
@@ -252,21 +252,19 @@ def test_openapi_contains_frozen_g1_paths_and_headers(tmp_path: Path) -> None:
     schema = app.openapi()
 
     assert app.version == "1.0.0"
-    assert "/api/v1/spaces/{space_id}/upload-sessions" in schema["paths"]
-    assert "/api/v1/upload-sessions/{session_id}:complete" in schema["paths"]
-    assert "/api/v1/ingestion-jobs/{job_id}:cancel" in schema["paths"]
-    assert "/api/v1/ingestion-jobs/{job_id}:retry" in schema["paths"]
-    create_parameters = schema["paths"]["/api/v1/spaces/{space_id}/upload-sessions"]["post"][
+    assert "/api/spaces/{space_id}/upload-sessions" in schema["paths"]
+    assert "/api/upload-sessions/{session_id}:complete" in schema["paths"]
+    assert "/api/ingestion-jobs/{job_id}:cancel" in schema["paths"]
+    assert "/api/ingestion-jobs/{job_id}:retry" in schema["paths"]
+    create_parameters = schema["paths"]["/api/spaces/{space_id}/upload-sessions"]["post"][
         "parameters"
     ]
     assert any(item["name"] == "Idempotency-Key" and item["required"] for item in create_parameters)
-    put_parameters = schema["paths"]["/api/v1/upload-sessions/{session_id}/content"]["put"][
+    put_parameters = schema["paths"]["/api/upload-sessions/{session_id}/content"]["put"][
         "parameters"
     ]
     assert any(item["name"] == "If-Match" and item["required"] for item in put_parameters)
-    cancel_parameters = schema["paths"]["/api/v1/ingestion-jobs/{job_id}:cancel"]["post"][
-        "parameters"
-    ]
+    cancel_parameters = schema["paths"]["/api/ingestion-jobs/{job_id}:cancel"]["post"]["parameters"]
     assert {item["name"] for item in cancel_parameters} >= {"If-Match", "Idempotency-Key"}
 
 
@@ -276,17 +274,17 @@ def test_job_cancel_and_manual_retry_api_are_idempotent_and_etag_guarded(
     components = _components(tmp_path)
     client = TestClient(create_app(components))
     queued = components.queue.enqueue("parse", {}, "cancel-key", "cancel-hash")
-    before_cancel = client.get(f"/api/v1/ingestion-jobs/{queued.id}")
+    before_cancel = client.get(f"/api/ingestion-jobs/{queued.id}")
 
     cancelled = client.post(
-        f"/api/v1/ingestion-jobs/{queued.id}:cancel",
+        f"/api/ingestion-jobs/{queued.id}:cancel",
         headers={
             "If-Match": before_cancel.headers["etag"],
             "Idempotency-Key": "cancel-request",
         },
     )
     replay = client.post(
-        f"/api/v1/ingestion-jobs/{queued.id}:cancel",
+        f"/api/ingestion-jobs/{queued.id}:cancel",
         headers={
             "If-Match": before_cancel.headers["etag"],
             "Idempotency-Key": "cancel-request",
@@ -302,13 +300,13 @@ def test_job_cancel_and_manual_retry_api_are_idempotent_and_etag_guarded(
     leased = components.queue.lease("worker")
     assert leased is not None and leased.id == failed.id
     components.queue.fail(leased.id, "worker", "PERMANENT", retryable=False)
-    before_retry = client.get(f"/api/v1/ingestion-jobs/{failed.id}")
+    before_retry = client.get(f"/api/ingestion-jobs/{failed.id}")
     stale = client.post(
-        f"/api/v1/ingestion-jobs/{failed.id}:retry",
+        f"/api/ingestion-jobs/{failed.id}:retry",
         headers={"If-Match": '"QUEUED:0"', "Idempotency-Key": "stale-retry"},
     )
     retried = client.post(
-        f"/api/v1/ingestion-jobs/{failed.id}:retry",
+        f"/api/ingestion-jobs/{failed.id}:retry",
         headers={
             "If-Match": before_retry.headers["etag"],
             "Idempotency-Key": "retry-request",
@@ -333,10 +331,10 @@ def test_queued_cancel_and_retry_synchronize_document_version(tmp_path: Path) ->
     )
     job_id = str(completed["job_id"])
     version_id = str(completed["document_version_id"])
-    queued = client.get(f"/api/v1/ingestion-jobs/{job_id}")
+    queued = client.get(f"/api/ingestion-jobs/{job_id}")
 
     cancelled = client.post(
-        f"/api/v1/ingestion-jobs/{job_id}:cancel",
+        f"/api/ingestion-jobs/{job_id}:cancel",
         headers={"If-Match": queued.headers["etag"], "Idempotency-Key": "cancel-queued"},
     )
 
@@ -345,7 +343,7 @@ def test_queued_cancel_and_retry_synchronize_document_version(tmp_path: Path) ->
     assert components.repository.get_version(version_id)["processing_state"] == "CANCELLED"
 
     retried = client.post(
-        f"/api/v1/ingestion-jobs/{job_id}:retry",
+        f"/api/ingestion-jobs/{job_id}:retry",
         headers={
             "If-Match": cancelled.headers["etag"],
             "Idempotency-Key": "retry-cancelled",
@@ -379,10 +377,10 @@ def test_retry_wait_cancel_synchronizes_document_version(tmp_path: Path) -> None
         retry_delay=3600,
     )
     assert waiting.state.value == "RETRY_WAIT"
-    response = client.get(f"/api/v1/ingestion-jobs/{job_id}")
+    response = client.get(f"/api/ingestion-jobs/{job_id}")
 
     cancelled = client.post(
-        f"/api/v1/ingestion-jobs/{job_id}:cancel",
+        f"/api/ingestion-jobs/{job_id}:cancel",
         headers={
             "If-Match": response.headers["etag"],
             "Idempotency-Key": "cancel-retry-wait",
@@ -396,9 +394,7 @@ def test_retry_wait_cancel_synchronizes_document_version(tmp_path: Path) -> None
 
 def test_request_id_is_echoed_and_errors_use_standard_shape(tmp_path: Path) -> None:
     client = TestClient(create_app(_components(tmp_path)))
-    response = client.get(
-        "/api/v1/documents/does-not-exist", headers={"X-Request-ID": "request-123"}
-    )
+    response = client.get("/api/documents/does-not-exist", headers={"X-Request-ID": "request-123"})
 
     assert response.status_code == 404
     assert response.headers["X-Request-ID"] == "request-123"
@@ -413,7 +409,7 @@ def test_request_id_is_echoed_and_errors_use_standard_shape(tmp_path: Path) -> N
 
 def test_exported_openapi_snapshot_matches_app(tmp_path: Path) -> None:
     generated = create_app(_components(tmp_path)).openapi()
-    snapshot_path = Path(__file__).resolve().parents[2] / "docs/openapi/openapi-v1.json"
+    snapshot_path = Path(__file__).resolve().parents[2] / "docs/openapi/openapi.json"
     snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
 
     assert snapshot == generated

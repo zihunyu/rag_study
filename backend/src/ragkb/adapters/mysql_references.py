@@ -8,7 +8,7 @@ from ragkb.adapters.mysql_control import MySQLControlPlaneAdapter
 
 
 class MySQLReferenceStore:
-    revision = "mysql-reference-store:g4-v2"
+    revision = "mysql-reference-store"
 
     def __init__(self, control: MySQLControlPlaneAdapter) -> None:
         self.control = control
@@ -19,7 +19,7 @@ class MySQLReferenceStore:
             cursor = connection.cursor()
             cursor.execute(
                 """
-                INSERT INTO reference_tokens_v2(
+                INSERT INTO reference_tokens(
                     opaque_id, token_kind, tenant_id, user_id, run_id,
                     evidence_id, document_id, expires_at, revoked, created_at
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, FALSE, NOW(6))
@@ -46,7 +46,7 @@ class MySQLReferenceStore:
         connection = self.control.connect()
         try:
             cursor = connection.cursor()
-            cursor.execute("SELECT * FROM reference_tokens_v2 WHERE opaque_id=%s", (opaque_id,))
+            cursor.execute("SELECT * FROM reference_tokens WHERE opaque_id=%s", (opaque_id,))
             row = cursor.fetchone()
             if row is None:
                 return None
@@ -62,7 +62,7 @@ class MySQLReferenceStore:
         try:
             cursor = connection.cursor()
             cursor.execute(
-                "UPDATE reference_tokens_v2 SET revoked=TRUE WHERE document_id=%s",
+                "UPDATE reference_tokens SET revoked=TRUE WHERE document_id=%s",
                 (document_id,),
             )
             connection.commit()

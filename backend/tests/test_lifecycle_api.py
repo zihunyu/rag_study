@@ -20,7 +20,7 @@ def _components(tmp_path: Path):
 def _uploaded_version(client: TestClient, space_id: str) -> tuple[str, str]:
     content = b"lifecycle contract"
     created = client.post(
-        f"/api/v1/spaces/{space_id}/upload-sessions",
+        f"/api/spaces/{space_id}/upload-sessions",
         headers={"Idempotency-Key": "create-lifecycle"},
         json={
             "filename": "lifecycle.txt",
@@ -31,12 +31,12 @@ def _uploaded_version(client: TestClient, space_id: str) -> tuple[str, str]:
     )
     session_id = created.json()["upload_session_id"]
     uploaded = client.put(
-        f"/api/v1/upload-sessions/{session_id}/content",
+        f"/api/upload-sessions/{session_id}/content",
         headers={"If-Match": created.headers["etag"]},
         content=content,
     )
     completed = client.post(
-        f"/api/v1/upload-sessions/{session_id}:complete",
+        f"/api/upload-sessions/{session_id}:complete",
         headers={"If-Match": uploaded.headers["etag"], "Idempotency-Key": "complete"},
     ).json()
     return completed["document_id"], completed["document_version_id"]
@@ -52,7 +52,7 @@ def _process_next(components, client: TestClient, version_id: str) -> None:
     ).run_once()
     assert (
         client.post(
-            f"/api/v1/document-versions/{version_id}/review",
+            f"/api/document-versions/{version_id}/review",
             headers={"Idempotency-Key": f"approve-{version_id}"},
             json={
                 "decision": "APPROVED",
@@ -75,21 +75,29 @@ def test_publish_permissions_delete_and_audit_api_are_fail_closed(tmp_path: Path
     _process_next(components, client, version_id)
 
     published = client.post(
-        f"/api/v1/document-versions/{version_id}:publish",
+        f"/api/document-versions/{version_id}:publish",
         headers={"Idempotency-Key": "publish"},
     )
     transition = client.put(
-        f"/api/v1/resources/document/{document_id}/permissions",
-        headers={"Idempotency-Key": "acl-2", "X-Request-ID": "trace-acl",
-                 "If-Match": f'"{published.json()["row_version"]}"'},
-        json={"security_projection": {"visibility": "RESTRICTED", "classification_level": 2,
-                                     "acl_scope_tokens": ["group:legal"]}},
+        f"/api/resources/document/{document_id}/permissions",
+        headers={
+            "Idempotency-Key": "acl-2",
+            "X-Request-ID": "trace-acl",
+            "If-Match": f'"{published.json()["row_version"]}"',
+        },
+        json={
+            "security_projection": {
+                "visibility": "RESTRICTED",
+                "classification_level": 2,
+                "acl_scope_tokens": ["group:legal"],
+            }
+        },
     )
     deleted = client.delete(
-        f"/api/v1/documents/{document_id}",
+        f"/api/documents/{document_id}",
         headers={"Idempotency-Key": "delete", "X-Request-ID": "trace-delete"},
     )
-    audit = client.get("/api/v1/admin/audit-events")
+    audit = client.get("/api/admin/audit-events")
 
     assert published.status_code == 200
     assert transition.status_code == 200, transition.text
@@ -119,7 +127,7 @@ def test_rollback_and_openapi_management_contract(tmp_path: Path) -> None:
     client = TestClient(create_app(components))
 
     rolled_back = client.post(
-        "/api/v1/documents/doc:rollback",
+        "/api/documents/doc:rollback",
         headers={"Idempotency-Key": "rollback"},
         json={"version_id": "v1"},
     )
@@ -128,11 +136,11 @@ def test_rollback_and_openapi_management_contract(tmp_path: Path) -> None:
     assert rolled_back.status_code == 200
     assert rolled_back.json()["active_version_id"] == "v1"
     for path in (
-        "/api/v1/document-versions/{version_id}:publish",
-        "/api/v1/documents/{document_id}:rollback",
-        "/api/v1/resources/document/{document_id}/permissions",
-        "/api/v1/documents/{document_id}",
-        "/api/v1/documents/{document_id}/versions/upload-sessions",
-        "/api/v1/admin/audit-events",
+        "/api/document-versions/{version_id}:publish",
+        "/api/documents/{document_id}:rollback",
+        "/api/resources/document/{document_id}/permissions",
+        "/api/documents/{document_id}",
+        "/api/documents/{document_id}/versions/upload-sessions",
+        "/api/admin/audit-events",
     ):
         assert path in schema["paths"]

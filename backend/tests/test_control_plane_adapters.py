@@ -52,8 +52,8 @@ def test_mysql_adapter_and_migrations_are_explicit_and_secret_safe(tmp_path: Pat
     for field in (
         "generation_id",
         "security_watermark",
-        "last_applied_event_seq",
-        "schema_fingerprint",
+        "entity_revision",
+        "fence_token",
     ):
         assert field in sql
 

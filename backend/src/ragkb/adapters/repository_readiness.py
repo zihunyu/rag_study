@@ -14,7 +14,7 @@ class ReadinessRepositoryPort(Protocol):
 
 
 class RepositoryPublicationReadiness:
-    revision = "repository-publication-readiness:g4-v1"
+    revision = "repository-publication-readiness"
 
     def __init__(self, repository: ReadinessRepositoryPort) -> None:
         self.repository = repository

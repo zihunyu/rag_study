@@ -16,6 +16,6 @@
     }
   },
   "max_provider_calls": 12,
-  "revision": "prompt-injection-real-formats:v1",
+  "revision": "prompt-injection-real-formats",
   "synthetic": true
 }

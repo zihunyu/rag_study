@@ -244,7 +244,7 @@ class ProductionRuntimeFactory:
             JsonCheckpointStore(storage.root / "provider-checkpoints/mineru-runtime.json"),
             result_store,
             external_call_approved=settings.real_provider_calls_enabled,
-            attempt_revision="mineru-production-runtime:v1",
+            attempt_revision="mineru-production-runtime",
             scope="production-runtime",
             max_files=settings.mineru_runtime_max_files,
             max_requests=settings.mineru_runtime_max_requests,

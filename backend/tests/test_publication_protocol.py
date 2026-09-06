@@ -63,7 +63,7 @@ def _create_and_complete(
         content=content,
     )
     completed = client.post(
-        f"/api/v1/upload-sessions/{created.json()['upload_session_id']}:complete",
+        f"/api/upload-sessions/{created.json()['upload_session_id']}:complete",
         headers={"If-Match": uploaded.headers["etag"], "Idempotency-Key": f"complete-{key}"},
     )
     assert completed.status_code == 202
@@ -83,7 +83,7 @@ def _run_worker(components) -> None:
 
 def _approve(client: TestClient, version_id: str, key: str) -> None:
     response = client.post(
-        f"/api/v1/document-versions/{version_id}/review",
+        f"/api/document-versions/{version_id}/review",
         headers={"Idempotency-Key": f"approve-{key}"},
         json={
             "decision": "APPROVED",
@@ -105,7 +105,7 @@ def test_processing_publish_is_rejected_without_side_effects_then_staged_publish
     client = TestClient(create_app(components))
     uploaded = _create_and_complete(
         client,
-        f"/api/v1/spaces/{components.space_id}/upload-sessions",
+        f"/api/spaces/{components.space_id}/upload-sessions",
         b"version one",
         key="v1",
     )
@@ -114,7 +114,7 @@ def test_processing_publish_is_rejected_without_side_effects_then_staged_publish
     audit_before = len(components.lifecycle_store.audit_events)
 
     blocked = client.post(
-        f"/api/v1/document-versions/{version_id}:publish",
+        f"/api/document-versions/{version_id}:publish",
         headers={"Idempotency-Key": "publish-processing"},
     )
 
@@ -133,13 +133,13 @@ def test_processing_publish_is_rejected_without_side_effects_then_staged_publish
     _run_worker(components)
     _approve(client, version_id, "v1")
     published = client.post(
-        f"/api/v1/document-versions/{version_id}:publish",
+        f"/api/document-versions/{version_id}:publish",
         headers={"Idempotency-Key": "publish-processing"},
     )
     before_noop = components.repository.get_document(document_id)["row_version"]
     audit_before_noop = len(components.lifecycle_store.audit_events)
     noop = client.post(
-        f"/api/v1/document-versions/{version_id}:publish",
+        f"/api/document-versions/{version_id}:publish",
         headers={"Idempotency-Key": "publish-ready-new-key"},
     )
 
@@ -167,7 +167,7 @@ def test_publication_readiness_failures_are_409_and_side_effect_free(
     client = TestClient(create_app(components))
     uploaded = _create_and_complete(
         client,
-        f"/api/v1/spaces/{components.space_id}/upload-sessions",
+        f"/api/spaces/{components.space_id}/upload-sessions",
         b"readiness",
         key=column,
     )
@@ -181,7 +181,7 @@ def test_publication_readiness_failures_are_409_and_side_effect_free(
     fact_before = components.repository.get_document(uploaded["document_id"])
 
     response = client.post(
-        f"/api/v1/document-versions/{uploaded['document_version_id']}:publish",
+        f"/api/document-versions/{uploaded['document_version_id']}:publish",
         headers={"Idempotency-Key": "not-ready"},
     )
 
@@ -200,7 +200,7 @@ def test_non_validated_processing_states_can_never_publish(
     client = TestClient(create_app(components))
     uploaded = _create_and_complete(
         client,
-        f"/api/v1/spaces/{components.space_id}/upload-sessions",
+        f"/api/spaces/{components.space_id}/upload-sessions",
         b"processing gate",
         key=processing_state,
     )
@@ -214,7 +214,7 @@ def test_non_validated_processing_states_can_never_publish(
     audit_before = len(components.lifecycle_store.audit_events)
 
     response = client.post(
-        f"/api/v1/document-versions/{uploaded['document_version_id']}:publish",
+        f"/api/document-versions/{uploaded['document_version_id']}:publish",
         headers={"Idempotency-Key": "processing-state-blocked"},
     )
 
@@ -231,18 +231,18 @@ def test_existing_document_new_version_api_keeps_old_serving_then_publishes_and_
     client = TestClient(create_app(components))
     first = _create_and_complete(
         client,
-        f"/api/v1/spaces/{components.space_id}/upload-sessions",
+        f"/api/spaces/{components.space_id}/upload-sessions",
         b"first version",
         key="first",
     )
     _run_worker(components)
     _approve(client, first["document_version_id"], "first")
     client.post(
-        f"/api/v1/document-versions/{first['document_version_id']}:publish",
+        f"/api/document-versions/{first['document_version_id']}:publish",
         headers={"Idempotency-Key": "publish-first"},
     )
-    document = client.get(f"/api/v1/documents/{first['document_id']}/preview")
-    new_version_path = f"/api/v1/documents/{first['document_id']}/versions/upload-sessions"
+    document = client.get(f"/api/documents/{first['document_id']}/preview")
+    new_version_path = f"/api/documents/{first['document_id']}/versions/upload-sessions"
     second = _create_and_complete(
         client,
         new_version_path,
@@ -254,7 +254,7 @@ def test_existing_document_new_version_api_keeps_old_serving_then_publishes_and_
     assert [int(item["version_no"]) for item in versions] == [1, 2]
 
     blocked = client.post(
-        f"/api/v1/document-versions/{second['document_version_id']}:publish",
+        f"/api/document-versions/{second['document_version_id']}:publish",
         headers={"Idempotency-Key": "publish-second-early"},
     )
     assert blocked.status_code == 409
@@ -266,11 +266,11 @@ def test_existing_document_new_version_api_keeps_old_serving_then_publishes_and_
     _run_worker(components)
     _approve(client, second["document_version_id"], "second")
     published = client.post(
-        f"/api/v1/document-versions/{second['document_version_id']}:publish",
+        f"/api/document-versions/{second['document_version_id']}:publish",
         headers={"Idempotency-Key": "publish-second"},
     )
     rolled_back = client.post(
-        f"/api/v1/documents/{first['document_id']}:rollback",
+        f"/api/documents/{first['document_id']}:rollback",
         headers={"Idempotency-Key": "rollback-first"},
         json={"version_id": first["document_version_id"]},
     )
@@ -295,12 +295,12 @@ def test_new_version_session_enforces_rbac_if_match_and_idempotency(tmp_path: Pa
     admin = TestClient(create_app(components))
     first = _create_and_complete(
         admin,
-        f"/api/v1/spaces/{components.space_id}/upload-sessions",
+        f"/api/spaces/{components.space_id}/upload-sessions",
         b"base",
         key="base",
     )
-    document = admin.get(f"/api/v1/documents/{first['document_id']}/preview")
-    path = f"/api/v1/documents/{first['document_id']}/versions/upload-sessions"
+    document = admin.get(f"/api/documents/{first['document_id']}/preview")
+    path = f"/api/documents/{first['document_id']}/versions/upload-sessions"
     body = {
         "filename": "next.txt",
         "expected_size": 4,
@@ -340,20 +340,20 @@ def test_projection_swap_failure_rolls_back_and_keeps_old_version_serving(
     client = TestClient(create_app(components))
     first = _create_and_complete(
         client,
-        f"/api/v1/spaces/{components.space_id}/upload-sessions",
+        f"/api/spaces/{components.space_id}/upload-sessions",
         b"stable old version",
         key="stable-first",
     )
     _run_worker(components)
     _approve(client, first["document_version_id"], "stable-first")
     client.post(
-        f"/api/v1/document-versions/{first['document_version_id']}:publish",
+        f"/api/document-versions/{first['document_version_id']}:publish",
         headers={"Idempotency-Key": "stable-publish-first"},
     )
-    document = client.get(f"/api/v1/documents/{first['document_id']}/preview")
+    document = client.get(f"/api/documents/{first['document_id']}/preview")
     second = _create_and_complete(
         client,
-        f"/api/v1/documents/{first['document_id']}/versions/upload-sessions",
+        f"/api/documents/{first['document_id']}/versions/upload-sessions",
         b"candidate version",
         key="candidate-second",
         create_headers={"If-Match": document.headers["etag"]},

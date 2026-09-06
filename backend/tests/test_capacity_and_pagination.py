@@ -123,7 +123,7 @@ def test_mysql_document_page_loads_only_latest_version_and_matching_session(tmp_
     first_page = repository.list_documents_page("kb", limit=1)
     assert first_page.next_key == (0, document_id)
     connection.cursor().execute(
-        "DELETE FROM upload_entities_v3 WHERE tenant_id=%s "
+        "DELETE FROM upload_entities WHERE tenant_id=%s "
         "AND entity_type='documents' AND entity_id=%s",
         ("tenant", document_id),
     )
@@ -162,7 +162,7 @@ def test_mysql_chunk_cursor_handles_equal_ordinals_without_offset_skips(tmp_path
 
 def test_chunk_cursor_survives_deletion_before_current_position(published):
     runtime, admin, _, version = published
-    path = f"/api/v1/document-versions/{version}/chunks/preview"
+    path = f"/api/document-versions/{version}/chunks/preview"
     first = admin.get(path, params={"limit": 1})
     cursor = first.headers["X-Next-Cursor"]
     assert cursor
@@ -178,9 +178,9 @@ def test_chunk_cursor_survives_deletion_before_current_position(published):
     assert second.headers["X-Next-Cursor"] == ""
     assert admin.get(path, params={"cursor": cursor, "offset": 1}).status_code == 400
     assert admin.get(path, params={"cursor": "bad"}).status_code == 400
-    other_space = admin.post("/api/v1/spaces", json={"name": "other"}).json()["id"]
+    other_space = admin.post("/api/spaces", json={"name": "other"}).json()["id"]
     assert (
-        admin.get(f"/api/v1/spaces/{other_space}/documents", params={"cursor": cursor}).status_code
+        admin.get(f"/api/spaces/{other_space}/documents", params={"cursor": cursor}).status_code
         == 400
     )
 
@@ -196,7 +196,7 @@ def test_empty_authorized_page_still_advances_cursor(published, monkeypatch):
 
     monkeypatch.setattr(repository, "list_chunks_page", filtered)
     reader = reader_for(runtime)
-    path = f"/api/v1/document-versions/{version}/chunks"
+    path = f"/api/document-versions/{version}/chunks"
     first = reader.get(path, params={"limit": 1})
     assert first.json() == []
     assert first.headers["X-Next-Cursor"]
@@ -232,10 +232,10 @@ def test_synchronous_preflight_leaves_event_loop_responsive(tmp_path, monkeypatc
             transport=httpx.ASGITransport(app=app), base_url="http://test"
         ) as client:
             if path == "documents":
-                request = client.get(f"/api/v1/spaces/{runtime.space_id}/documents")
+                request = client.get(f"/api/spaces/{runtime.space_id}/documents")
             else:
                 request = client.post(
-                    f"/api/v1/{path}", json={"query" if path == "search" else "question": "保修期"}
+                    f"/api/{path}", json={"query" if path == "search" else "question": "保修期"}
                 )
             pending = asyncio.create_task(request)
             try:

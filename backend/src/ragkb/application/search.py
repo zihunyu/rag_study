@@ -187,7 +187,7 @@ def _dedupe_context(chunk: AuthorizedChunk) -> tuple[object, ...]:
 
 
 class HybridSearchService:
-    revision = "hybrid-search-service:fact-preserving-dedup:v5"
+    revision = "hybrid-search-service:fact-preserving-dedup"
 
     def __init__(
         self,

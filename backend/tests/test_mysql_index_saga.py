@@ -31,9 +31,9 @@ class _Cursor:
         self.one = None
         self.all = []
         self.rowcount = 0
-        if sql.startswith("SELECT tenant_id") and "FROM index_jobs_v3" in sql:
+        if sql.startswith("SELECT tenant_id") and "FROM index_jobs" in sql:
             self.one = dict(self.database.job) if self.database.job is not None else None
-        elif sql.startswith("INSERT INTO index_jobs_v3"):
+        elif sql.startswith("INSERT INTO index_jobs"):
             (
                 index_job_id,
                 tenant_id,
@@ -60,10 +60,10 @@ class _Cursor:
                 "error_code": None,
             }
             self.rowcount = 1
-        elif sql.startswith("DELETE FROM index_batches_v3"):
+        elif sql.startswith("DELETE FROM index_batches"):
             self.database.batches.clear()
             self.rowcount = 1
-        elif sql.startswith("UPDATE index_jobs_v3 SET expected_count"):
+        elif sql.startswith("UPDATE index_jobs SET expected_count"):
             assert self.database.job is not None
             expected_count, checksum, manifest, _, attempt = parameters
             if int(self.database.job["attempt_number"]) == int(attempt):
@@ -76,7 +76,7 @@ class _Cursor:
                     attempt_number=int(attempt) + 1,
                 )
                 self.rowcount = 1
-        elif sql.startswith("SELECT state, attempt_number FROM index_jobs_v3"):
+        elif sql.startswith("SELECT state, attempt_number FROM index_jobs"):
             if self.database.job is not None:
                 self.one = {
                     "state": self.database.job["state"],
@@ -86,7 +86,7 @@ class _Cursor:
             batch_number = int(parameters[1])
             batch = self.database.batches.get(batch_number)
             self.one = dict(batch) if batch is not None else None
-        elif sql.startswith("INSERT INTO index_batches_v3"):
+        elif sql.startswith("INSERT INTO index_batches"):
             _, batch_number, attempt, manifest, checksum, vector, control = parameters
             self.database.batches[int(batch_number)] = {
                 "batch_number": int(batch_number),
@@ -97,17 +97,17 @@ class _Cursor:
                 "control_confirmed": bool(control),
             }
             self.rowcount = 1
-        elif sql.startswith("UPDATE index_batches_v3"):
+        elif sql.startswith("UPDATE index_batches"):
             vector, control, _, batch_number, attempt = parameters
             batch = self.database.batches[int(batch_number)]
             if int(batch["attempt_number"]) == int(attempt):
                 batch.update(vector_confirmed=bool(vector), control_confirmed=bool(control))
                 self.rowcount = 1
-        elif sql.startswith("SELECT expected_count") and "FROM index_jobs_v3" in sql:
+        elif sql.startswith("SELECT expected_count") and "FROM index_jobs" in sql:
             self.one = dict(self.database.job) if self.database.job is not None else None
         elif sql.startswith("SELECT batch_number"):
             self.all = [dict(self.database.batches[key]) for key in sorted(self.database.batches)]
-        elif sql.startswith("UPDATE index_jobs_v3 SET state='READY'"):
+        elif sql.startswith("UPDATE index_jobs SET state='READY'"):
             assert self.database.job is not None
             _, attempt = parameters
             if (
@@ -117,10 +117,10 @@ class _Cursor:
             ):
                 self.database.job.update(state="READY", error_code=None)
                 self.rowcount = 1
-        elif sql.startswith("SELECT state FROM index_jobs_v3"):
+        elif sql.startswith("SELECT state FROM index_jobs"):
             if self.database.job is not None:
                 self.one = {"state": self.database.job["state"]}
-        elif sql.startswith("UPDATE index_jobs_v3 SET state='FAILED'"):
+        elif sql.startswith("UPDATE index_jobs SET state='FAILED'"):
             assert self.database.job is not None
             if self.database.job["state"] == "BUILDING":
                 self.database.job.update(state="FAILED", error_code=parameters[0])

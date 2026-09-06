@@ -13,7 +13,7 @@ ChunkManifest = tuple[tuple[str, str], ...]
 
 
 class MySQLIndexSagaLedger:
-    revision = "mysql-index-saga:attempt-manifest:g4-v3"
+    revision = "mysql-index-saga:attempt-manifest"
 
     def __init__(self, control: MySQLControlPlaneAdapter) -> None:
         self.control = control
@@ -99,7 +99,7 @@ class MySQLIndexSagaLedger:
                 SELECT tenant_id, space_id, document_id, document_version_id, generation_id,
                        expected_count, expected_checksum, expected_manifest_json,
                        state, attempt_number
-                FROM index_jobs_v3 WHERE index_job_id=%s FOR UPDATE
+                FROM index_jobs WHERE index_job_id=%s FOR UPDATE
                 """,
                 (index_job_id,),
             )
@@ -107,7 +107,7 @@ class MySQLIndexSagaLedger:
             if raw is None:
                 cursor.execute(
                     """
-                    INSERT INTO index_jobs_v3(
+                    INSERT INTO index_jobs(
                         index_job_id, tenant_id, space_id, document_id, document_version_id,
                         generation_id, expected_count, expected_checksum,
                         expected_manifest_json, state, attempt_number, created_at, updated_at
@@ -168,10 +168,10 @@ class MySQLIndexSagaLedger:
                 return index_job_id
             if state not in {"BUILDING", "FAILED"}:
                 raise RuntimeError("INDEX_SAGA_STATE_INVALID")
-            cursor.execute("DELETE FROM index_batches_v3 WHERE index_job_id=%s", (index_job_id,))
+            cursor.execute("DELETE FROM index_batches WHERE index_job_id=%s", (index_job_id,))
             cursor.execute(
                 """
-                UPDATE index_jobs_v3
+                UPDATE index_jobs
                 SET expected_count=%s, expected_checksum=%s, expected_manifest_json=%s,
                     state='BUILDING', error_code=NULL,
                     attempt_number=attempt_number+1, updated_at=NOW(6)
@@ -214,7 +214,7 @@ class MySQLIndexSagaLedger:
             cursor = connection.cursor()
             cursor.execute(
                 """
-                SELECT state, attempt_number FROM index_jobs_v3
+                SELECT state, attempt_number FROM index_jobs
                 WHERE index_job_id=%s FOR UPDATE
                 """,
                 (index_job_id,),
@@ -230,7 +230,7 @@ class MySQLIndexSagaLedger:
                 """
                 SELECT chunk_manifest_json, batch_checksum, vector_confirmed,
                        control_confirmed, attempt_number
-                FROM index_batches_v3
+                FROM index_batches
                 WHERE index_job_id=%s AND batch_number=%s FOR UPDATE
                 """,
                 (index_job_id, batch_number),
@@ -241,7 +241,7 @@ class MySQLIndexSagaLedger:
                     raise RuntimeError("INDEX_SAGA_READY_BATCH_MISSING")
                 cursor.execute(
                     """
-                    INSERT INTO index_batches_v3(
+                    INSERT INTO index_batches(
                         index_job_id, batch_number, attempt_number, chunk_manifest_json,
                         batch_checksum, vector_confirmed, control_confirmed, updated_at
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(6))
@@ -275,7 +275,7 @@ class MySQLIndexSagaLedger:
                     raise RuntimeError("INDEX_SAGA_BATCH_MANIFEST_CONFLICT")
                 cursor.execute(
                     """
-                    UPDATE index_batches_v3
+                    UPDATE index_batches
                     SET vector_confirmed=%s, control_confirmed=%s, updated_at=NOW(6)
                     WHERE index_job_id=%s AND batch_number=%s AND attempt_number=%s
                     """,
@@ -304,7 +304,7 @@ class MySQLIndexSagaLedger:
                 """
                 SELECT expected_count, expected_checksum, expected_manifest_json,
                        state, attempt_number
-                FROM index_jobs_v3 WHERE index_job_id=%s FOR UPDATE
+                FROM index_jobs WHERE index_job_id=%s FOR UPDATE
                 """,
                 (index_job_id,),
             )
@@ -328,7 +328,7 @@ class MySQLIndexSagaLedger:
                 """
                 SELECT batch_number, attempt_number, chunk_manifest_json, batch_checksum,
                        vector_confirmed, control_confirmed
-                FROM index_batches_v3 WHERE index_job_id=%s ORDER BY batch_number
+                FROM index_batches WHERE index_job_id=%s ORDER BY batch_number
                 FOR UPDATE
                 """,
                 (index_job_id,),
@@ -378,7 +378,7 @@ class MySQLIndexSagaLedger:
                 return
             cursor.execute(
                 """
-                UPDATE index_jobs_v3 SET state='READY', error_code=NULL, updated_at=NOW(6)
+                UPDATE index_jobs SET state='READY', error_code=NULL, updated_at=NOW(6)
                 WHERE index_job_id=%s AND state='BUILDING' AND attempt_number=%s
                 """,
                 (index_job_id, int(job["attempt_number"])),
@@ -396,7 +396,7 @@ class MySQLIndexSagaLedger:
         connection = self.control.connect()
         try:
             cursor = connection.cursor()
-            cursor.execute("SELECT state FROM index_jobs_v3 WHERE index_job_id=%s", (index_job_id,))
+            cursor.execute("SELECT state FROM index_jobs WHERE index_job_id=%s", (index_job_id,))
             row = cursor.fetchone()
             if row is None:
                 raise KeyError(index_job_id)
@@ -410,14 +410,14 @@ class MySQLIndexSagaLedger:
             cursor = connection.cursor()
             cursor.execute(
                 """
-                UPDATE index_jobs_v3 SET state='FAILED', error_code=%s, updated_at=NOW(6)
+                UPDATE index_jobs SET state='FAILED', error_code=%s, updated_at=NOW(6)
                 WHERE index_job_id=%s AND state='BUILDING'
                 """,
                 (error_code, index_job_id),
             )
             if cursor.rowcount != 1:
                 cursor.execute(
-                    "SELECT state FROM index_jobs_v3 WHERE index_job_id=%s", (index_job_id,)
+                    "SELECT state FROM index_jobs WHERE index_job_id=%s", (index_job_id,)
                 )
                 row = cursor.fetchone()
                 if row is None:

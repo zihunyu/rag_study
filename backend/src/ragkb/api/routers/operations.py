@@ -33,7 +33,7 @@ def build_operations_router(runtime: RuntimeComponents) -> APIRouter:
     router = APIRouter()
 
     @router.get(
-        "/api/v1/admin/audit-events",
+        "/api/admin/audit-events",
         response_model=list[AuditEventResponse],
         tags=["admin"],
     )
@@ -55,7 +55,7 @@ def build_operations_router(runtime: RuntimeComponents) -> APIRouter:
         ]
 
     @router.get(
-        "/api/v1/admin/diagnostics",
+        "/api/admin/diagnostics",
         response_model=DiagnosticsResponse,
         tags=["operations"],
     )
@@ -65,7 +65,7 @@ def build_operations_router(runtime: RuntimeComponents) -> APIRouter:
         _require_local_tenant(runtime, principal)
         return DiagnosticsResponse.model_validate(runtime.observability.diagnostics())
 
-    @router.get("/api/v1/admin/alerts", tags=["operations"])
+    @router.get("/api/admin/alerts", tags=["operations"])
     def alerts(request: Request) -> list[dict[str, object]]:
         principal = _principal(request)
         _require_role(principal, "admin")
@@ -73,7 +73,7 @@ def build_operations_router(runtime: RuntimeComponents) -> APIRouter:
         return runtime.observability.alerts()
 
     @router.post(
-        "/api/v1/admin/evidence-index",
+        "/api/admin/evidence-index",
         response_model=EvidenceIndexResponse,
         tags=["operations"],
     )
@@ -95,7 +95,7 @@ def build_operations_router(runtime: RuntimeComponents) -> APIRouter:
         )
 
     @router.post(
-        "/api/v1/admin/governance-register",
+        "/api/admin/governance-register",
         response_model=GovernanceRegisterResponse,
         tags=["operations"],
     )

@@ -63,7 +63,7 @@ def _answered_components(tmp_path: Path):
 
 def test_reference_mapping_and_local_random_secret_survive_restart(tmp_path: Path) -> None:
     first = _answered_components(tmp_path)
-    answer = TestClient(create_app(first)).post("/api/v1/ask", json={"question": "q"}).json()
+    answer = TestClient(create_app(first)).post("/api/ask", json={"question": "q"}).json()
     source_url = answer["citations"][0]["source_url"]
 
     # This fixture isolates persistence/signing. It has no indexed content;
@@ -77,17 +77,21 @@ def test_reference_mapping_and_local_random_secret_survive_restart(tmp_path: Pat
 
 def test_reference_is_bound_to_tenant_user_and_revocation(tmp_path: Path) -> None:
     components = _answered_components(tmp_path)
-    answer = TestClient(create_app(components)).post("/api/v1/ask", json={"question": "q"}).json()
+    answer = TestClient(create_app(components)).post("/api/ask", json={"question": "q"}).json()
     parts = answer["citations"][0]["source_url"].split("/")
 
     with pytest.raises(ReferenceTokenError):
-        components.reference_signer.resolve(parts[4], parts[6], "other-tenant", "local-admin")
+        components.reference_signer.resolve(parts[-4], parts[-2], "other-tenant", "local-admin")
     with pytest.raises(ReferenceTokenError):
-        components.reference_signer.resolve(parts[4], parts[6], components.tenant_id, "other-user")
+        components.reference_signer.resolve(
+            parts[-4], parts[-2], components.tenant_id, "other-user"
+        )
 
     components.reference_signer.revoke_document("document")
     with pytest.raises(ReferenceTokenError):
-        components.reference_signer.resolve(parts[4], parts[6], components.tenant_id, "local-admin")
+        components.reference_signer.resolve(
+            parts[-4], parts[-2], components.tenant_id, "local-admin"
+        )
 
 
 def test_reference_expiry_uses_persisted_record(tmp_path: Path) -> None:
@@ -105,45 +109,56 @@ def test_reference_expiry_uses_persisted_record(tmp_path: Path) -> None:
     now[0] = 102.0
 
     with pytest.raises(ReferenceTokenError, match="EXPIRED"):
-        signer.resolve(parts[4], parts[6], "tenant", "user")
+        signer.resolve(parts[-4], parts[-2], "tenant", "user")
 
 
 def test_reference_keyring_rotates_without_invalidating_retiring_tokens(tmp_path: Path) -> None:
     database = SQLiteDatabase(tmp_path / "references.sqlite3")
     store = SQLiteReferenceStore(database)
     old = HMACReferenceSigner(
-        {"v1": SecretStr("old-reference-secret-long")}, store, active_kid="v1"
+        {"retiring": SecretStr("old-reference-secret-long")}, store, active_kid="retiring"
     )
     old_url = old.source_url("run-old", "E1", "tenant", "user", "document")
     old_parts = old_url.split("/")
     rotated = HMACReferenceSigner(
         {
-            "v1": SecretStr("old-reference-secret-long"),
-            "v2": SecretStr("new-reference-secret-long"),
+            "retiring": SecretStr("old-reference-secret-long"),
+            "current": SecretStr("new-reference-secret-long"),
         },
         store,
-        active_kid="v2",
+        active_kid="current",
     )
 
-    assert rotated.resolve(old_parts[4], old_parts[6], "tenant", "user") == (
+    assert rotated.resolve(old_parts[-4], old_parts[-2], "tenant", "user") == (
         "run-old",
         "E1",
     )
     new_url = rotated.source_url("run-new", "E1", "tenant", "user", "document")
-    assert new_url.split("/")[4].startswith("v2.")
+    assert new_url.split("/")[-4].startswith("current.")
 
 
 def test_tombstone_revokes_preview_and_full_ask_context(tmp_path: Path) -> None:
     components = _answered_components(tmp_path)
     client = TestClient(create_app(components))
-    answer = client.post("/api/v1/ask", json={"question": "q"}).json()
+    answer = client.post("/api/ask", json={"question": "q"}).json()
     source_url = answer["citations"][0]["source_url"]
     components.lifecycle_service.delete("document", event_id="delete", trace_id="trace")
     components.reference_signer.revoke_document("document")
 
-    blocked_answer = client.post("/api/v1/ask", json={"question": "q"})
+    blocked_answer = client.post("/api/ask", json={"question": "q"})
     blocked_source = client.get(source_url)
 
     assert blocked_answer.json()["status"] == "system_error"
     assert blocked_answer.json()["answer"] is None
     assert blocked_source.status_code == 404
+
+
+def test_reference_requires_explicit_signing_key_identity(tmp_path: Path) -> None:
+    database = SQLiteDatabase(tmp_path / "references.sqlite3")
+    database.initialize()
+    signer = HMACReferenceSigner(
+        SecretStr("reference-secret-long-enough"), SQLiteReferenceStore(database)
+    )
+    parts = signer.source_url("run", "E1", "tenant", "user", "document").split("/")
+    with pytest.raises(ReferenceTokenError, match="REFERENCE_TOKEN_INVALID"):
+        signer.resolve(parts[-4].split(".", 1)[1], parts[-2], "tenant", "user")

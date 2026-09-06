@@ -20,7 +20,7 @@
 
 独立使用 `DeterministicClaimVerifier` 时，该状态不算验证通过。配置 `CompositeClaimVerifier` 时，只有这种不确定状态可以交给独立语义验证器继续判断，最终是否通过取决于语义结果。明确的数字冲突、引用错误、答案未被 claims 覆盖、外链或凭证索取等失败仍提前阻断。混合断言不能用一项不确定结果覆盖另一项明确失败。
 
-数值修复引入结构校验 v3；后续全证据冲突检查将其更新为 `deterministic-claim-verifier:structured-numeric-and-conflicts:v4`，装配中的验证器版本及缓存键随之更新。数值修复本身没有更改 API 返回协议，也不需要数据库迁移；后续模型冲突协议见 `POLICY-DEDUPLICATION-AND-CONFLICTS.md`。
+数值修复引入结构校验 v3；后续全证据冲突检查将其更新为 `deterministic-claim-verifier:structured-numeric-and-conflicts`，装配中的验证器版本及缓存键随之更新。数值修复本身没有更改 API 返回协议，也不需要数据库迁移；后续模型冲突协议见 `POLICY-DEDUPLICATION-AND-CONFLICTS.md`。
 
 ## 回归验证
 

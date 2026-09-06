@@ -50,7 +50,7 @@ def _parse(
 
 
 class IsolatedNativeParser:
-    revision = "isolated-native-parser:v1"
+    revision = "isolated-native-parser"
 
     def __init__(self, source_format: str, timeout: float = 90) -> None:
         self.source_format, self.timeout = source_format, timeout
@@ -108,7 +108,7 @@ class IsolatedNativeParser:
 
 
 class UnconfiguredASRParser:
-    revision = "asr-unconfigured:v1"
+    revision = "asr-unconfigured"
 
     def parse(self, source: Path, document_version_id: str) -> CanonicalDocument:
         raise ParsingDeferred("ASR_PROVIDER_NOT_CONFIGURED", "audio requires a real ASR provider")

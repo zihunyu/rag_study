@@ -21,7 +21,7 @@ def _assessor(tmp_path, output):
     return OpenAICompatibleQuestionAssessor(settings, transport=transport), transport
 
 
-@pytest.mark.parametrize("path", ["/api/v1/ask", "/api/v1/ask:stream"])
+@pytest.mark.parametrize("path", ["/api/ask", "/api/ask:stream"])
 @pytest.mark.parametrize("production_assessor", [False, True])
 @pytest.mark.parametrize(
     "question,status,reason,fields",
@@ -107,10 +107,10 @@ def test_clarified_question_continues_to_evidence_answer(tmp_path):
     runtime = _components_with_search_qa(tmp_path)
     client = TestClient(create_app(runtime))
     assert (
-        client.post("/api/v1/ask", json={"question": "它的保修期多久？"}).json()["status"]
+        client.post("/api/ask", json={"question": "它的保修期多久？"}).json()["status"]
         == "needs_clarification"
     )
-    result = client.post("/api/v1/ask", json={"question": "产品的保修期多久？"}).json()
+    result = client.post("/api/ask", json={"question": "产品的保修期多久？"}).json()
     assert result["status"] == "answered" and result["citations"]
     assert result["clarification_fields"] == []
 
@@ -131,9 +131,7 @@ def test_assessor_failure_remains_system_error(tmp_path, monkeypatch, failure, c
 
     monkeypatch.setattr(assessor, "_post_json", fail)
     runtime.qa_service.evidence_provider.question_assessor = assessor
-    response = TestClient(create_app(runtime)).post(
-        "/api/v1/ask", json={"question": "保修期多久？"}
-    )
+    response = TestClient(create_app(runtime)).post("/api/ask", json={"question": "保修期多久？"})
     result = response.json()
     assert result["status"] == "system_error" and not result["verified"]
     assert result["retryable"] is retryable and result["warnings"] == [code]

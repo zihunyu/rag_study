@@ -20,7 +20,7 @@ from ragkb.domain.retrieval import SearchContext
 
 
 class SyntheticEvidenceProvider:
-    revision = "synthetic-evidence:g3-v1"
+    revision = "synthetic-evidence"
 
     def __init__(
         self,
@@ -50,10 +50,10 @@ class SyntheticEvidenceProvider:
             user_id=user_id,
             query=question,
             query_time_epoch=int(time.time()),
-            index_generation_id="synthetic-generation:g3-v1",
-            retrieval_revision="synthetic-retrieval:g3-v1",
-            prompt_revision="deterministic-prompt:g3-v1",
-            model_revision="deterministic-generation:g3-v1",
+            index_generation_id="synthetic-generation",
+            retrieval_revision="synthetic-retrieval",
+            prompt_revision="deterministic-prompt",
+            model_revision="deterministic-generation",
             permission_revision=max(
                 (item.permission_revision for item in self.evidence), default=0
             ),
@@ -65,7 +65,7 @@ class SyntheticEvidenceProvider:
 
 
 class DeterministicBufferedGenerator:
-    revision = "deterministic-buffered-generation:g3-v1"
+    revision = "deterministic-buffered-generation"
 
     def __init__(
         self,

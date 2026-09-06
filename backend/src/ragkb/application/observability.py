@@ -7,7 +7,7 @@ from ragkb.contracts.governance import GovernanceRepositoryPort
 
 
 class LocalObservabilityService:
-    revision = "local-observability:g5-v1"
+    revision = "local-observability"
 
     def __init__(
         self, repository: GovernanceRepositoryPort, tracer: InMemoryTracer | None = None

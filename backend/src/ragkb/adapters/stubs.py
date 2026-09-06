@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 
 
 class DeterministicEmbedding:
-    revision = "deterministic-fake-embedding:g0-v1"
+    revision = "deterministic-fake-embedding"
     dimension = 8
 
     def embed(self, texts: Sequence[str]) -> Sequence[Sequence[float]]:
@@ -22,7 +22,7 @@ class DeterministicEmbedding:
 
 
 class DeterministicReranker:
-    revision = "deterministic-fake-reranker:g0-v1"
+    revision = "deterministic-fake-reranker"
 
     def rerank(self, query: str, documents: Sequence[str]) -> Sequence[int]:
         query_terms = set(query.casefold().split())
@@ -34,7 +34,7 @@ class DeterministicReranker:
 
 
 class DeterministicGeneration:
-    revision = "deterministic-fake-generation:g0-v1"
+    revision = "deterministic-fake-generation"
 
     def generate(self, question: str, evidence: Sequence[str]) -> str:
         if not evidence:

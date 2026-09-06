@@ -15,7 +15,7 @@ from ragkb.evaluation.uat_generic_remediation import (
     validate_claim_response,
     validate_source_integrity,
 )
-from ragkb.infrastructure.uat_artifacts import LocalUatArtifactStore
+from ragkb.infrastructure.claim_artifacts import ClaimArtifactStore
 
 
 def _envelope(seed: int, *, document_seed: int | None = None) -> dict[str, object]:
@@ -135,7 +135,7 @@ def test_content_free_audit_export_is_immutable_and_coverage_complete(tmp_path: 
     assert coverage["coverage_complete"] is True
     with pytest.raises(UatRemediationError, match="COVERAGE_MISMATCH"):
         validate_audit_coverage([manifest], ["case-32"])
-    store = LocalUatArtifactStore(tmp_path / "artifacts")
+    store = ClaimArtifactStore(tmp_path / "artifacts")
     stored = store.persist_claim_audit_manifest("case-31", manifest)
     assert store.persist_claim_audit_manifest("case-31", manifest) == stored
     persisted = (store.claim_audit_root / "case-31.json").read_text(encoding="utf-8")

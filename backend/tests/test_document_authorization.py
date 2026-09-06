@@ -28,7 +28,7 @@ def published(tmp_path, monkeypatch):
     _process_next(runtime, admin, version)
     assert (
         admin.post(
-            f"/api/v1/document-versions/{version}:publish",
+            f"/api/document-versions/{version}:publish",
             headers={"Idempotency-Key": "publish"},
         ).status_code
         == 200
@@ -47,9 +47,9 @@ def reader_for(runtime, *, scopes=("group:legal",), clearance=2, roles=("reader"
 
 def paths(runtime, document, version):
     return (
-        f"/api/v1/documents/{document}",
-        f"/api/v1/documents/{document}/versions",
-        f"/api/v1/document-versions/{version}/chunks",
+        f"/api/documents/{document}",
+        f"/api/documents/{document}/versions",
+        f"/api/document-versions/{version}/chunks",
     )
 
 
@@ -83,8 +83,8 @@ def test_reader_and_search_share_resource_policy(published, change, scopes, clea
     reader = reader_for(runtime, scopes=scopes, clearance=clearance)
     for path in paths(runtime, document, version):
         assert reader.get(path).status_code == 404, path
-    assert reader.get(f"/api/v1/spaces/{runtime.space_id}/documents").json() == []
-    response = reader.post("/api/v1/search", json={"query": "fact source"})
+    assert reader.get(f"/api/spaces/{runtime.space_id}/documents").json() == []
+    response = reader.post("/api/search", json={"query": "fact source"})
     assert response.status_code == 200
     assert response.json()["hits"] == []
 
@@ -107,7 +107,7 @@ def test_matching_acl_and_clearance_allow_current_document(published):
         assert reader.get(path).status_code == 200, path
     chunks = reader.get(paths(runtime, document, version)[2]).json()
     assert chunks and all(row["status"] == "SERVING" for row in chunks)
-    assert reader.post("/api/v1/search", json={"query": "fact source"}).json()["hits"]
+    assert reader.post("/api/search", json={"query": "fact source"}).json()["hits"]
 
 
 @pytest.mark.parametrize(
@@ -137,9 +137,7 @@ def test_preview_requires_explicit_management_scope(published, roles, scopes, ex
         assert caller.get(path).status_code == 404
         assert caller.get(path + "?preview=true").status_code == 404
         assert caller.get(path + "/preview").status_code == expected
-    assert (
-        caller.get(f"/api/v1/spaces/{runtime.space_id}/documents/preview").status_code == expected
-    )
+    assert caller.get(f"/api/spaces/{runtime.space_id}/documents/preview").status_code == expected
 
 
 def test_cross_tenant_ids_are_hidden_in_reads_and_preview(published):
@@ -154,7 +152,7 @@ def test_deleted_document_is_hidden_even_from_management_preview(published):
     runtime, admin, document, version = published
     assert (
         admin.delete(
-            f"/api/v1/documents/{document}", headers={"Idempotency-Key": "delete"}
+            f"/api/documents/{document}", headers={"Idempotency-Key": "delete"}
         ).status_code
         == 200
     )
@@ -165,7 +163,7 @@ def test_deleted_document_is_hidden_even_from_management_preview(published):
 
 def test_draft_and_retired_versions_only_available_in_preview(published):
     runtime, admin, document, first = published
-    etag = admin.get(f"/api/v1/documents/{document}/preview").headers["etag"]
+    etag = admin.get(f"/api/documents/{document}/preview").headers["etag"]
     _, second, _ = _upload(
         admin, runtime.space_id, key="next", document_id=document, document_etag=etag
     )
@@ -177,7 +175,7 @@ def test_draft_and_retired_versions_only_available_in_preview(published):
     assert admin.get(paths(runtime, document, second)[2] + "/preview").json()
     assert (
         admin.post(
-            f"/api/v1/document-versions/{second}:publish",
+            f"/api/document-versions/{second}:publish",
             headers={"Idempotency-Key": "publish-next"},
         ).status_code
         == 200
@@ -246,7 +244,7 @@ def test_revocation_during_chunk_loading_fails_closed(published, monkeypatch):
         rows = original(*args, **kwargs)
         assert (
             admin.post(
-                f"/api/v1/documents/{document}:revoke", headers={"Idempotency-Key": "revoke"}
+                f"/api/documents/{document}:revoke", headers={"Idempotency-Key": "revoke"}
             ).status_code
             == 200
         )

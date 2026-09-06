@@ -38,7 +38,7 @@ OPENAPI_VERSION = "1.0.0"
 def build_lifecycle_router(runtime: RuntimeComponents) -> APIRouter:
     router = APIRouter()
 
-    @router.get("/api/v1/documents/{document_id}/lifecycle", response_model=LifecycleResponse)
+    @router.get("/api/documents/{document_id}/lifecycle", response_model=LifecycleResponse)
     def get_lifecycle(document_id: str, request: Request) -> LifecycleResponse:
         principal = _principal(request)
         _require_local_tenant(runtime, principal)
@@ -50,7 +50,7 @@ def build_lifecycle_router(runtime: RuntimeComponents) -> APIRouter:
         return _lifecycle_response(record)
 
     @router.post(
-        "/api/v1/document-versions/{version_id}:publish",
+        "/api/document-versions/{version_id}:publish",
         response_model=LifecycleResponse,
         tags=["lifecycle"],
     )
@@ -84,7 +84,7 @@ def build_lifecycle_router(runtime: RuntimeComponents) -> APIRouter:
         return _lifecycle_response(record)
 
     @router.post(
-        "/api/v1/documents/{document_id}:rollback",
+        "/api/documents/{document_id}:rollback",
         response_model=LifecycleResponse,
         tags=["lifecycle"],
     )
@@ -115,7 +115,7 @@ def build_lifecycle_router(runtime: RuntimeComponents) -> APIRouter:
         return _lifecycle_response(record)
 
     @router.put(
-        "/api/v1/resources/document/{document_id}/permissions",
+        "/api/resources/document/{document_id}/permissions",
         response_model=LifecycleResponse,
         tags=["lifecycle"],
     )
@@ -145,7 +145,7 @@ def build_lifecycle_router(runtime: RuntimeComponents) -> APIRouter:
         return _lifecycle_response(record)
 
     @router.delete(
-        "/api/v1/documents/{document_id}",
+        "/api/documents/{document_id}",
         response_model=DeletionResponse,
         tags=["lifecycle"],
     )
@@ -172,7 +172,7 @@ def build_lifecycle_router(runtime: RuntimeComponents) -> APIRouter:
         )
 
     @router.post(
-        "/api/v1/documents/{document_id}:revoke",
+        "/api/documents/{document_id}:revoke",
         response_model=LifecycleResponse,
         tags=["lifecycle"],
     )
@@ -193,7 +193,7 @@ def build_lifecycle_router(runtime: RuntimeComponents) -> APIRouter:
         return _lifecycle_response(record)
 
     @router.post(
-        "/api/v1/documents/{document_id}/cleanup/{target_store}:run",
+        "/api/documents/{document_id}/cleanup/{target_store}:run",
         response_model=DeletionResponse,
         tags=["lifecycle"],
     )

@@ -15,7 +15,7 @@ from ragkb.application.provider_budget import (
 
 
 class SQLiteProviderBudgetLedger:
-    revision = "sqlite-provider-budget-ledger:v1"
+    revision = "sqlite-provider-budget-ledger"
 
     def __init__(self, path: Path, limits: ProviderBudgetLimits) -> None:
         self.path = path.resolve()

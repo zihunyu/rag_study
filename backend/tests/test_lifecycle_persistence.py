@@ -22,7 +22,7 @@ def _components(tmp_path: Path):
 def _upload(client: TestClient, space_id: str) -> tuple[str, str]:
     content = b"persistent lifecycle"
     created = client.post(
-        f"/api/v1/spaces/{space_id}/upload-sessions",
+        f"/api/spaces/{space_id}/upload-sessions",
         headers={"Idempotency-Key": "create-persistent"},
         json={
             "filename": "persistent.txt",
@@ -33,12 +33,12 @@ def _upload(client: TestClient, space_id: str) -> tuple[str, str]:
     )
     session_id = created.json()["upload_session_id"]
     uploaded = client.put(
-        f"/api/v1/upload-sessions/{session_id}/content",
+        f"/api/upload-sessions/{session_id}/content",
         headers={"If-Match": created.headers["etag"]},
         content=content,
     )
     completed = client.post(
-        f"/api/v1/upload-sessions/{session_id}:complete",
+        f"/api/upload-sessions/{session_id}:complete",
         headers={"If-Match": uploaded.headers["etag"], "Idempotency-Key": "complete"},
     ).json()
     return completed["document_id"], completed["document_version_id"]
@@ -53,18 +53,18 @@ def test_delete_tombstone_blocks_document_and_versions_before_and_after_restart(
     assert version_id
 
     deleted = client.delete(
-        f"/api/v1/documents/{document_id}",
+        f"/api/documents/{document_id}",
         headers={"Idempotency-Key": "delete"},
     )
 
     assert deleted.status_code == 200
-    assert client.get(f"/api/v1/documents/{document_id}").status_code == 404
-    assert client.get(f"/api/v1/documents/{document_id}/versions").status_code == 404
+    assert client.get(f"/api/documents/{document_id}").status_code == 404
+    assert client.get(f"/api/documents/{document_id}/versions").status_code == 404
 
     restarted = _components(tmp_path)
     restarted_client = TestClient(create_app(restarted))
     assert restarted.lifecycle_store.is_tombstoned(document_id)
-    assert restarted_client.get(f"/api/v1/documents/{document_id}").status_code == 404
+    assert restarted_client.get(f"/api/documents/{document_id}").status_code == 404
     with restarted.database.connect() as connection:
         outbox = connection.execute(
             "SELECT target_store, state FROM cleanup_outbox WHERE document_id = ?",
@@ -76,23 +76,32 @@ def test_delete_tombstone_blocks_document_and_versions_before_and_after_restart(
 
 def test_acl_idempotency_is_stable_conflicting_and_restart_safe(tmp_path: Path) -> None:
     from test_lifecycle_fact_source import _process_next, _upload
+
     components = _components(tmp_path)
     client = TestClient(create_app(components))
     document_id, version_id, _ = _upload(client, components.space_id)
     _process_next(components, client, version_id)
     published = client.post(
-        f"/api/v1/document-versions/{version_id}:publish",
+        f"/api/document-versions/{version_id}:publish",
         headers={"Idempotency-Key": "publish"},
     )
     assert published.status_code == 200
-    request = {"security_projection": {"visibility": "RESTRICTED", "classification_level": 1,
-                                       "acl_scope_tokens": ["group:legal"]}}
-    headers = {"Idempotency-Key": "acl-key", "If-Match": f'\"{published.json()["row_version"]}\"'}
-    path = f"/api/v1/resources/document/{document_id}/permissions"
+    request = {
+        "security_projection": {
+            "visibility": "RESTRICTED",
+            "classification_level": 1,
+            "acl_scope_tokens": ["group:legal"],
+        }
+    }
+    headers = {"Idempotency-Key": "acl-key", "If-Match": f'"{published.json()["row_version"]}"'}
+    path = f"/api/resources/document/{document_id}/permissions"
     first = client.put(path, headers=headers, json=request)
     replay = client.put(path, headers=headers, json=request)
-    conflict = client.put(path, headers=headers, json={"security_projection": {
-        **request["security_projection"], "classification_level": 2}})
+    conflict = client.put(
+        path,
+        headers=headers,
+        json={"security_projection": {**request["security_projection"], "classification_level": 2}},
+    )
     assert first.status_code == 200, first.text
     assert first.json()["visible"] is True
     assert replay.json() == first.json()

@@ -50,7 +50,7 @@ OPENAPI_VERSION = "1.0.0"
 def build_pilots_router(runtime: RuntimeComponents) -> APIRouter:
     router = APIRouter()
 
-    @router.post("/api/v1/governance/pilots", response_model=PilotResponse, tags=["pilot"])
+    @router.post("/api/governance/pilots", response_model=PilotResponse, tags=["pilot"])
     def create_pilot(
         body: PilotCreateRequest,
         request: Request,
@@ -69,9 +69,7 @@ def build_pilots_router(runtime: RuntimeComponents) -> APIRouter:
         )
         return _pilot_response(item)
 
-    @router.get(
-        "/api/v1/governance/pilots/{pilot_id}", response_model=PilotResponse, tags=["pilot"]
-    )
+    @router.get("/api/governance/pilots/{pilot_id}", response_model=PilotResponse, tags=["pilot"])
     def get_pilot(pilot_id: str, request: Request) -> PilotResponse:
         principal = _principal(request)
         _require_role(principal, "admin")
@@ -81,7 +79,7 @@ def build_pilots_router(runtime: RuntimeComponents) -> APIRouter:
         except KeyError as error:
             raise ResourceNotFoundError(pilot_id) from error
 
-    @router.post("/api/v1/governance/pilots/{pilot_id}/signoffs", tags=["pilot"])
+    @router.post("/api/governance/pilots/{pilot_id}/signoffs", tags=["pilot"])
     def pilot_signoff(
         pilot_id: str,
         body: GovernanceSignoffRequest,
@@ -110,7 +108,7 @@ def build_pilots_router(runtime: RuntimeComponents) -> APIRouter:
         )
 
     @router.post(
-        "/api/v1/governance/pilots/{pilot_id}:evaluate",
+        "/api/governance/pilots/{pilot_id}:evaluate",
         response_model=ReadinessResponse,
         tags=["pilot"],
     )
@@ -144,7 +142,7 @@ def build_pilots_router(runtime: RuntimeComponents) -> APIRouter:
         item["blockers"] = list(raw_blockers) if isinstance(raw_blockers, (list, tuple)) else []
         return ReadinessResponse.model_validate(item)
 
-    @router.post("/api/v1/governance/pilots/{pilot_id}:canary", tags=["pilot"])
+    @router.post("/api/governance/pilots/{pilot_id}:canary", tags=["pilot"])
     def canary_pilot(
         pilot_id: str,
         request: Request,
@@ -181,7 +179,7 @@ def build_pilots_router(runtime: RuntimeComponents) -> APIRouter:
         )
 
     @router.post(
-        "/api/v1/governance/pilots/{pilot_id}:rollout",
+        "/api/governance/pilots/{pilot_id}:rollout",
         response_model=list[RolloutBatchResponse],
         tags=["pilot"],
     )
@@ -215,7 +213,7 @@ def build_pilots_router(runtime: RuntimeComponents) -> APIRouter:
         return [RolloutBatchResponse.model_validate(batch) for batch in batches]
 
     @router.post(
-        "/api/v1/governance/pilots/{pilot_id}:rollback",
+        "/api/governance/pilots/{pilot_id}:rollback",
         response_model=PilotResponse,
         tags=["pilot"],
     )
@@ -244,7 +242,7 @@ def build_pilots_router(runtime: RuntimeComponents) -> APIRouter:
         except KeyError as error:
             raise ResourceNotFoundError(pilot_id) from error
 
-    @router.post("/api/v1/governance/uat-cases", response_model=UATCaseResponse, tags=["uat"])
+    @router.post("/api/governance/uat-cases", response_model=UATCaseResponse, tags=["uat"])
     def create_uat(
         body: UATCaseCreateRequest,
         request: Request,
@@ -270,7 +268,7 @@ def build_pilots_router(runtime: RuntimeComponents) -> APIRouter:
         return UATCaseResponse.model_validate(item)
 
     @router.put(
-        "/api/v1/governance/uat-cases/{case_id}/result",
+        "/api/governance/uat-cases/{case_id}/result",
         response_model=UATCaseResponse,
         tags=["uat"],
     )
@@ -315,7 +313,7 @@ def build_pilots_router(runtime: RuntimeComponents) -> APIRouter:
         )
         return UATCaseResponse.model_validate(item)
 
-    @router.post("/api/v1/governance/defects", response_model=DefectResponse, tags=["governance"])
+    @router.post("/api/governance/defects", response_model=DefectResponse, tags=["governance"])
     def create_defect(
         body: DefectCreateRequest,
         request: Request,
@@ -337,7 +335,7 @@ def build_pilots_router(runtime: RuntimeComponents) -> APIRouter:
         return DefectResponse.model_validate(item)
 
     @router.put(
-        "/api/v1/governance/defects/{defect_id}:resolve",
+        "/api/governance/defects/{defect_id}:resolve",
         response_model=DefectResponse,
         tags=["governance"],
     )

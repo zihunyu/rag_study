@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def build_plan() -> dict[str, object]:
     return {
-        "revision": "operations-plan:g5-v1",
+        "revision": "operations-plan",
         "steps": [
             "preflight_config_and_secret_status",
             "sqlite_schema_and_file_lineage_snapshot",

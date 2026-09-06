@@ -57,7 +57,7 @@ class WorkerFailure:
 
 
 class LocalIngestionWorker:
-    revision = "local-ingestion-worker:g1-v1"
+    revision = "local-ingestion-worker"
 
     def __init__(
         self,

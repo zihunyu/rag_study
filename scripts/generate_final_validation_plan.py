@@ -14,42 +14,24 @@ from ragkb.domain.governance import FINAL_REAL_EVIDENCE_REQUIREMENTS  # noqa: E4
 
 
 def build_plan() -> dict[str, object]:
-    real_format_path = ROOT / "artifacts/final-validation/real-format-validation.json"
-    real_format_complete = False
-    if real_format_path.is_file():
-        loaded = json.loads(real_format_path.read_text(encoding="utf-8"))
-        real_format_complete = bool(
-            isinstance(loaded, dict)
-            and loaded.get("real_acceptance") is True
-            and loaded.get("format_quality_ready") is True
-            and loaded.get("totals", {}).get("sample_count") == 50
-        )
-    blockers = [
-        blocker
-        for blocker in FINAL_REAL_EVIDENCE_REQUIREMENTS
-        if not (blocker == "REAL_FORMAT_SAMPLES_NON_ASR_5_X_10_REQUIRED" and real_format_complete)
-    ]
+    blockers = list(FINAL_REAL_EVIDENCE_REQUIREMENTS)
     return {
-        "revision": "final-unified-validation-plan:v1",
+        "revision": "final-unified-validation-plan",
         "status": "BLOCKED_REAL_EVIDENCE_MISSING",
         "suites": [
             "non_asr_real_formats_5x10",
             "real_model_quality_cost_and_safety",
-            "mysql_g3_g4_migration",
+            "database_initialization",
             "zilliz_redis_mysql_lifecycle_drill",
             "production_like_performance_long_run_restore",
             "real_uat",
         ],
         "blockers": blockers,
-        "completed_suites": ["non_asr_real_formats_5x10"] if real_format_complete else [],
-        "real_format_acceptance": real_format_complete,
+        "completed_suites": [],
+        "real_format_acceptance": False,
         "synthetic_evidence_can_unlock": False,
         "real_acceptance": False,
         "external_call_performed": False,
-        "scope": {
-            "original_full_g6_scope_includes_7_day_observation": True,
-            "real_7_day_observation": "deferred_by_user",
-        },
     }
 
 

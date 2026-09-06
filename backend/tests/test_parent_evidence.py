@@ -154,7 +154,7 @@ def test_parent_fact_requires_parent_citation_and_source_survives_persistence(
 
     components.qa_service.generator = _Generator()
     client = TestClient(create_app(components))
-    answer = client.post("/api/v1/ask", json={"question": "退款期限多久？"}).json()
+    answer = client.post("/api/ask", json={"question": "退款期限多久？"}).json()
     if citation == "E1":
         assert answer["status"] == AnswerStatus.INSUFFICIENT_EVIDENCE
         assert answer["citations"] == []
@@ -223,7 +223,7 @@ def test_parent_acl_is_rechecked_after_generation(tmp_path) -> None:
     answer = (
         TestClient(create_app(components))
         .post(
-            "/api/v1/ask",
+            "/api/ask",
             json={"question": "退款期限多久？"},
         )
         .json()
@@ -238,7 +238,7 @@ def test_parent_acl_is_rechecked_after_generation(tmp_path) -> None:
 def test_search_response_keeps_parent_location_separate_from_hit(tmp_path) -> None:
     components, _ = _components(tmp_path)
     response = TestClient(create_app(components)).post(
-        "/api/v1/search",
+        "/api/search",
         json={"query": "退款期限"},
     )
 

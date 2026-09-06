@@ -9,7 +9,7 @@ from ragkb.domain.retrieval import SecurityProjection
 
 
 class CompositeDocumentProjection:
-    revision = "composite-document-projection:v1"
+    revision = "composite-document-projection"
 
     def __init__(self, projections: Sequence[DocumentProjectionPort]) -> None:
         if not projections:

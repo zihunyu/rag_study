@@ -46,7 +46,7 @@ def build_uploads_router(runtime: RuntimeComponents) -> APIRouter:
     router = APIRouter()
 
     @router.post(
-        "/api/v1/spaces/{space_id}/upload-sessions",
+        "/api/spaces/{space_id}/upload-sessions",
         response_model=UploadSessionResponse,
         status_code=status.HTTP_201_CREATED,
         responses={409: {"model": ErrorResponse}, 422: {"model": ErrorResponse}},
@@ -75,12 +75,12 @@ def build_uploads_router(runtime: RuntimeComponents) -> APIRouter:
             space_id=session.space_id,
             filename=session.filename,
             state=session.state.value,
-            upload_path=f"/api/v1/upload-sessions/{session.id}/content",
+            upload_path=f"/api/upload-sessions/{session.id}/content",
             row_version=session.row_version,
         )
 
     @router.get(
-        "/api/v1/upload-sessions/{session_id}",
+        "/api/upload-sessions/{session_id}",
         response_model=UploadSessionStatusResponse,
         tags=["ingestion"],
     )
@@ -105,7 +105,7 @@ def build_uploads_router(runtime: RuntimeComponents) -> APIRouter:
         )
 
     @router.post(
-        "/api/v1/documents/{document_id}/versions/upload-sessions",
+        "/api/documents/{document_id}/versions/upload-sessions",
         response_model=UploadSessionResponse,
         tags=["ingestion"],
     )
@@ -135,12 +135,12 @@ def build_uploads_router(runtime: RuntimeComponents) -> APIRouter:
             space_id=session.space_id,
             filename=session.filename,
             state=session.state.value,
-            upload_path=f"/api/v1/upload-sessions/{session.id}/content",
+            upload_path=f"/api/upload-sessions/{session.id}/content",
             row_version=session.row_version,
         )
 
     @router.put(
-        "/api/v1/upload-sessions/{session_id}/content",
+        "/api/upload-sessions/{session_id}/content",
         response_model=UploadSessionStatusResponse,
         tags=["ingestion"],
         openapi_extra={
@@ -185,7 +185,7 @@ def build_uploads_router(runtime: RuntimeComponents) -> APIRouter:
         )
 
     @router.post(
-        "/api/v1/upload-sessions/{session_id}:complete",
+        "/api/upload-sessions/{session_id}:complete",
         response_model=CompleteUploadResponse,
         status_code=status.HTTP_202_ACCEPTED,
         tags=["ingestion"],
@@ -217,7 +217,7 @@ def build_uploads_router(runtime: RuntimeComponents) -> APIRouter:
         return CompleteUploadResponse.model_validate(result)
 
     @router.post(
-        "/api/v1/upload-sessions/{session_id}:abort",
+        "/api/upload-sessions/{session_id}:abort",
         response_model=AbortUploadResponse,
         tags=["ingestion"],
     )

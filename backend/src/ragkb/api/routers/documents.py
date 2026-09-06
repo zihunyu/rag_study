@@ -68,7 +68,7 @@ def build_documents_router(runtime: RuntimeComponents) -> APIRouter:
     router = APIRouter()
 
     @router.get(
-        "/api/v1/documents/{document_id}",
+        "/api/documents/{document_id}",
         response_model=DocumentResponse,
         tags=["documents"],
     )
@@ -76,7 +76,7 @@ def build_documents_router(runtime: RuntimeComponents) -> APIRouter:
         return read_document(document_id, response, request, preview=False)
 
     @router.get(
-        "/api/v1/documents/{document_id}/preview",
+        "/api/documents/{document_id}/preview",
         response_model=DocumentResponse,
         tags=["documents", "management-preview"],
     )
@@ -110,7 +110,7 @@ def build_documents_router(runtime: RuntimeComponents) -> APIRouter:
         )
 
     @router.get(
-        "/api/v1/documents/{document_id}/versions",
+        "/api/documents/{document_id}/versions",
         response_model=list[DocumentVersionResponse],
         tags=["documents"],
     )
@@ -118,7 +118,7 @@ def build_documents_router(runtime: RuntimeComponents) -> APIRouter:
         return read_versions(document_id, request, preview=False)
 
     @router.get(
-        "/api/v1/documents/{document_id}/versions/preview",
+        "/api/documents/{document_id}/versions/preview",
         response_model=list[DocumentVersionResponse],
         tags=["documents", "management-preview"],
     )
@@ -164,7 +164,7 @@ def build_documents_router(runtime: RuntimeComponents) -> APIRouter:
         ]
 
     @router.get(
-        "/api/v1/document-versions/{version_id}/chunks",
+        "/api/document-versions/{version_id}/chunks",
         response_model=list[DocumentChunkResponse],
         tags=["documents", "retrieval"],
     )
@@ -179,7 +179,7 @@ def build_documents_router(runtime: RuntimeComponents) -> APIRouter:
         return read_chunks(version_id, request, response, limit, offset, cursor, preview=False)
 
     @router.get(
-        "/api/v1/document-versions/{version_id}/chunks/preview",
+        "/api/document-versions/{version_id}/chunks/preview",
         response_model=list[DocumentChunkResponse],
         tags=["documents", "management-preview"],
     )
@@ -261,7 +261,7 @@ def build_documents_router(runtime: RuntimeComponents) -> APIRouter:
         return [DocumentChunkResponse.model_validate(item) for item in rows]
 
     @router.get(
-        "/api/v1/document-versions/{version_id}/quality-report",
+        "/api/document-versions/{version_id}/quality-report",
         response_model=DocumentQualityResponse,
         tags=["validation"],
     )
@@ -284,7 +284,7 @@ def build_documents_router(runtime: RuntimeComponents) -> APIRouter:
         )
 
     @router.post(
-        "/api/v1/document-versions/{version_id}/review",
+        "/api/document-versions/{version_id}/review",
         response_model=DocumentReviewResponse,
         tags=["validation"],
     )
@@ -336,7 +336,7 @@ def build_documents_router(runtime: RuntimeComponents) -> APIRouter:
                 decision=body.decision,
                 comment=body.comment,
                 quality_revision=str(quality["parser_revision"]),
-                security_revision="reviewed-security:v1" if security is not None else None,
+                security_revision="reviewed-security" if security is not None else None,
                 security_projection=(
                     {
                         "visibility": security.visibility,
@@ -376,7 +376,7 @@ def build_documents_router(runtime: RuntimeComponents) -> APIRouter:
             return DocumentReviewResponse.model_validate(result)
 
     @router.get(
-        "/api/v1/ingestion-jobs/{job_id}",
+        "/api/ingestion-jobs/{job_id}",
         response_model=JobResponse,
         tags=["jobs"],
     )
@@ -395,7 +395,7 @@ def build_documents_router(runtime: RuntimeComponents) -> APIRouter:
         return _job_response(job)
 
     @router.post(
-        "/api/v1/ingestion-jobs/{job_id}:cancel",
+        "/api/ingestion-jobs/{job_id}:cancel",
         response_model=JobResponse,
         status_code=status.HTTP_202_ACCEPTED,
         tags=["jobs"],
@@ -437,7 +437,7 @@ def build_documents_router(runtime: RuntimeComponents) -> APIRouter:
         return result
 
     @router.post(
-        "/api/v1/ingestion-jobs/{job_id}:retry",
+        "/api/ingestion-jobs/{job_id}:retry",
         response_model=JobResponse,
         status_code=status.HTTP_202_ACCEPTED,
         tags=["jobs"],

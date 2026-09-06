@@ -17,7 +17,7 @@ class ProjectionInspectorPort(Protocol):
 
 
 class ExternalProjectionCleanupExecutor:
-    revision = "external-projection-cleanup:v1"
+    revision = "external-projection-cleanup"
 
     def __init__(
         self,
@@ -48,7 +48,7 @@ class ExternalProjectionCleanupExecutor:
 class RedisDocumentCleanupExecutor:
     """Invalidate shared verified-answer caches after deletion and verify the postcondition."""
 
-    revision = "redis-document-cache-cleanup:v2"
+    revision = "redis-document-cache-cleanup"
 
     def __init__(self, redis: RedisCacheRateLimitAdapter) -> None:
         self.redis = redis

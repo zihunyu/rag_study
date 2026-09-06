@@ -31,7 +31,7 @@ from ragkb.infrastructure.sqlite import SQLiteDatabase
 
 
 class SQLiteUploadRepository:
-    revision = "sqlite-upload-repository:g1-v1"
+    revision = "sqlite-upload-repository"
     cleanable_partitions = frozenset({"original", "artifacts", "quarantine", "temp"})
 
     def __init__(self, database: SQLiteDatabase) -> None:
@@ -1004,7 +1004,7 @@ class SQLiteUploadRepository:
             lineage.add(("original", original_key))
             prefix, separator, _ = original_key.rpartition("/original/")
             if separator:
-                lineage.add(("artifacts", f"{prefix}/artifacts/canonical-document-v1.json"))
+                lineage.add(("artifacts", f"{prefix}/artifacts/canonical-document.json"))
         for row in sessions:
             lineage.add(("quarantine", str(row["quarantine_key"])))
             if row["original_key"]:
@@ -1069,8 +1069,8 @@ class SQLiteUploadRepository:
                         text_hash,
                         max(1, len(node.original_text.split())),
                         node.node_type.value,
-                        "node-per-chunk:g1-v1",
-                        "whitespace-estimate:g1-v1",
+                        "node-per-chunk",
+                        "whitespace-estimate",
                     ),
                 )
             connection.execute(

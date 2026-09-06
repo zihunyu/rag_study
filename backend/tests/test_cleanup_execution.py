@@ -18,7 +18,7 @@ from ragkb.runtime_components import build_runtime_components
 def _upload(client: TestClient, space_id: str) -> tuple[str, str]:
     content = b"cleanup postcondition"
     created = client.post(
-        f"/api/v1/spaces/{space_id}/upload-sessions",
+        f"/api/spaces/{space_id}/upload-sessions",
         headers={"Idempotency-Key": "cleanup-create"},
         json={
             "filename": "cleanup.txt",
@@ -28,12 +28,12 @@ def _upload(client: TestClient, space_id: str) -> tuple[str, str]:
         },
     )
     uploaded = client.put(
-        f"/api/v1/upload-sessions/{created.json()['upload_session_id']}/content",
+        f"/api/upload-sessions/{created.json()['upload_session_id']}/content",
         headers={"If-Match": created.headers["etag"]},
         content=content,
     )
     completed = client.post(
-        f"/api/v1/upload-sessions/{created.json()['upload_session_id']}:complete",
+        f"/api/upload-sessions/{created.json()['upload_session_id']}:complete",
         headers={"If-Match": uploaded.headers["etag"], "Idempotency-Key": "complete"},
     ).json()
     return completed["document_id"], completed["document_version_id"]
@@ -49,15 +49,15 @@ def test_local_cleanup_deletes_file_before_completion_and_external_stays_pending
     client = TestClient(create_app(components))
     document_id, version_id = _upload(client, components.space_id)
     original_key = str(components.repository.get_version(version_id)["original_key"])
-    client.delete(f"/api/v1/documents/{document_id}", headers={"Idempotency-Key": "delete"})
+    client.delete(f"/api/documents/{document_id}", headers={"Idempotency-Key": "delete"})
     assert components.storage.exists("original", original_key)
 
     cleaned = client.post(
-        f"/api/v1/documents/{document_id}/cleanup/local_file:run",
+        f"/api/documents/{document_id}/cleanup/local_file:run",
         headers={"Idempotency-Key": "cleanup-local"},
     )
     blocked = client.post(
-        f"/api/v1/documents/{document_id}/cleanup/redis:run",
+        f"/api/documents/{document_id}/cleanup/redis:run",
         headers={"Idempotency-Key": "cleanup-redis"},
     )
 
@@ -167,9 +167,9 @@ def test_local_cleanup_removes_worker_artifacts_tracked_residue_and_multiple_ver
     tracked = components.repository.list_local_content_lineage(document_id)
     assert components.storage.exists("artifacts", canonical_key)
 
-    client.delete(f"/api/v1/documents/{document_id}", headers={"Idempotency-Key": "delete-lineage"})
+    client.delete(f"/api/documents/{document_id}", headers={"Idempotency-Key": "delete-lineage"})
     response = client.post(
-        f"/api/v1/documents/{document_id}/cleanup/local_file:run",
+        f"/api/documents/{document_id}/cleanup/local_file:run",
         headers={"Idempotency-Key": "cleanup-lineage"},
     )
 

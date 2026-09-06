@@ -78,7 +78,7 @@ def test_answered_is_buffered_verified_and_uses_opaque_signed_citation(tmp_path:
     assert "internal-document-id" not in url
     assert "internal-chunk-id" not in url
     parts = url.split("/")
-    assert signer.resolve(parts[4], parts[6], "tenant-1", "user-1") == (
+    assert signer.resolve(parts[-4], parts[-2], "tenant-1", "user-1") == (
         result.rag_run_id,
         "E1",
     )
@@ -281,7 +281,7 @@ def test_tampered_reference_is_rejected(tmp_path: Path) -> None:
     parts = url.split("/")
 
     with pytest.raises(ReferenceTokenError):
-        signer.resolve(parts[4] + "x", parts[6], "tenant", "user")
+        signer.resolve(parts[-4] + "x", parts[-2], "tenant", "user")
 
 
 def test_retrieval_or_permission_provider_failure_is_system_error_without_leak(

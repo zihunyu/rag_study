@@ -16,7 +16,7 @@ from ragkb.domain.ids import new_uuid7
 
 
 class PlainTextParser:
-    revision = "plain-text-parser:g1-v2"
+    revision = "plain-text-parser"
 
     def __init__(self, source_format: str) -> None:
         self.source_format = source_format
@@ -84,7 +84,7 @@ class _HTMLExtractor(HTMLParser):
 
 
 class HTMLUploadParser:
-    revision = "html-upload-parser:g1-v2"
+    revision = "html-upload-parser"
 
     def parse(self, source: Path, document_version_id: str) -> CanonicalDocument:
         extractor = _HTMLExtractor()
@@ -103,7 +103,7 @@ class HTMLUploadParser:
 
 
 class TextPDFParser:
-    revision = "pypdf-text:g1-v1"
+    revision = "pypdf-text"
 
     def parse(self, source: Path, document_version_id: str) -> CanonicalDocument:
         reader = PdfReader(str(source))

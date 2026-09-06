@@ -1,7 +1,6 @@
 """Row-level MySQL persistence for production aggregate entities.
 
-The legacy v2 repositories stored every entity for a tenant in one JSON row.  This
-store keeps one independently versioned row per domain entity and writes only the
+This store keeps one independently versioned row per domain entity and writes only the
 rows changed by a transaction.
 """
 
@@ -33,9 +32,7 @@ EntityMap = dict[tuple[str, str], EntityRow]
 class MySQLNormalizedEntityStore:
     """Optimistically synchronize independently addressable aggregate rows."""
 
-    _ALLOWED_TABLES = frozenset(
-        {"upload_entities_v3", "lifecycle_entities_v3", "governance_entities_v3"}
-    )
+    _ALLOWED_TABLES = frozenset({"upload_entities", "lifecycle_entities", "governance_entities"})
 
     def __init__(self, table: str, tenant_id: str) -> None:
         if table not in self._ALLOWED_TABLES:

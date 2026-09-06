@@ -8,7 +8,7 @@ from ragkb.domain.retrieval import AuthorizedChunk, SearchContext
 
 
 class ResourceAuthorizationService:
-    revision = "resource-authorization:v1"
+    revision = "resource-authorization"
 
     def __init__(
         self, control_plane: RetrievalControlPlanePort, lifecycle: InMemoryLifecycleStore

@@ -8,8 +8,6 @@ from pydantic import SecretStr
 from ragkb.adapters.provider_http import (
     MinerUHttpTransport,
     OpenAIEmbeddingBatchTransport,
-    UatLlmHttpTransport,
-    UatRerankerHttpTransport,
 )
 from ragkb.config import EnvSettings
 from ragkb.contracts.provider_execution import ProviderExecutionError
@@ -243,76 +241,3 @@ def test_embedding_complete_400_keeps_code_type_but_not_message(
     assert error.trace_id_hash is not None and len(error.trace_id_hash) == 64
     assert error.outcome_unknown is False
     assert "sensitive request detail" not in str(error)
-
-
-def test_uat_reranker_and_llm_http_contracts_parse_strict_results(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    settings = EnvSettings(
-        reranker_base_url="https://reranker.example/v1",
-        reranker_api_key=SecretStr("test-reranker-secret"),
-        reranker_model="reranker-model",
-        llm_base_url="https://llm.example/v1",
-        llm_api_key=SecretStr("test-llm-secret"),
-        llm_model="llm-model",
-    )
-
-    def fake_post(url, **kwargs):
-        if str(url).endswith("/rerank"):
-            return httpx.Response(200, json={"results": [{"index": 1}, {"index": 0}]})
-        return httpx.Response(
-            200,
-            json={
-                "choices": [
-                    {
-                        "message": {
-                            "content": '{"status":"answered","answer":"ok","citation_ids":["e1"]}'
-                        }
-                    }
-                ]
-            },
-        )
-
-    monkeypatch.setattr(httpx, "post", fake_post)
-    assert UatRerankerHttpTransport(settings).rerank(
-        "synthetic question", ["one", "two"], 2, "safe-key", 30
-    ) == [1, 0]
-    generated = UatLlmHttpTransport(settings).generate(
-        "synthetic question",
-        [{"evidence_id": "e1", "locator": {"page": 1}, "content": "synthetic"}],
-        "safe-key",
-        30,
-    )
-    assert generated["status"] == "answered"
-    assert generated["citation_ids"] == ["e1"]
-
-
-def test_uat_http_error_keeps_safe_scalars_only(monkeypatch: pytest.MonkeyPatch) -> None:
-    settings = EnvSettings(
-        reranker_base_url="https://reranker.example/v1",
-        reranker_api_key=SecretStr("test-secret"),
-        reranker_model="reranker-model",
-    )
-    monkeypatch.setattr(
-        httpx,
-        "post",
-        lambda *args, **kwargs: httpx.Response(
-            400,
-            json={
-                "error": {
-                    "code": "InvalidInput",
-                    "type": "invalid_request_error",
-                    "message": "sensitive provider detail",
-                },
-                "trace_id": "opaque-trace",
-            },
-        ),
-    )
-    with pytest.raises(ProviderExecutionError) as raised:
-        UatRerankerHttpTransport(settings).rerank("question", ["document"], 1, "safe-key", 30)
-    error = raised.value
-    assert error.status_code == 400
-    assert error.provider_error_code == "InvalidInput"
-    assert error.provider_error_type == "invalid_request_error"
-    assert error.trace_id_hash is not None and len(error.trace_id_hash) == 64
-    assert "sensitive provider detail" not in str(error)

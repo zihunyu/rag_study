@@ -1,4 +1,4 @@
-"""CanonicalDocument and SourceLocator v1 contracts."""
+"""CanonicalDocument and SourceLocator contracts."""
 
 from __future__ import annotations
 

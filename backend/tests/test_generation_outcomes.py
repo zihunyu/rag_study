@@ -25,7 +25,7 @@ ANSWER = {
 }
 
 
-@pytest.mark.parametrize("path", ["/api/v1/ask", "/api/v1/ask:stream"])
+@pytest.mark.parametrize("path", ["/api/ask", "/api/ask:stream"])
 @pytest.mark.parametrize(
     "failure,warning,retryable",
     [
@@ -115,7 +115,7 @@ def test_generator_returns_explicit_refusal_status_and_prompts_for_it(tmp_path):
     prompt = transport.calls[0]["payload"]["messages"][0]["content"]
     assert '"status":"insufficient_evidence"' in prompt
     assert "status (exactly answered or insufficient_evidence)" in prompt
-    assert generator.revision.endswith(":structured-status:v2")
+    assert generator.revision.endswith(":structured-status")
 
 
 @pytest.fixture
@@ -133,7 +133,7 @@ def runtime(tmp_path, monkeypatch):
     return _components_with_search_qa(tmp_path)
 
 
-@pytest.mark.parametrize("path", ["/api/v1/ask", "/api/v1/ask:stream"])
+@pytest.mark.parametrize("path", ["/api/ask", "/api/ask:stream"])
 @pytest.mark.parametrize(
     "output,expected_status,warning",
     [
@@ -198,7 +198,7 @@ def test_model_service_failure_is_retryable_system_error(runtime, monkeypatch):
     monkeypatch.setattr(runtime.qa_service.generator, "generate", unavailable)
     result = (
         TestClient(create_app(runtime))
-        .post("/api/v1/ask", json={"question": "退款政策是什么？"})
+        .post("/api/ask", json={"question": "退款政策是什么？"})
         .json()
     )
     assert result["status"] == "system_error" and not result["verified"]

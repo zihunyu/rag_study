@@ -26,11 +26,10 @@ def test_operations_assurance_and_final_plan_are_offline_and_fail_closed() -> No
     assert final["status"] == "BLOCKED_REAL_EVIDENCE_MISSING"
     assert final["synthetic_evidence_can_unlock"] is False
     assert final["real_acceptance"] is False
-    assert final["real_format_acceptance"] is True
-    assert "non_asr_real_formats_5x10" in final["completed_suites"]
-    assert "REAL_FORMAT_SAMPLES_NON_ASR_5_X_10_REQUIRED" not in final["blockers"]
+    assert final["real_format_acceptance"] is False
+    assert final["completed_suites"] == []
+    assert "REAL_FORMAT_SAMPLES_NON_ASR_5_X_10_REQUIRED" in final["blockers"]
     assert "seven_day_observation" not in final["suites"]
-    assert final["scope"]["real_7_day_observation"] == "deferred_by_user"
     assert canary["simulated"] is True
     assert canary["real_acceptance"] is False
 

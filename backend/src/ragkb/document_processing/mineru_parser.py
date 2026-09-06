@@ -22,7 +22,7 @@ _NODE_TYPES = {
 
 
 class MinerUProductionParser:
-    revision = "mineru-production-canonical:v1"
+    revision = "mineru-production-canonical"
 
     def __init__(
         self,

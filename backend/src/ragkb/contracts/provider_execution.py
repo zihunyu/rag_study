@@ -115,33 +115,8 @@ class EmbeddingBatchTransportPort(Protocol):
     ) -> Sequence[Sequence[float]]: ...
 
 
-class UatRerankerTransportPort(Protocol):
-    real_network: bool
-
-    def rerank(
-        self,
-        query: str,
-        documents: Sequence[str],
-        top_n: int,
-        idempotency_key: str,
-        timeout_seconds: float,
-    ) -> Sequence[int]: ...
-
-
-class UatLlmTransportPort(Protocol):
-    real_network: bool
-
-    def generate(
-        self,
-        question: str,
-        evidence: Sequence[Mapping[str, object]],
-        idempotency_key: str,
-        timeout_seconds: float,
-    ) -> Mapping[str, object]: ...
-
-
 class UatClaimTransportPort(Protocol):
-    """Future-only transport for the versioned structured-claim UAT contract."""
+    """Transport for the structured-claim acceptance contract."""
 
     real_network: bool
 
@@ -154,7 +129,7 @@ class UatClaimTransportPort(Protocol):
 
 
 class UatClaimArtifactStorePort(Protocol):
-    """Future-only storage port for claim results and content-free audit manifests."""
+    """Storage port for claim results and content-free audit manifests."""
 
     def persist_claim_audit_manifest(
         self, test_case_id: str, manifest: Mapping[str, Any]
@@ -171,9 +146,3 @@ class UatClaimArtifactStorePort(Protocol):
     ) -> Mapping[str, object]: ...
 
     def read_claim_coverage_manifest(self) -> Mapping[str, object] | None: ...
-
-
-class UatResultStorePort(Protocol):
-    def persist_result(
-        self, candidate_id: str, result: Mapping[str, Any]
-    ) -> Mapping[str, object]: ...

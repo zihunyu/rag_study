@@ -22,7 +22,7 @@ def _upload(
     key: str,
 ) -> dict[str, str]:
     created = client.post(
-        f"/api/v1/spaces/{space_id}/upload-sessions",
+        f"/api/spaces/{space_id}/upload-sessions",
         headers={"Idempotency-Key": f"quality-create-{key}"},
         json={
             "filename": filename,
@@ -37,7 +37,7 @@ def _upload(
         content=content,
     )
     return client.post(
-        f"/api/v1/upload-sessions/{created.json()['upload_session_id']}:complete",
+        f"/api/upload-sessions/{created.json()['upload_session_id']}:complete",
         headers={
             "If-Match": uploaded.headers["etag"],
             "Idempotency-Key": f"quality-complete-{key}",
@@ -71,17 +71,17 @@ def test_missing_or_non_approved_or_stale_review_blocks_publication(tmp_path: Pa
     )
     _worker(components)
     version_id = item["document_version_id"]
-    publish_path = f"/api/v1/document-versions/{version_id}:publish"
+    publish_path = f"/api/document-versions/{version_id}:publish"
 
     missing = client.post(publish_path, headers={"Idempotency-Key": "quality-publish"})
     client.post(
-        f"/api/v1/document-versions/{version_id}/review",
+        f"/api/document-versions/{version_id}/review",
         headers={"Idempotency-Key": "needs-rework"},
         json={"decision": "NEEDS_REWORK", "comment": "synthetic issue"},
     )
     needs_rework = client.post(publish_path, headers={"Idempotency-Key": "quality-publish"})
     client.post(
-        f"/api/v1/document-versions/{version_id}/review",
+        f"/api/document-versions/{version_id}/review",
         headers={"Idempotency-Key": "approved"},
         json={
             "decision": "APPROVED",
@@ -127,9 +127,9 @@ def test_blocked_real_validation_stub_cannot_be_approved_into_serving(tmp_path: 
     )
     _worker(components)
     version_id = item["document_version_id"]
-    quality = client.get(f"/api/v1/document-versions/{version_id}/quality-report")
+    quality = client.get(f"/api/document-versions/{version_id}/quality-report")
     approved = client.post(
-        f"/api/v1/document-versions/{version_id}/review",
+        f"/api/document-versions/{version_id}/review",
         headers={"Idempotency-Key": "stub-approval"},
         json={
             "decision": "APPROVED",
@@ -142,7 +142,7 @@ def test_blocked_real_validation_stub_cannot_be_approved_into_serving(tmp_path: 
         },
     )
     published = client.post(
-        f"/api/v1/document-versions/{version_id}:publish",
+        f"/api/document-versions/{version_id}:publish",
         headers={"Idempotency-Key": "stub-publish"},
     )
 

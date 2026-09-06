@@ -20,7 +20,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Export or verify the G1 OpenAPI snapshot")
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
-    output = ROOT / "docs/openapi/openapi-v1.json"
+    output = ROOT / "docs/openapi/openapi.json"
     # Schema export must never initialize the configured business database.
     os.environ.update(
         APP_ENV="testing",

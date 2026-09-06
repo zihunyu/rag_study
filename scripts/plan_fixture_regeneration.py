@@ -18,8 +18,8 @@ def plan(scan: dict) -> dict:
                 {
                     "fixture_ref": item.get("fixture_ref"),
                     "source_sha256": item.get("source_sha256"),
-                    "renderer_policy": "generic-local-renderer-v1",
-                    "font_policy": "glyph-capability-fallback-v1",
+                    "renderer_policy": "generic-local-renderer",
+                    "font_policy": "glyph-capability-fallback",
                     "metadata_lineage_action": "UPDATE_AFTER_ATOMIC_REBUILD",
                 }
             )
@@ -32,7 +32,7 @@ def plan(scan: dict) -> dict:
                 }
             )
     return {
-        "revision": "fixture-regeneration-plan:v1",
+        "revision": "fixture-regeneration-plan",
         "dry_run": True,
         "rebuild_count": len(records),
         "blocked_count": len(blocked),

@@ -15,7 +15,7 @@ from ragkb.evaluation.g3_eval import load_g3_eval_dataset, run_g3_eval_harness  
 def main() -> int:
     dataset = load_g3_eval_dataset(
         ROOT / "backend/tests/fixtures/manifests/g3-eval-dataset.yaml",
-        ROOT / "backend/src/ragkb/contracts/schemas/g3-eval-dataset-v1.schema.json",
+        ROOT / "backend/src/ragkb/contracts/schemas/g3-eval-dataset.schema.json",
     )
     report = run_g3_eval_harness(dataset, lambda case: str(case["expected_status"]))
     print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))

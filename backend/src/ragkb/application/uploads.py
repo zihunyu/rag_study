@@ -34,7 +34,7 @@ class MalwareRejectedError(RuntimeError):
 
 
 class UploadService:
-    revision = "upload-service:g1-v1"
+    revision = "upload-service"
 
     def __init__(
         self,

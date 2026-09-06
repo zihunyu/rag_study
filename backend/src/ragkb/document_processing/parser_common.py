@@ -36,7 +36,7 @@ def canonical_document(
         source_format=source_format,
         nodes=tuple(nodes),
         parser_revision=parser_revision,
-        normalization_revision="normalization:g1-v1",
+        normalization_revision="normalization",
         content_checksum=checksum(path),
         tables=tuple(tables or []),
         quality_issues=tuple(quality_issues or []),

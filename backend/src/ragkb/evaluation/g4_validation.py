@@ -13,7 +13,7 @@ from ragkb.application.resilience import DryRunCostMeter, LocalCircuitBreaker
 from ragkb.evaluation.prompt_injection import run_prompt_injection_cases
 from ragkb.evaluation.runtime_backup import run_runtime_backup_restore_probe
 from ragkb.evaluation.system_performance import run_representative_system_paths
-from ragkb.infrastructure.sqlite import SCHEMA_VERSION, SQLiteDatabase
+from ragkb.infrastructure.sqlite import SCHEMA_REVISION, SQLiteDatabase
 
 
 def _migration_probe() -> dict[str, object]:
@@ -21,9 +21,9 @@ def _migration_probe() -> dict[str, object]:
         database = SQLiteDatabase(Path(temporary) / "migration.sqlite3")
         database.initialize()
         with database.connect() as connection:
-            revision = int(
+            revision = str(
                 connection.execute(
-                    "SELECT value FROM schema_metadata WHERE key='schema_version'"
+                    "SELECT value FROM schema_metadata WHERE key='schema_revision'"
                 ).fetchone()["value"]
             )
             table_count = int(
@@ -32,8 +32,8 @@ def _migration_probe() -> dict[str, object]:
                 ).fetchone()["count"]
             )
         return {
-            "sqlite_schema_checked": revision == SCHEMA_VERSION,
-            "sqlite_schema_version": revision,
+            "sqlite_schema_checked": revision == SCHEMA_REVISION,
+            "sqlite_schema_revision": revision,
             "sqlite_table_count": table_count,
             "temporary_generated_data_only": True,
             "mysql_plan_only": True,
@@ -89,7 +89,7 @@ def build_g4_local_validation_report(root: Path) -> dict[str, object]:
         and backup_restore["publication_candidate_state"] == "ACTIVE"
     )
     return {
-        "revision": "g4-local-validation:v1",
+        "revision": "g4-local-validation",
         "local_preparation_ready": local_ready,
         "real_acceptance": False,
         "real_external_call_performed": False,

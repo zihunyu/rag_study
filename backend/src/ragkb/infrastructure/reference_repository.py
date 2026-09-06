@@ -9,7 +9,7 @@ from ragkb.infrastructure.sqlite import SQLiteDatabase
 
 
 class SQLiteReferenceStore:
-    revision = "sqlite-reference-store:g3-v1"
+    revision = "sqlite-reference-store"
 
     def __init__(self, database: SQLiteDatabase) -> None:
         self.database = database

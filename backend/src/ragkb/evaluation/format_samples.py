@@ -71,8 +71,7 @@ def check_format_samples(
     root: Path, plan_path: Path, schema_path: Path | None = None
 ) -> dict[str, Any]:
     resolved_schema = schema_path or (
-        Path(__file__).resolve().parents[1]
-        / "contracts/schemas/format-sample-metadata-v1.schema.json"
+        Path(__file__).resolve().parents[1] / "contracts/schemas/format-sample-metadata.schema.json"
     )
     schema = json.loads(resolved_schema.read_text(encoding="utf-8"))
     by_format: dict[str, dict[str, Any]] = {}

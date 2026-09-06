@@ -39,7 +39,7 @@ class TokenCounterPort(Protocol):
 class ConservativeTokenCounter:
     """Local upper-bound estimate used when a provider omits usage metadata."""
 
-    revision = "conservative-unicode-token-counter:v1"
+    revision = "conservative-unicode-token-counter"
 
     def count(self, value: str) -> int:
         # Counting every non-ASCII code point and every two ASCII characters is deliberately

@@ -17,7 +17,7 @@ from ragkb.domain.retrieval import (
 
 
 class MySQLRetrievalControlPlane:
-    revision = "mysql-retrieval-control:v1"
+    revision = "mysql-retrieval-control"
 
     def __init__(
         self, control: MySQLControlPlaneAdapter, generation_id: str = "legacy-unbound"

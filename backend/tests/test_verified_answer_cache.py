@@ -14,7 +14,7 @@ from ragkb.infrastructure.sqlite import SQLiteDatabase
 
 
 class _CountingGenerator:
-    revision = "counting-model:v1"
+    revision = "counting-model"
 
     def __init__(self) -> None:
         self.calls = 0

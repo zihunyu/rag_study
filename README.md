@@ -119,14 +119,13 @@ python scripts/set_retrieval_release.py --approval RETRIEVAL_RELEASE_UPDATE_APPR
   --permission-revision <revision> --security-watermark <watermark>
 ```
 
-SQLite 历史状态迁移前必须先生成备份：
+本项目按全新数据库初始化，不提供旧版数据表迁移或旧接口别名。MySQL 使用一套当前业务表，
+SQLite 首次启动直接创建完整结构。已有部署应配置新的数据库和存储目录；初始化遇到旧结构时
+会停止并提示使用新数据库，不会清空原数据。
 
-```text
-python scripts/migrate_sqlite_to_mysql.py \
-  --approval SQLITE_TO_MYSQL_MIGRATION_APPROVED \
-  --sqlite data/storage/control.sqlite3 \
-  --backup data/storage/backups/pre-mysql.sqlite3
-```
+业务 API 统一使用 `/api`，前端、容器配置和引用地址已同步；OpenAPI 快照位于
+`docs/openapi/openapi.json`。供应商的 `/v1`、MinerU `/api/v4`、`text-embedding-v4`
+属于外部协议或模型名称，继续按供应商要求配置。
 
 生产 Worker 将扫描 PDF/图片和旧 Office 文件送入真实 MinerU，验证结果 ZIP 后转换为 Canonical
 Document；Markdown、HTML、DOCX 和 PPTX 的标题结构则由本地真实解析器保留。
@@ -164,6 +163,8 @@ DOCX/XLSX/PPTX 的 ZIP 容器在独立子进程中校验，除压缩比和条目
 连续依赖失败达到阈值后 Worker 在冷却期停止获取租约。永久错误和未知错误不自动重试，最终失败
 写入 SQLite/Redis DLQ。主循环在任何失败后休眠，正常新任务优先于已到期的重试任务。结构化
 日志只记录 `job_id`、`document_id`、attempt、异常类型、trace ID、重试状态和延迟，不记录正文。
+
+代码目录、保留的工具入口及命名约定见 [代码结构](docs/CODE-STRUCTURE.md)。
 
 ## 质量与测试
 
@@ -212,7 +213,7 @@ Frontend 由最小 Node 静态服务器提供，不安装或使用 Nginx。`/run
 根据环境变量生成，因此无需重新构建前端即可切换 Backend 或 OIDC：
 
 ```text
-FRONTEND_API_BASE_URL=https://api.example.com/api/v1
+FRONTEND_API_BASE_URL=https://api.example.com/api
 FRONTEND_PUBLIC_ORIGIN=https://rag.example.com
 FRONTEND_OIDC_ENABLED=true
 FRONTEND_OIDC_AUTHORITY=https://id.example.com

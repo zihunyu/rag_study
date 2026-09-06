@@ -276,7 +276,7 @@ class _GuardedModelAdapter:
 
 
 class OpenAICompatibleEmbeddingAdapter(_GuardedModelAdapter):
-    revision = "openai-compatible-embedding:g2-v1"
+    revision = "openai-compatible-embedding"
 
     def __init__(
         self,
@@ -341,7 +341,7 @@ class OpenAICompatibleEmbeddingAdapter(_GuardedModelAdapter):
 
 
 class OpenAICompatibleRerankerAdapter(_GuardedModelAdapter):
-    revision = "openai-compatible-reranker:g2-v1"
+    revision = "openai-compatible-reranker"
 
     def __init__(
         self,
@@ -429,7 +429,7 @@ class OpenAICompatibleBufferedGenerator(_GuardedModelAdapter):
         self._settings = settings
         self.revision = (
             f"openai-compatible-generation:{settings.llm_model}:{settings.llm_prompt_revision}"
-            ":structured-status:v2"
+            ":structured-status"
         )
 
     @staticmethod
@@ -583,7 +583,7 @@ class OpenAICompatibleQuestionAssessor(_GuardedModelAdapter):
             max_concurrency=settings.llm_max_concurrency,
         )
         self._settings = settings
-        self.revision = f"openai-compatible-question-assessor:{settings.llm_model}:v1"
+        self.revision = f"openai-compatible-question-assessor:{settings.llm_model}"
 
     def assess(self, question: str) -> QuestionAssessment:
         self._guard()
@@ -671,7 +671,7 @@ class OpenAICompatibleClaimVerifier(_GuardedModelAdapter):
             max_concurrency=settings.verifier_max_concurrency,
         )
         self._settings = settings
-        self.revision = f"openai-compatible-claim-verifier:{settings.verifier_model}:conflicts:v2"
+        self.revision = f"openai-compatible-claim-verifier:{settings.verifier_model}:conflicts"
 
     def verify(
         self, question: str, draft: DraftAnswer, evidence: tuple[Evidence, ...]

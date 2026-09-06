@@ -80,9 +80,9 @@ def test_blocked_native_process_is_terminated_before_it_returns(
         assert child["pid"] in {process.pid for process in multiprocessing.active_children()}
         if interruption == "cancel":
             client = TestClient(create_app(runtime))
-            running = client.get(f"/api/v1/ingestion-jobs/{job_id}")
+            running = client.get(f"/api/ingestion-jobs/{job_id}")
             response = client.post(
-                f"/api/v1/ingestion-jobs/{job_id}:cancel",
+                f"/api/ingestion-jobs/{job_id}:cancel",
                 headers={
                     "If-Match": running.headers["etag"],
                     "Idempotency-Key": "cancel-native",

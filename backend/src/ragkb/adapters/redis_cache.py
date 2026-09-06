@@ -22,7 +22,7 @@ def _redis_client(**kwargs: Any) -> Any:
 
 
 class RedisCacheRateLimitAdapter:
-    revision = "redis-cache-rate-limit:g2-v1"
+    revision = "redis-cache-rate-limit"
 
     def __init__(
         self,

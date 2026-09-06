@@ -3,7 +3,7 @@ import { accessToken } from "./auth.js";
 const runtimeBase = globalThis.__RAGKB_CONFIG__?.apiBaseUrl?.trim();
 const configuredBase = runtimeBase || import.meta.env?.VITE_API_BASE_URL?.trim();
 
-export const API_BASE = (configuredBase || "/api/v1").replace(/\/$/, "");
+export const API_BASE = (configuredBase || "/api").replace(/\/$/, "");
 
 export function apiUrl(path) {
   return `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;

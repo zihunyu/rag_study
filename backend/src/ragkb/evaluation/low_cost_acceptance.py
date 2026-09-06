@@ -188,7 +188,7 @@ def _authorized(item: Mapping[str, Any]) -> AuthorizedChunk:
 
 
 class LowCostRealAcceptanceRunner:
-    revision = "low-cost-real-acceptance:threshold-bound-generation:v2"
+    revision = "low-cost-real-acceptance:threshold-bound-generation"
 
     def __init__(
         self,
@@ -376,7 +376,7 @@ class LowCostRealAcceptanceRunner:
                 JsonCheckpointStore(self.output_root / "mineru-checkpoint.json"),
                 store,
                 external_call_approved=True,
-                attempt_revision="low-cost-injection:v1",
+                attempt_revision="low-cost-injection",
                 scope="three-real-security-fixtures",
                 max_files=3,
                 max_requests=3,

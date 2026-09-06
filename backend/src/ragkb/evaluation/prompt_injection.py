@@ -124,7 +124,7 @@ def run_prompt_injection_cases(root: Path) -> dict[str, object]:
         url = signer.source_url("run", "E1", "tenant-a", "user-a", "document")
         parts = url.split("/")
         try:
-            signer.resolve(parts[4] + "x", parts[6], "tenant-a", "user-a")
+            signer.resolve(parts[-4] + "x", parts[-2], "tenant-a", "user-a")
         except ReferenceTokenError:
             actual["source-token-tamper"] = "reference_not_found"
 

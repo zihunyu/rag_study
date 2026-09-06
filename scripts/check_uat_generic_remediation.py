@@ -2,35 +2,33 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-REVIEW = ROOT / "artifacts/user-review/uat-v4-package-20260902/UAT_v4_逐项审核结果.jsonl"
 SOURCES = (
     ROOT / "backend/src/ragkb/evaluation/uat_generic_remediation.py",
     ROOT / "backend/src/ragkb/evaluation/uat_error_case_retest.py",
-    ROOT / "backend/src/ragkb/application/uat_future_claim_runner.py",
+    ROOT / "backend/src/ragkb/application/uat_claim_runner.py",
     ROOT / "backend/src/ragkb/contracts/provider_execution.py",
     ROOT / "backend/src/ragkb/adapters/provider_http.py",
-    ROOT / "backend/src/ragkb/infrastructure/uat_artifacts.py",
+    ROOT / "backend/src/ragkb/infrastructure/claim_artifacts.py",
     ROOT / "backend/tests/test_uat_generic_remediation.py",
-    ROOT / "backend/tests/test_uat_future_claim_runner.py",
+    ROOT / "backend/tests/test_uat_claim_runner.py",
     ROOT / "backend/tests/test_uat_error_case_retest.py",
-    ROOT / "scripts/plan_uat_future_claim_remediation.py",
-    ROOT / "scripts/prepare_uat_future_error_retest.py",
-    ROOT / "scripts/run_uat_future_error_retest.py",
+    ROOT / "scripts/run_claim_acceptance.py",
     ROOT / "scripts/check_uat_generic_remediation.py",
     ROOT / "scripts/run_quality.py",
 )
 
 
-def _historical_literals() -> tuple[set[str], set[str], set[str]]:
+def _historical_literals(review: Path) -> tuple[set[str], set[str], set[str]]:
     candidates: set[str] = set()
     answers: set[str] = set()
     references: set[str] = set()
-    for line in REVIEW.read_text(encoding="utf-8").splitlines():
+    for line in review.read_text(encoding="utf-8").splitlines():
         loaded = json.loads(line)
         if not isinstance(loaded, dict):
             raise RuntimeError("UAT_GENERIC_REMEDIATION_REVIEW_ROW_INVALID")
@@ -47,9 +45,14 @@ def _historical_literals() -> tuple[set[str], set[str], set[str]]:
 
 
 def main() -> int:
-    if not REVIEW.is_file():
-        raise RuntimeError("UAT_GENERIC_REMEDIATION_REVIEW_PACKAGE_MISSING")
-    candidates, answers, references = _historical_literals()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--review", type=Path, help="Optional JSONL review to scan for copied literals"
+    )
+    args = parser.parse_args()
+    candidates, answers, references = (
+        _historical_literals(args.review) if args.review else (set(), set(), set())
+    )
     source_text = {path: path.read_text(encoding="utf-8") for path in SOURCES}
     combined = "\n".join(source_text.values())
     historical_matches = sorted(

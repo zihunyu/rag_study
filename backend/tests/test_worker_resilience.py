@@ -163,9 +163,9 @@ def test_running_cancel_is_acknowledged_before_artifact_or_chunk_write(tmp_path:
     thread.start()
     assert started.wait(timeout=5)
     client = TestClient(create_app(components))
-    running = client.get(f"/api/v1/ingestion-jobs/{job_id}")
+    running = client.get(f"/api/ingestion-jobs/{job_id}")
     cancelled = client.post(
-        f"/api/v1/ingestion-jobs/{job_id}:cancel",
+        f"/api/ingestion-jobs/{job_id}:cancel",
         headers={
             "If-Match": running.headers["etag"],
             "Idempotency-Key": "cancel-running",
@@ -187,9 +187,7 @@ def test_running_cancel_is_acknowledged_before_artifact_or_chunk_write(tmp_path:
     version = components.repository.get_version(version_id)
     original_key = str(version["original_key"])
     filename = Path(original_key).name
-    artifact_key = original_key.replace(
-        f"original/{filename}", "artifacts/canonical-document-v1.json"
-    )
+    artifact_key = original_key.replace(f"original/{filename}", "artifacts/canonical-document.json")
     assert not components.storage.exists("artifacts", artifact_key)
 
 

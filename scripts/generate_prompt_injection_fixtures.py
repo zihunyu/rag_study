@@ -89,7 +89,7 @@ def main() -> int:
     _docx(paths["docx"])
     _image(paths["ocr_image"])
     manifest = {
-        "revision": "prompt-injection-real-formats:v1",
+        "revision": "prompt-injection-real-formats",
         "synthetic": True,
         "business_data": False,
         "automatic_retries": 0,

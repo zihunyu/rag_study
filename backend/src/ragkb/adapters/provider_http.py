@@ -501,156 +501,8 @@ def _raise_model_http_error(response: httpx.Response, prefix: str) -> None:
         )
 
 
-class UatRerankerHttpTransport:
-    real_network = True
-
-    def __init__(self, settings: EnvSettings) -> None:
-        self._settings = settings
-
-    def rerank(
-        self,
-        query: str,
-        documents: Sequence[str],
-        top_n: int,
-        idempotency_key: str,
-        timeout_seconds: float,
-    ) -> Sequence[int]:
-        key = self._settings.reranker_api_key
-        try:
-            response = httpx.post(
-                f"{self._settings.reranker_base_url.rstrip('/')}/rerank",
-                headers={
-                    "Authorization": f"Bearer {key.get_secret_value() if key else ''}",
-                    "Idempotency-Key": idempotency_key,
-                },
-                json={
-                    "model": self._settings.reranker_model,
-                    "query": query,
-                    "documents": list(documents),
-                    "top_n": top_n,
-                },
-                timeout=timeout_seconds,
-            )
-        except (httpx.TimeoutException, TimeoutError) as error:
-            raise ProviderExecutionError("UAT_RERANKER_TIMEOUT", outcome_unknown=True) from error
-        except httpx.RequestError as error:
-            raise ProviderExecutionError(
-                "UAT_RERANKER_TRANSPORT_FAILURE", outcome_unknown=True
-            ) from error
-        _raise_model_http_error(response, "UAT_RERANKER")
-        try:
-            loaded = response.json()
-        except ValueError as error:
-            raise ProviderExecutionError(
-                "UAT_RERANKER_JSON_INVALID", outcome_unknown=False
-            ) from error
-        if not isinstance(loaded, Mapping) or not isinstance(loaded.get("results"), Sequence):
-            raise ProviderExecutionError(
-                "UAT_RERANKER_RESPONSE_SCHEMA_INVALID", outcome_unknown=False
-            )
-        order: list[int] = []
-        for item in loaded["results"]:
-            if not isinstance(item, Mapping):
-                raise ProviderExecutionError(
-                    "UAT_RERANKER_RESPONSE_SCHEMA_INVALID", outcome_unknown=False
-                )
-            index = item.get("index")
-            if (
-                not isinstance(index, int)
-                or isinstance(index, bool)
-                or index < 0
-                or index >= len(documents)
-                or index in order
-            ):
-                raise ProviderExecutionError("UAT_RERANKER_INDEX_INVALID", outcome_unknown=False)
-            order.append(index)
-        if not order or len(order) > top_n:
-            raise ProviderExecutionError("UAT_RERANKER_RESULT_COUNT_INVALID", outcome_unknown=False)
-        return order
-
-
-class UatLlmHttpTransport:
-    real_network = True
-
-    def __init__(self, settings: EnvSettings) -> None:
-        self._settings = settings
-
-    def generate(
-        self,
-        question: str,
-        evidence: Sequence[Mapping[str, object]],
-        idempotency_key: str,
-        timeout_seconds: float,
-    ) -> Mapping[str, object]:
-        key = self._settings.llm_api_key
-        prompt_payload = {
-            "question": question,
-            "evidence": [dict(item) for item in evidence],
-            "required_output": {
-                "status": "answered|insufficient_evidence|needs_clarification|conflicting_evidence",
-                "answer": "string",
-                "citation_ids": ["bundle evidence IDs only"],
-            },
-        }
-        try:
-            response = httpx.post(
-                f"{self._settings.llm_base_url.rstrip('/')}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {key.get_secret_value() if key else ''}",
-                    "Idempotency-Key": idempotency_key,
-                },
-                json={
-                    "model": self._settings.llm_model,
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": (
-                                "Use only supplied evidence. Return one JSON object with status, "
-                                "answer, and citation_ids. Never cite another source."
-                            ),
-                        },
-                        {
-                            "role": "user",
-                            "content": json.dumps(prompt_payload, ensure_ascii=False),
-                        },
-                    ],
-                    "response_format": {"type": "json_object"},
-                    "max_tokens": self._settings.llm_max_output_tokens,
-                },
-                timeout=timeout_seconds,
-            )
-        except (httpx.TimeoutException, TimeoutError) as error:
-            raise ProviderExecutionError("UAT_LLM_TIMEOUT", outcome_unknown=True) from error
-        except httpx.RequestError as error:
-            raise ProviderExecutionError(
-                "UAT_LLM_TRANSPORT_FAILURE", outcome_unknown=True
-            ) from error
-        _raise_model_http_error(response, "UAT_LLM")
-        try:
-            loaded = response.json()
-        except ValueError as error:
-            raise ProviderExecutionError("UAT_LLM_JSON_INVALID", outcome_unknown=False) from error
-        if not isinstance(loaded, Mapping) or not isinstance(loaded.get("choices"), Sequence):
-            raise ProviderExecutionError("UAT_LLM_RESPONSE_SCHEMA_INVALID", outcome_unknown=False)
-        choices = loaded["choices"]
-        if len(choices) != 1 or not isinstance(choices[0], Mapping):
-            raise ProviderExecutionError("UAT_LLM_RESPONSE_SCHEMA_INVALID", outcome_unknown=False)
-        message = choices[0].get("message")
-        if not isinstance(message, Mapping) or not isinstance(message.get("content"), str):
-            raise ProviderExecutionError("UAT_LLM_RESPONSE_SCHEMA_INVALID", outcome_unknown=False)
-        try:
-            result = json.loads(message["content"])
-        except json.JSONDecodeError as error:
-            raise ProviderExecutionError(
-                "UAT_LLM_CONTENT_JSON_INVALID", outcome_unknown=False
-            ) from error
-        if not isinstance(result, Mapping):
-            raise ProviderExecutionError("UAT_LLM_CONTENT_SCHEMA_INVALID", outcome_unknown=False)
-        return result
-
-
 class UatClaimContractHttpTransport:
-    """Future-only provider adapter for validated structured UAT claims."""
+    """Provider adapter for validated structured acceptance claims."""
 
     real_network = True
 
@@ -663,7 +515,7 @@ class UatClaimContractHttpTransport:
         idempotency_key: str,
         timeout_seconds: float,
     ) -> Mapping[str, object]:
-        if contract.get("revision") != "uat-claim-contract:v1":
+        if contract.get("revision") != "uat-claim-contract":
             raise ProviderExecutionError(
                 "UAT_CLAIM_CONTRACT_REVISION_INVALID", outcome_unknown=False
             )

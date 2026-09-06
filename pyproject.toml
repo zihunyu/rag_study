@@ -83,7 +83,6 @@ skip_covered = true
 [tool.ruff]
 target-version = "py312"
 line-length = 100
-extend-exclude = ["20260903.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "S"]

@@ -27,7 +27,7 @@ def main() -> int:
         "--dataset", default="backend/tests/fixtures/manifests/rag-quality-gold.yaml"
     )
     parser.add_argument(
-        "--schema", default="backend/src/ragkb/contracts/schemas/rag-quality-dataset-v1.schema.json"
+        "--schema", default="backend/src/ragkb/contracts/schemas/rag-quality-dataset.schema.json"
     )
     parser.add_argument(
         "--results", default="backend/tests/fixtures/manifests/rag-quality-results.json"

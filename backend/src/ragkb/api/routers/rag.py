@@ -56,7 +56,7 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
         return space_id
 
     @router.post(
-        "/api/v1/search",
+        "/api/search",
         response_model=SearchResponse,
         responses={503: {"model": ErrorResponse}},
         tags=["retrieval"],
@@ -131,7 +131,7 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
         )
 
     @router.post(
-        "/api/v1/ask",
+        "/api/ask",
         response_model=AskResponse,
         tags=["trusted-qa"],
     )
@@ -153,7 +153,7 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
         return _ask_response(result)
 
     @router.post(
-        "/api/v1/ask:stream",
+        "/api/ask:stream",
         response_class=StreamingResponse,
         tags=["trusted-qa"],
     )
@@ -184,7 +184,7 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
         return StreamingResponse(stream(), media_type="text/event-stream")
 
     @router.get(
-        "/api/v1/rag-runs/{run_token}/evidence/{evidence_token}/source",
+        "/api/rag-runs/{run_token}/evidence/{evidence_token}/source",
         response_model=EvidenceSourceResponse,
         tags=["trusted-qa"],
     )
@@ -229,7 +229,7 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
         )
 
     @router.post(
-        "/api/v1/rag-runs/{rag_run_id}/feedback",
+        "/api/rag-runs/{rag_run_id}/feedback",
         response_model=FeedbackResponse,
         tags=["trusted-qa"],
     )

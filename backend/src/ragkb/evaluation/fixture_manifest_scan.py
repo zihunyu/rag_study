@@ -52,7 +52,7 @@ def scan_fixture_manifest(root: Path, manifest_path: Path) -> dict[str, object]:
                 )
             records.append(record)
     return {
-        "revision": "fixture-manifest-scan:v1",
+        "revision": "fixture-manifest-scan",
         "fixture_count": len(records),
         "records": records,
         "provider_call_count": 0,

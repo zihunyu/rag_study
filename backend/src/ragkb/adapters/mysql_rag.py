@@ -13,7 +13,7 @@ from ragkb.infrastructure.rag_repository import _package, _result
 
 
 class MySQLRAGRunRepository:
-    revision = "mysql-rag-run:g4-v2"
+    revision = "mysql-rag-run"
 
     def __init__(self, control: MySQLControlPlaneAdapter) -> None:
         self.control = control
@@ -24,7 +24,7 @@ class MySQLRAGRunRepository:
             cursor = connection.cursor()
             cursor.execute(
                 """
-                INSERT INTO rag_run_documents_v2(
+                INSERT INTO rag_run_documents(
                     run_id, tenant_id, user_id, status, package_json, result_json, created_at
                 ) VALUES (%s, %s, %s, %s, %s, %s, NOW(6))
                 """,
@@ -51,7 +51,7 @@ class MySQLRAGRunRepository:
         try:
             cursor = connection.cursor()
             cursor.execute(
-                f"SELECT {column} FROM rag_run_documents_v2 WHERE run_id=%s",  # noqa: S608
+                f"SELECT {column} FROM rag_run_documents WHERE run_id=%s",  # noqa: S608
                 (run_id,),
             )
             row = cursor.fetchone()
@@ -77,7 +77,7 @@ class MySQLRAGRunRepository:
             cursor = connection.cursor()
             cursor.execute(
                 """
-                INSERT INTO rag_feedback_v2(
+                INSERT INTO rag_feedback(
                     feedback_id, run_id, user_id, feedback_json, created_at
                 ) VALUES (%s, %s, %s, %s, NOW(6))
                 """,

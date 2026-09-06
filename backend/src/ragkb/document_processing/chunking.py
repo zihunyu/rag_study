@@ -26,7 +26,7 @@ class TokenizerPort(Protocol):
 
 
 class UnicodeApproximateTokenizer:
-    revision = "unicode-cjk-tokenizer:v1"
+    revision = "unicode-cjk-tokenizer"
 
     def spans(self, text: str) -> tuple[tuple[int, int], ...]:
         return tuple((match.start(), match.end()) for match in _TOKEN_PATTERN.finditer(text))
@@ -175,7 +175,7 @@ class TokenAwareChunker:
         self.tokenizer_id = self.tokenizer.revision
         self.revision = (
             f"token-aware:{self.config.strategy}:"
-            f"{self.config.target_tokens}:{self.config.overlap_tokens}:v2"
+            f"{self.config.target_tokens}:{self.config.overlap_tokens}"
         )
 
     def _section(
@@ -413,10 +413,10 @@ class SemanticChunker(TokenAwareChunker):
             tokenizer=self.tokenizer,
         )
         result = delegate.chunk(semantic_document, tenant_id=tenant_id)
-        scorer_revision = str(getattr(self.boundary_score, "revision", "callable-v1"))
+        scorer_revision = str(getattr(self.boundary_score, "revision", "callable"))
         revision = (
             f"semantic:{scorer_revision}:{self.tokenizer.revision}:"
-            f"{self.threshold}:{self.config.target_tokens}:{self.config.max_tokens}:v3"
+            f"{self.threshold}:{self.config.target_tokens}:{self.config.max_tokens}"
         )
         enriched = tuple(
             replace(
@@ -435,7 +435,7 @@ class EmbeddingSemanticBoundaryScorer:
 
     def __init__(self, embedding: EmbeddingPort) -> None:
         self.embedding = embedding
-        self.revision = f"embedding-boundary:{embedding.revision}:v2"
+        self.revision = f"embedding-boundary:{embedding.revision}"
         self._cache: dict[str, tuple[float, ...]] = {}
 
     def preload(self, texts: Sequence[str]) -> None:

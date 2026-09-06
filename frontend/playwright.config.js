@@ -30,7 +30,7 @@ Object.assign(process.env, {
   LOCAL_STORAGE_AUDIT_DIR: path.join(storageRoot, "audit"),
   LOCAL_STORAGE_BACKUP_DIR: path.join(storageRoot, "backups"),
   QUEUE_DATABASE_PATH: path.join(storageRoot, "queue", "e2e.sqlite3"),
-  VITE_API_BASE_URL: `${apiOrigin}/api/v1`,
+  VITE_API_BASE_URL: `${apiOrigin}/api`,
   RAGKB_E2E_BACKEND: backendExecutable,
   RAGKB_E2E_WORKER: workerExecutable,
   RAGKB_E2E_STORAGE_ROOT: storageRoot,
@@ -56,7 +56,7 @@ export default defineConfig({
       env: {
         ...process.env,
         PORT: webPort,
-        FRONTEND_API_BASE_URL: `${apiOrigin}/api/v1`,
+        FRONTEND_API_BASE_URL: `${apiOrigin}/api`,
         FRONTEND_PUBLIC_ORIGIN: webOrigin,
       },
       reuseExistingServer: false,

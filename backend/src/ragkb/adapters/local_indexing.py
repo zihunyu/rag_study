@@ -48,7 +48,7 @@ class _LocalANNSnapshot:
 
 
 class SQLiteLocalHybridIndex:
-    revision = "sqlite-fts5-usearch-snapshot-index:v2"
+    revision = "sqlite-fts5-usearch-snapshot-index"
 
     def __init__(
         self,
@@ -327,7 +327,7 @@ class SQLiteLocalHybridIndex:
 
 
 class SQLiteLocalIndexingSink:
-    revision = "sqlite-local-indexing-sink:v1"
+    revision = "sqlite-local-indexing-sink"
 
     def __init__(
         self,

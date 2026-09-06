@@ -113,10 +113,10 @@ def test_api_uses_oidc_principal_for_401_403_and_tenant_fail_closed(
     no_role = app_for(components.tenant_id, [])
     other_tenant = app_for("other-tenant", ["reader"])
 
-    assert reader.post("/api/v1/ask", json={"question": "q"}).status_code == 401
+    assert reader.post("/api/ask", json={"question": "q"}).status_code == 401
     assert (
         reader.post(
-            "/api/v1/ask",
+            "/api/ask",
             headers={"Authorization": "Bearer valid"},
             json={"question": "q"},
         ).status_code
@@ -124,7 +124,7 @@ def test_api_uses_oidc_principal_for_401_403_and_tenant_fail_closed(
     )
     assert (
         no_role.post(
-            "/api/v1/ask",
+            "/api/ask",
             headers={"Authorization": "Bearer valid"},
             json={"question": "q"},
         ).status_code
@@ -132,7 +132,7 @@ def test_api_uses_oidc_principal_for_401_403_and_tenant_fail_closed(
     )
     assert (
         other_tenant.post(
-            "/api/v1/search",
+            "/api/search",
             headers={"Authorization": "Bearer valid"},
             json={"query": "q"},
         ).status_code
@@ -145,7 +145,7 @@ def test_api_uses_oidc_principal_for_401_403_and_tenant_fail_closed(
         "scheme": "bearer",
         "bearerFormat": "JWT",
     }
-    assert schema["paths"]["/api/v1/ask"]["post"]["security"] == [{"BearerAuth": []}]
+    assert schema["paths"]["/api/ask"]["post"]["security"] == [{"BearerAuth": []}]
 
 
 def test_production_oidc_decoder_discovers_and_caches_jwks(tmp_path: Path) -> None:

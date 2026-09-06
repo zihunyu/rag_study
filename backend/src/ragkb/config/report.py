@@ -102,13 +102,13 @@ def conditional_issues(result: EnvLoadResult) -> tuple[EnvIssue, ...]:
     if settings.embedding_dimension != configured_vector_dimension:
         issues.append(EnvIssue("EMBEDDING_DIMENSION", "ZILLIZ_DIMENSION_MISMATCH", "G2"))
     embedding_url = urlparse(settings.embedding_base_url)
-    dashscope_v4 = bool(
+    dashscope_embedding = bool(
         (embedding_url.hostname or "").casefold()
         in {"dashscope.aliyuncs.com", "dashscope-intl.aliyuncs.com"}
         and "/compatible-mode/" in embedding_url.path.casefold()
         and settings.embedding_model.casefold() == "text-embedding-v4"
     )
-    if dashscope_v4 and settings.embedding_batch_size > 10:
+    if dashscope_embedding and settings.embedding_batch_size > 10:
         issues.append(
             EnvIssue(
                 "EMBEDDING_BATCH_SIZE",
@@ -116,7 +116,7 @@ def conditional_issues(result: EnvLoadResult) -> tuple[EnvIssue, ...]:
                 "G4",
             )
         )
-    if dashscope_v4 and settings.embedding_dimension != 1024:
+    if dashscope_embedding and settings.embedding_dimension != 1024:
         issues.append(
             EnvIssue(
                 "EMBEDDING_DIMENSION",

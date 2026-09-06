@@ -15,7 +15,7 @@ from ragkb.infrastructure.sqlite import SQLiteDatabase
 
 
 class SQLiteRetrievalControlPlane:
-    revision = "sqlite-retrieval-control:g2-test-v1"
+    revision = "sqlite-retrieval-control:test"
 
     def __init__(self, database: SQLiteDatabase) -> None:
         self.database = database
@@ -243,7 +243,7 @@ class SQLiteRetrievalControlPlane:
 
 
 class StaticRetrievalReleaseProvider:
-    revision = "static-retrieval-release:v1"
+    revision = "static-retrieval-release"
 
     def __init__(self, release: RetrievalRelease) -> None:
         self.release = release
@@ -258,7 +258,7 @@ class StaticRetrievalReleaseProvider:
 
 
 class LocalRetrievalReleaseProvider:
-    revision = "local-dynamic-retrieval-release:v1"
+    revision = "local-dynamic-retrieval-release"
 
     def __init__(
         self,

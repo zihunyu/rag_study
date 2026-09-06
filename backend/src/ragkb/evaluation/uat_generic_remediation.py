@@ -114,7 +114,7 @@ def build_evidence_envelope(
     integrity = validate_source_integrity(content, rendered_text=rendered_text)
     if rendered_text is not None and (
         not isinstance(render_proof, Mapping)
-        or render_proof.get("revision") != "uat-independent-render-proof:v1"
+        or render_proof.get("revision") != "uat-independent-render-proof"
         or render_proof.get("source_version_sha256") != source_version_sha256
         or not isinstance(render_proof.get("locator_sha256"), str)
         or not isinstance(render_proof.get("representation_sha256"), str)
@@ -131,7 +131,7 @@ def build_evidence_envelope(
         else None
     )
     return {
-        "revision": "uat-evidence-envelope:v1",
+        "revision": "uat-evidence-envelope",
         "evidence_id": evidence_id,
         "source_document_id": source_document_id,
         "source_version_sha256": source_version_sha256,
@@ -150,7 +150,7 @@ def build_evidence_envelope(
 
 def _validate_envelope(value: Mapping[str, object]) -> dict[str, object]:
     envelope = dict(value)
-    if envelope.get("revision") != "uat-evidence-envelope:v1":
+    if envelope.get("revision") != "uat-evidence-envelope":
         raise UatRemediationError("UAT_EVIDENCE_ENVELOPE_REVISION_INVALID")
     evidence_id = _safe_identifier(envelope.get("evidence_id"), "UAT_EVIDENCE_ID_INVALID")
     source_document_id = _safe_identifier(
@@ -198,7 +198,7 @@ def _validate_envelope(value: Mapping[str, object]) -> dict[str, object]:
         proof = envelope.get("render_proof")
         if (
             not isinstance(proof, Mapping)
-            or proof.get("revision") != "uat-independent-render-proof:v1"
+            or proof.get("revision") != "uat-independent-render-proof"
             or proof.get("source_version_sha256") != source_version_sha256
             or proof.get("locator_sha256") != canonical_sha256(dict(locator))
             or proof.get("representation_sha256") != rendered_hash
@@ -325,7 +325,7 @@ def validate_claim_response(
         for claim in claims
     )
     return {
-        "revision": "uat-claim-validation:v1",
+        "revision": "uat-claim-validation",
         "status": status,
         "claims": claims,
         "citation_ids": citation_ids,
@@ -347,7 +347,7 @@ def build_claim_contract_request(
         raise UatRemediationError("UAT_CLAIM_QUESTION_INVALID")
     envelopes = [_validate_envelope(item) for item in evidence]
     return {
-        "revision": "uat-claim-contract:v1",
+        "revision": "uat-claim-contract",
         "question": question,
         "allow_cross_document": allow_cross_document,
         "evidence": [
@@ -430,7 +430,7 @@ def build_audit_manifest(
             }
         )
     return {
-        "revision": "uat-audit-manifest:v1",
+        "revision": "uat-audit-manifest",
         "test_case_id": case_id,
         "question_sha256": question_sha256,
         "bundle_sha256": bundle_sha256,
@@ -456,7 +456,7 @@ def validate_audit_coverage(
         raise UatRemediationError("UAT_AUDIT_EXPECTED_CASE_ID_DUPLICATE")
     actual: list[str] = []
     for manifest in manifests:
-        if manifest.get("revision") != "uat-audit-manifest:v1":
+        if manifest.get("revision") != "uat-audit-manifest":
             raise UatRemediationError("UAT_AUDIT_MANIFEST_REVISION_INVALID")
         case_id = _safe_identifier(manifest.get("test_case_id"), "UAT_TEST_CASE_ID_INVALID")
         required = {
@@ -480,7 +480,7 @@ def validate_audit_coverage(
     if len(set(actual)) != len(actual) or set(actual) != set(expected):
         raise UatRemediationError("UAT_AUDIT_COVERAGE_MISMATCH")
     return {
-        "revision": "uat-audit-coverage:v1",
+        "revision": "uat-audit-coverage",
         "expected_case_count": len(expected),
         "manifest_count": len(actual),
         "coverage_complete": True,
@@ -518,7 +518,7 @@ def build_audit_coverage_manifest(
             }
         )
     return {
-        "revision": "uat-audit-coverage-manifest:v1",
+        "revision": "uat-audit-coverage-manifest",
         "input_snapshot_sha256": input_snapshot_sha256,
         "coverage": coverage,
         "audit_records": records,

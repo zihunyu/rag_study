@@ -60,7 +60,7 @@ def test_ask_source_preview_and_feedback_contract(tmp_path: Path) -> None:
     components = _answered_components(tmp_path)
     client = TestClient(create_app(components))
 
-    response = client.post("/api/v1/ask", json={"question": "保修期多久？"})
+    response = client.post("/api/ask", json={"question": "保修期多久？"})
 
     assert response.status_code == 200
     result = response.json()
@@ -78,7 +78,7 @@ def test_ask_source_preview_and_feedback_contract(tmp_path: Path) -> None:
     }
     assert "hidden-document" not in source.text
     feedback = client.post(
-        f"/api/v1/rag-runs/{result['rag_run_id']}/feedback",
+        f"/api/rag-runs/{result['rag_run_id']}/feedback",
         json={"rating": 5, "reason_code": "helpful", "comment": "ok"},
     )
     assert feedback.status_code == 200
@@ -89,7 +89,7 @@ def test_ask_source_preview_and_feedback_contract(tmp_path: Path) -> None:
 def test_sse_never_emits_answer_before_verified_progress(tmp_path: Path) -> None:
     client = TestClient(create_app(_answered_components(tmp_path)))
 
-    response = client.post("/api/v1/ask:stream", json={"question": "保修期多久？"})
+    response = client.post("/api/ask:stream", json={"question": "保修期多久？"})
 
     assert response.status_code == 200
     text = response.text
@@ -102,7 +102,7 @@ def test_sse_never_emits_answer_before_verified_progress(tmp_path: Path) -> None
 def test_default_runtime_refuses_to_answer_without_evidence(tmp_path: Path) -> None:
     client = TestClient(create_app(_components(tmp_path)))
 
-    response = client.post("/api/v1/ask", json={"question": "unknown"})
+    response = client.post("/api/ask", json={"question": "unknown"})
 
     assert response.status_code == 200
     assert response.json()["status"] == "insufficient_evidence"
@@ -113,14 +113,14 @@ def test_tampered_source_and_unknown_feedback_do_not_leak_resource_existence(
     tmp_path: Path,
 ) -> None:
     client = TestClient(create_app(_answered_components(tmp_path)))
-    answered = client.post("/api/v1/ask", json={"question": "q"}).json()
+    answered = client.post("/api/ask", json={"question": "q"}).json()
     source_url = answered["citations"][0]["source_url"]
     tampered_parts = source_url.split("/")
-    tampered_parts[4] += "x"
+    tampered_parts[-4] += "x"
 
     invalid = client.get("/".join(tampered_parts))
     missing_feedback = client.post(
-        "/api/v1/rag-runs/unknown/feedback",
+        "/api/rag-runs/unknown/feedback",
         json={"rating": 1, "reason_code": "bad"},
     )
 
@@ -134,10 +134,10 @@ def test_openapi_adds_ask_stream_source_and_feedback_without_agent_tools(tmp_pat
     schema = create_app(_components(tmp_path)).openapi()
 
     for path in (
-        "/api/v1/ask",
-        "/api/v1/ask:stream",
-        "/api/v1/rag-runs/{run_token}/evidence/{evidence_token}/source",
-        "/api/v1/rag-runs/{rag_run_id}/feedback",
+        "/api/ask",
+        "/api/ask:stream",
+        "/api/rag-runs/{run_token}/evidence/{evidence_token}/source",
+        "/api/rag-runs/{rag_run_id}/feedback",
     ):
         assert path in schema["paths"]
     assert not any("agent" in path.casefold() for path in schema["paths"])

@@ -213,7 +213,7 @@ def main() -> int:
             cleanup["redis"] = False
     passed = failure is None and all(checks.values()) and all(cleanup.values())
     report = {
-        "revision": "external-lifecycle-drill:v1",
+        "revision": "external-lifecycle-drill",
         "checks": checks,
         "cleanup": cleanup,
         "failure_type": failure,

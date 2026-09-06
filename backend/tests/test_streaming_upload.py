@@ -185,7 +185,7 @@ def test_api_streams_octet_body_and_content_length_fast_rejects(tmp_path) -> Non
     client = TestClient(create_app(components))
     content = b"abc"
     created = client.post(
-        f"/api/v1/spaces/{components.space_id}/upload-sessions",
+        f"/api/spaces/{components.space_id}/upload-sessions",
         headers={"Idempotency-Key": "api-stream-create"},
         json={
             "filename": "stream.txt",
@@ -196,7 +196,7 @@ def test_api_streams_octet_body_and_content_length_fast_rejects(tmp_path) -> Non
     )
     session_id = created.json()["upload_session_id"]
     rejected = client.put(
-        f"/api/v1/upload-sessions/{session_id}/content",
+        f"/api/upload-sessions/{session_id}/content",
         headers={"If-Match": created.headers["etag"], "Content-Length": "6"},
         content=content,
     )
@@ -204,7 +204,7 @@ def test_api_streams_octet_body_and_content_length_fast_rejects(tmp_path) -> Non
     assert rejected.json()["code"] == "DOC_SIZE_LIMIT"
 
     uploaded = client.put(
-        f"/api/v1/upload-sessions/{session_id}/content",
+        f"/api/upload-sessions/{session_id}/content",
         headers={"If-Match": created.headers["etag"]},
         content=content,
     )

@@ -92,7 +92,7 @@ def independent_render_proof(
     if not rendered_text.strip():
         raise RenderProofError("UAT_RENDER_PROOF_EMPTY")
     return {
-        "revision": "uat-independent-render-proof:v1",
+        "revision": "uat-independent-render-proof",
         "source_version_sha256": source_version_sha256,
         "locator_sha256": _canonical_hash(dict(locator)),
         "representation_sha256": hashlib.sha256(

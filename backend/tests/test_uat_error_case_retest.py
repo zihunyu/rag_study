@@ -25,7 +25,7 @@ def _source(
             "content": content,
             "rendered_text": content if rendered_proof else None,
             "render_proof": {
-                "revision": "uat-independent-render-proof:v1",
+                "revision": "uat-independent-render-proof",
                 "source_version_sha256": text_sha256(f"version-{seed}"),
                 "locator_sha256": canonical_sha256(locator),
                 "representation_sha256": text_sha256(content),

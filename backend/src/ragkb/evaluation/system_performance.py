@@ -84,7 +84,7 @@ def run_representative_system_paths(
                     content = f"synthetic document {index} at scale {scale}".encode()
                     created, elapsed = _timed_post(
                         client,
-                        f"/api/v1/spaces/{components.space_id}/upload-sessions",
+                        f"/api/spaces/{components.space_id}/upload-sessions",
                         headers={"Idempotency-Key": f"perf-create-{scale}-{index}"},
                         json_body={
                             "filename": f"perf-{scale}-{index}.txt",
@@ -100,7 +100,7 @@ def run_representative_system_paths(
                         content=content,
                     )
                     completed = client.post(
-                        f"/api/v1/upload-sessions/{created.json()['upload_session_id']}:complete",
+                        f"/api/upload-sessions/{created.json()['upload_session_id']}:complete",
                         headers={
                             "If-Match": uploaded.headers["etag"],
                             "Idempotency-Key": f"perf-complete-{scale}-{index}",
@@ -110,7 +110,7 @@ def run_representative_system_paths(
                 for index, version_id in enumerate(version_ids):
                     assert worker.run_once()
                     client.post(
-                        f"/api/v1/document-versions/{version_id}/review",
+                        f"/api/document-versions/{version_id}/review",
                         headers={"Idempotency-Key": f"perf-review-{scale}-{index}"},
                         json={
                             "decision": "APPROVED",
@@ -124,7 +124,7 @@ def run_representative_system_paths(
                     )
                     published, elapsed = _timed_post(
                         client,
-                        f"/api/v1/document-versions/{version_id}:publish",
+                        f"/api/document-versions/{version_id}:publish",
                         headers={"Idempotency-Key": f"perf-publish-{scale}-{index}"},
                     )
                     all_latencies.append(elapsed)
@@ -143,14 +143,14 @@ def run_representative_system_paths(
                             if index % 2:
                                 response, elapsed = _timed_post(
                                     client,
-                                    "/api/v1/ask",
+                                    "/api/ask",
                                     json_body={"question": "synthetic question"},
                                 )
                                 answer_length = len(response.json().get("answer") or "")
                             else:
                                 response, elapsed = _timed_post(
                                     client,
-                                    "/api/v1/search",
+                                    "/api/search",
                                     json_body={"query": "synthetic", "limit": top_k},
                                 )
                                 answer_length = 0
@@ -166,7 +166,7 @@ def run_representative_system_paths(
                 for iteration in range(25):
                     response, elapsed = _timed_post(
                         client,
-                        "/api/v1/search" if iteration % 2 == 0 else "/api/v1/ask",
+                        "/api/search" if iteration % 2 == 0 else "/api/ask",
                         json_body=(
                             {"query": "long run", "limit": 5}
                             if iteration % 2 == 0

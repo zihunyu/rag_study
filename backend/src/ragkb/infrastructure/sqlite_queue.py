@@ -14,7 +14,7 @@ from ragkb.infrastructure.sqlite import SQLiteDatabase
 
 
 class SQLitePersistentJobQueue:
-    revision = "sqlite-persistent-queue:dlq:g1-v2"
+    revision = "sqlite-persistent-queue:dlq"
 
     def __init__(self, database: SQLiteDatabase) -> None:
         self.database = database

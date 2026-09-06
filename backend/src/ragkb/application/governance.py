@@ -13,7 +13,7 @@ FINAL_SIGNOFF_ROLES = ("business", "technical", "security", "operations")
 
 
 class GovernanceService:
-    revision = "governance-preparation:g5-g6-v2"
+    revision = "governance-preparation"
 
     def __init__(
         self, repository: GovernanceRepositoryPort, *, clock: Callable[[], float] = time.time

@@ -29,7 +29,7 @@ def scan(pairs):
             }
         )
     return {
-        "revision": "fixture-render-coverage:v1",
+        "revision": "fixture-render-coverage",
         "dry_run": True,
         "fixture_count": len(records),
         "flagged_count": sum(r["flagged"] for r in records),

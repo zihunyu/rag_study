@@ -93,7 +93,7 @@ class EnvSettings(BaseModel):
     app_timezone: str = "Asia/Hong_Kong"
     app_debug: bool = True
     app_secret_key: SecretStr | None = None
-    reference_active_kid: str = "local-v1"
+    reference_active_kid: str = "local"
     reference_signing_keyring: SecretStr | None = None
     app_revision: str = ""
     deployment_topology: Literal["single_instance", "multi_instance"] = "single_instance"
@@ -202,7 +202,7 @@ class EnvSettings(BaseModel):
     llm_max_output_tokens: int = Field(default=2048, gt=0)
     llm_temperature: float = Field(default=0.0, ge=0, le=2)
     llm_top_p: float = Field(default=1.0, gt=0, le=1)
-    llm_prompt_revision: str = "grounded-qa:v1"
+    llm_prompt_revision: str = "grounded-qa"
     llm_generation_cache_ttl_seconds: int = Field(default=3600, gt=0)
     llm_allowed_output_domains: tuple[str, ...] = ()
     verifier_base_url: str = ""

@@ -22,7 +22,7 @@ from ragkb.runtime_components import build_runtime_components
 
 def _upload(client: TestClient, space_id: str, name: str, content: bytes) -> dict[str, Any]:
     created = client.post(
-        f"/api/v1/spaces/{space_id}/upload-sessions",
+        f"/api/spaces/{space_id}/upload-sessions",
         headers={"Idempotency-Key": f"backup-create-{name}"},
         json={
             "filename": f"{name}.txt",
@@ -38,7 +38,7 @@ def _upload(client: TestClient, space_id: str, name: str, content: bytes) -> dic
     )
     return dict(
         client.post(
-            f"/api/v1/upload-sessions/{created.json()['upload_session_id']}:complete",
+            f"/api/upload-sessions/{created.json()['upload_session_id']}:complete",
             headers={
                 "If-Match": uploaded.headers["etag"],
                 "Idempotency-Key": f"backup-complete-{name}",
@@ -74,7 +74,7 @@ def run_runtime_backup_restore_probe() -> dict[str, object]:
             assert worker.run_once()
             version_id = published["document_version_id"]
             client.post(
-                f"/api/v1/document-versions/{version_id}/review",
+                f"/api/document-versions/{version_id}/review",
                 headers={"Idempotency-Key": "backup-review"},
                 json={
                     "decision": "APPROVED",
@@ -87,7 +87,7 @@ def run_runtime_backup_restore_probe() -> dict[str, object]:
                 },
             )
             client.post(
-                f"/api/v1/document-versions/{version_id}:publish",
+                f"/api/document-versions/{version_id}:publish",
                 headers={"Idempotency-Key": "backup-publish"},
             )
             deleted = _upload(client, source.space_id, "deleted", b"deleted backup body")
@@ -99,10 +99,10 @@ def run_runtime_backup_restore_probe() -> dict[str, object]:
                 deleted["document_id"],
             )
             client.delete(
-                f"/api/v1/documents/{deleted['document_id']}",
+                f"/api/documents/{deleted['document_id']}",
                 headers={"Idempotency-Key": "backup-delete"},
             )
-            rag_run_id = client.post("/api/v1/ask", json={"question": "backup probe"}).json()[
+            rag_run_id = client.post("/api/ask", json={"question": "backup probe"}).json()[
                 "rag_run_id"
             ]
             queued = source.queue.enqueue(
@@ -150,8 +150,8 @@ def run_runtime_backup_restore_probe() -> dict[str, object]:
         parts = reference_url.split("/")
         try:
             restored.reference_signer.resolve(
-                parts[4],
-                parts[6],
+                parts[-4],
+                parts[-2],
                 restored.tenant_id,
                 restored.settings.auth_local_user_id,
             )

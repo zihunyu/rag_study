@@ -102,7 +102,7 @@ def test_search_to_evidence_to_ask_local_synthetic_e2e(tmp_path: Path) -> None:
     components = _components_with_search_qa(tmp_path)
 
     response = TestClient(create_app(components)).post(
-        "/api/v1/ask", json={"question": "保修期多久？"}
+        "/api/ask", json={"question": "保修期多久？"}
     )
 
     assert response.status_code == 200
@@ -117,7 +117,7 @@ def test_generation_time_revoke_discards_search_backed_answer(tmp_path: Path) ->
     components = _components_with_search_qa(tmp_path, revoke_during_generation=True)
 
     response = TestClient(create_app(components)).post(
-        "/api/v1/ask", json={"question": "保修期多久？"}
+        "/api/ask", json={"question": "保修期多久？"}
     )
 
     assert response.json()["status"] == AnswerStatus.SYSTEM_ERROR.value

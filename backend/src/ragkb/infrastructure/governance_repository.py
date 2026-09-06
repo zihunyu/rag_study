@@ -13,7 +13,7 @@ from ragkb.infrastructure.sqlite import SQLiteDatabase
 
 
 class SQLiteGovernanceRepository:
-    revision = "sqlite-governance:g5-g6-v1"
+    revision = "sqlite-governance"
 
     def __init__(self, database: SQLiteDatabase) -> None:
         self.database = database

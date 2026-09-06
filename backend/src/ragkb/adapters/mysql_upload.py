@@ -50,7 +50,7 @@ def _empty_state() -> dict[str, Any]:
 
 
 class MySQLUploadRepository:
-    revision = "mysql-upload-normalized:g4-v3"
+    revision = "mysql-upload-normalized"
     cleanable_partitions = frozenset({"original", "artifacts", "quarantine", "temp"})
 
     def __init__(
@@ -62,8 +62,7 @@ class MySQLUploadRepository:
         self.control = control
         self.tenant_id = tenant_id
         self.generation_id = generation_id
-        self._entities = MySQLNormalizedEntityStore("upload_entities_v3", tenant_id)
-        self._legacy_checked = False
+        self._entities = MySQLNormalizedEntityStore("upload_entities", tenant_id)
 
     @staticmethod
     def _hashed_id(kind: str, key: str) -> str:
@@ -125,42 +124,7 @@ class MySQLUploadRepository:
             }
         return state
 
-    def _load_legacy(self, cursor: Any) -> dict[str, Any]:
-        cursor.execute(
-            "SELECT state_json FROM upload_state_v2 WHERE tenant_id=%s", (self.tenant_id,)
-        )
-        row = cursor.fetchone()
-        if row is None:
-            return _empty_state()
-        value = row["state_json"] if isinstance(row, dict) else row[0]
-        loaded = json.loads(value) if isinstance(value, str) else value
-        if not isinstance(loaded, dict):
-            raise ValueError("MYSQL_UPLOAD_STATE_INVALID")
-        return loaded
-
-    def _ensure_legacy_migrated(self) -> None:
-        if self._legacy_checked:
-            return
-        connection = self.control.connect()
-        try:
-            cursor = connection.cursor()
-            state = self._load_legacy(cursor)
-            if any(state.values()):
-                before = self._entities.load(cursor)
-                legacy = self._to_entities(state)
-                # Never overwrite a newer normalized row with a legacy snapshot.
-                self._entities.sync(cursor, before, {**legacy, **before})
-                cursor.execute("DELETE FROM upload_state_v2 WHERE tenant_id=%s", (self.tenant_id,))
-            connection.commit()
-            self._legacy_checked = True
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
-
     def _mutate[Result](self, callback: Callable[[dict[str, Any]], Result]) -> Result:
-        self._ensure_legacy_migrated()
         connection = self.control.connect()
         try:
             cursor = connection.cursor()
@@ -183,7 +147,6 @@ class MySQLUploadRepository:
             connection.close()
 
     def _read(self) -> dict[str, Any]:
-        self._ensure_legacy_migrated()
 
         def load(**filters: Any) -> EntityMap:
             connection = self.control.connect()
@@ -292,7 +255,6 @@ class MySQLUploadRepository:
         current_only: bool = False,
         after: PageKey | None = None,
     ) -> RepositoryPage:
-        self._ensure_legacy_migrated()
         connection = self.control.connect()
         try:
             cursor = connection.cursor()
@@ -300,13 +262,13 @@ class MySQLUploadRepository:
                 raise ResourceNotFoundError(space_id)
             cursor.execute(
                 """
-                SELECT d.entity_id FROM upload_entities_v3 d
+                SELECT d.entity_id FROM upload_entities d
                 WHERE d.tenant_id=%s AND d.entity_type='documents'
                   AND d.entity_id > %s
                   AND JSON_UNQUOTE(JSON_EXTRACT(d.payload_json, '$.state')) != 'DELETED'
                   AND (JSON_UNQUOTE(JSON_EXTRACT(d.payload_json, '$.space_id'))=%s
                     OR (JSON_EXTRACT(d.payload_json, '$.space_id') IS NULL AND EXISTS (
-                        SELECT 1 FROM upload_entities_v3 s WHERE s.tenant_id=d.tenant_id
+                        SELECT 1 FROM upload_entities s WHERE s.tenant_id=d.tenant_id
                         AND s.entity_type='sessions' AND s.parent_id=d.entity_id
                         AND JSON_UNQUOTE(JSON_EXTRACT(s.payload_json, '$.space_id'))=%s)))
                 ORDER BY d.entity_id LIMIT %s OFFSET %s
@@ -682,11 +644,11 @@ class MySQLUploadRepository:
         try:
             cursor = connection.cursor()
             cursor.execute(
-                "SELECT s.payload_json FROM upload_entities_v3 s WHERE s.tenant_id=%s "
+                "SELECT s.payload_json FROM upload_entities s WHERE s.tenant_id=%s "
                 "AND s.entity_type='sessions' AND ("
                 "JSON_UNQUOTE(JSON_EXTRACT(s.payload_json, '$.state'))='PROMOTED' OR ("
                 "JSON_UNQUOTE(JSON_EXTRACT(s.payload_json, '$.state'))='COMPLETED' AND NOT EXISTS ("
-                "SELECT 1 FROM lifecycle_entities_v3 l WHERE l.tenant_id=s.tenant_id "
+                "SELECT 1 FROM lifecycle_entities l WHERE l.tenant_id=s.tenant_id "
                 "AND l.entity_type='documents' AND l.entity_id=s.parent_id))) "
                 "ORDER BY s.updated_at LIMIT %s",
                 (self.tenant_id, limit),
@@ -791,7 +753,6 @@ class MySQLUploadRepository:
         return dict(document)
 
     def get_versions(self, document_id: str) -> list[dict[str, Any]]:
-        self._ensure_legacy_migrated()
         connection = self.control.connect()
         try:
             rows = self._entities.load(

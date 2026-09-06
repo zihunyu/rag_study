@@ -22,7 +22,7 @@ from ragkb.domain.ids import new_uuid7
 
 
 class DOCXParser:
-    revision = "python-docx:g1-v3"
+    revision = "python-docx"
 
     def parse(self, source: Path, document_version_id: str) -> CanonicalDocument:
         document = DocxDocument(str(source))
@@ -70,7 +70,7 @@ class DOCXParser:
 
 
 class PPTXParser:
-    revision = "python-pptx:g1-v3"
+    revision = "python-pptx"
 
     @staticmethod
     def _node_type(shape: Any) -> NodeType:
@@ -122,7 +122,7 @@ class PPTXParser:
 
 
 class SpreadsheetParser:
-    revision = "spreadsheet-structure:g1-v2"
+    revision = "spreadsheet-structure"
 
     @staticmethod
     def _node(

@@ -1,6 +1,6 @@
 schema_version: 1
 dataset_id: local-business-gold-starter
-revision: rag-quality-v1
+revision: rag-quality
 owner: knowledge-quality-team
 cases:
   - case_id: exact-model-1

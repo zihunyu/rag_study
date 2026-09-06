@@ -57,7 +57,7 @@ def runtime(tmp_path, monkeypatch):
     return _components_with_search_qa(tmp_path)
 
 
-@pytest.mark.parametrize("path", ["/api/v1/ask", "/api/v1/ask:stream"])
+@pytest.mark.parametrize("path", ["/api/ask", "/api/ask:stream"])
 @pytest.mark.parametrize(
     "failed,hits,health,status,retryable",
     [
@@ -82,7 +82,7 @@ def test_search_health_reaches_qa_api_and_persistence(
 
     monkeypatch.setattr(runtime.qa_service.generator, "generate", generate)
     client = TestClient(create_app(runtime))
-    search = client.post("/api/v1/search", json={"query": "保修期多久？"}).json()
+    search = client.post("/api/search", json={"query": "保修期多久？"}).json()
     assert search["retrieval_health"] == health
     response = client.post(path, json={"question": "保修期多久？"})
     assert response.status_code == 200
@@ -123,9 +123,7 @@ def test_search_health_reaches_qa_api_and_persistence(
 def test_native_hybrid_fallback_tracks_successful_empty_channel(runtime, failed, hits, health):
     runtime.search_service.index = NativeFaultIndex(failed, hits=hits)
     response = (
-        TestClient(create_app(runtime))
-        .post("/api/v1/ask", json={"question": "保修期多久？"})
-        .json()
+        TestClient(create_app(runtime)).post("/api/ask", json={"question": "保修期多久？"}).json()
     )
     assert response["retrieval_health"] == health
     assert response["retryable"] is (health != "healthy" and not hits)
@@ -135,18 +133,18 @@ def test_degraded_cache_hit_keeps_current_health_and_warnings(runtime, monkeypat
     runtime.search_service.index = FaultIndex()
     runtime.qa_service.cache = InMemoryVerifiedAnswerCache()
     client = TestClient(create_app(runtime))
-    assert client.post("/api/v1/ask", json={"question": "保修期多久？"}).json()["verified"]
+    assert client.post("/api/ask", json={"question": "保修期多久？"}).json()["verified"]
     runtime.search_service.index.failed = ("dense",)
 
     def unexpected_generate(*args):
         pytest.fail("same authorized evidence should reuse the verified draft")
 
     monkeypatch.setattr(runtime.qa_service.generator, "generate", unexpected_generate)
-    degraded = client.post("/api/v1/ask", json={"question": "保修期多久？"}).json()
+    degraded = client.post("/api/ask", json={"question": "保修期多久？"}).json()
     assert degraded["verified"] and degraded["degraded"]
     assert degraded["warnings"] == ["DENSE_RETRIEVAL_UNAVAILABLE"]
     runtime.search_service.index.failed = ()
-    healthy = client.post("/api/v1/ask", json={"question": "保修期多久？"}).json()
+    healthy = client.post("/api/ask", json={"question": "保修期多久？"}).json()
     assert healthy["verified"] and not healthy["degraded"] and healthy["warnings"] == []
 
 
@@ -158,9 +156,7 @@ def test_reranker_failure_preserves_degradation_in_answer(runtime, monkeypatch):
 
     monkeypatch.setattr(runtime.search_service.reranker, "rerank", fail)
     result = (
-        TestClient(create_app(runtime))
-        .post("/api/v1/ask", json={"question": "保修期多久？"})
-        .json()
+        TestClient(create_app(runtime)).post("/api/ask", json={"question": "保修期多久？"}).json()
     )
     assert result["status"] == "answered" and result["verified"]
     assert result["retrieval_health"] == "degraded"
@@ -177,9 +173,7 @@ def test_embedding_outage_keeps_bm25_health(runtime, monkeypatch, index_type, bm
 
     monkeypatch.setattr(runtime.search_service.embedding, "embed", fail)
     result = (
-        TestClient(create_app(runtime))
-        .post("/api/v1/ask", json={"question": "保修期多久？"})
-        .json()
+        TestClient(create_app(runtime)).post("/api/ask", json={"question": "保修期多久？"}).json()
     )
     assert result["status"] == ("system_error" if bm25_fails else "answered")
     assert result["retryable"] is bm25_fails
@@ -193,9 +187,7 @@ def test_pre_retrieval_outage_is_retryable_without_claiming_zero_hits(runtime, m
 
     monkeypatch.setattr(runtime.search_service.index, "observed_security_watermark", fail)
     result = (
-        TestClient(create_app(runtime))
-        .post("/api/v1/ask", json={"question": "保修期多久？"})
-        .json()
+        TestClient(create_app(runtime)).post("/api/ask", json={"question": "保修期多久？"}).json()
     )
     assert result["status"] == "system_error" and result["retryable"]
     assert not result["verified"] and result["retrieval_health"] == "unavailable"
@@ -203,9 +195,7 @@ def test_pre_retrieval_outage_is_retryable_without_claiming_zero_hits(runtime, m
 
 def test_old_persisted_packages_and_results_remain_readable(runtime):
     result = (
-        TestClient(create_app(runtime))
-        .post("/api/v1/ask", json={"question": "保修期多久？"})
-        .json()
+        TestClient(create_app(runtime)).post("/api/ask", json={"question": "保修期多久？"}).json()
     )
     package_data = asdict(runtime.rag_repository.get_package(result["rag_run_id"]))
     result_data = asdict(runtime.rag_repository.get_result(result["rag_run_id"]))

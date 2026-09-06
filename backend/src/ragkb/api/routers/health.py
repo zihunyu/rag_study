@@ -19,7 +19,7 @@ OPENAPI_VERSION = "1.0.0"
 def build_health_router(runtime: RuntimeComponents) -> APIRouter:
     router = APIRouter()
 
-    @router.get("/api/v1/capabilities", tags=["health"])
+    @router.get("/api/capabilities", tags=["health"])
     def capabilities() -> dict[str, object]:
         production = runtime.settings.rag_runtime_profile == "production"
         scanner = runtime.uploads.malware_scanner

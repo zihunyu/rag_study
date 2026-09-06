@@ -17,7 +17,7 @@ class _Cursor:
 
 
 def test_normalized_store_updates_only_the_changed_entity_row() -> None:
-    store = MySQLNormalizedEntityStore("upload_entities_v3", "tenant")
+    store = MySQLNormalizedEntityStore("upload_entities", "tenant")
     before = {
         ("documents", "a"): EntityRow("a", None, 0, {"value": 1}, 3),
         ("documents", "b"): EntityRow("b", None, 0, {"value": 1}, 5),
@@ -31,7 +31,7 @@ def test_normalized_store_updates_only_the_changed_entity_row() -> None:
     store.sync(cursor, before, after)
 
     assert len(cursor.statements) == 1
-    assert "UPDATE upload_entities_v3" in cursor.statements[0]
+    assert "UPDATE upload_entities" in cursor.statements[0]
 
 
 def test_upload_governance_and_lifecycle_codecs_round_trip_per_entity() -> None:

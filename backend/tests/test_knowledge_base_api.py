@@ -24,16 +24,16 @@ def test_created_knowledge_base_owns_documents_chunks_search_and_ask(
     )
     client = TestClient(create_app(components))
 
-    created = client.post("/api/v1/spaces", json={"name": "产品手册"})
+    created = client.post("/api/spaces", json={"name": "产品手册"})
     assert created.status_code == 201
     space_id = created.json()["id"]
-    duplicate = client.post("/api/v1/spaces", json={"name": "产品手册"})
+    duplicate = client.post("/api/spaces", json={"name": "产品手册"})
     assert duplicate.status_code == 201
     assert duplicate.json()["id"] == space_id
 
     content = "# 产品政策\nThinkPad P16 Gen 3 21FA 的保修期为三年。\n".encode()
     upload = client.post(
-        f"/api/v1/spaces/{space_id}/upload-sessions",
+        f"/api/spaces/{space_id}/upload-sessions",
         headers={"Idempotency-Key": "knowledge-base-upload"},
         json={
             "filename": "service-policy.md",
@@ -49,7 +49,7 @@ def test_created_knowledge_base_owns_documents_chunks_search_and_ask(
         content=content,
     )
     completed = client.post(
-        f"/api/v1/upload-sessions/{upload.json()['upload_session_id']}:complete",
+        f"/api/upload-sessions/{upload.json()['upload_session_id']}:complete",
         headers={
             "If-Match": uploaded.headers["etag"],
             "Idempotency-Key": "knowledge-base-complete",
@@ -67,19 +67,19 @@ def test_created_knowledge_base_owns_documents_chunks_search_and_ask(
     )
     assert worker.run_once() is True
 
-    documents = client.get(f"/api/v1/spaces/{space_id}/documents/preview")
+    documents = client.get(f"/api/spaces/{space_id}/documents/preview")
     assert documents.status_code == 200
     assert documents.json()[0]["filename"] == "service-policy.md"
     assert documents.json()[0]["processing_state"] == "VALIDATED"
     assert documents.json()[0]["chunk_count"] > 0
 
     version_id = completed["document_version_id"]
-    chunks = client.get(f"/api/v1/document-versions/{version_id}/chunks/preview")
+    chunks = client.get(f"/api/document-versions/{version_id}/chunks/preview")
     assert chunks.status_code == 200
     assert any("三年" in item["text"] for item in chunks.json())
 
     review = client.post(
-        f"/api/v1/document-versions/{version_id}/review",
+        f"/api/document-versions/{version_id}/review",
         headers={"Idempotency-Key": "knowledge-base-review"},
         json={
             "decision": "APPROVED",
@@ -93,21 +93,21 @@ def test_created_knowledge_base_owns_documents_chunks_search_and_ask(
     )
     assert review.status_code == 200
     published = client.post(
-        f"/api/v1/document-versions/{version_id}:publish",
+        f"/api/document-versions/{version_id}:publish",
         headers={"Idempotency-Key": "knowledge-base-publish"},
     )
     assert published.status_code == 200
 
     selected_search = client.post(
-        "/api/v1/search",
+        "/api/search",
         json={"query": "ThinkPad 21FA 保修期", "space_id": space_id},
     )
     default_search = client.post(
-        "/api/v1/search",
+        "/api/search",
         json={"query": "ThinkPad 21FA 保修期", "space_id": components.space_id},
     )
     answer = client.post(
-        "/api/v1/ask",
+        "/api/ask",
         json={"question": "ThinkPad 21FA 保修期多久？", "space_id": space_id},
     )
 
@@ -138,10 +138,10 @@ def test_created_knowledge_base_owns_documents_chunks_search_and_ask(
         ]
     )
     assert client.get(answer.json()["citations"][0]["source_url"]).status_code == 404
-    assert client.get(f"/api/v1/document-versions/{version_id}/chunks").status_code == 404
+    assert client.get(f"/api/document-versions/{version_id}/chunks").status_code == 404
     assert (
         client.post(
-            "/api/v1/search", json={"query": "ThinkPad 21FA 保修期", "space_id": space_id}
+            "/api/search", json={"query": "ThinkPad 21FA 保修期", "space_id": space_id}
         ).json()["hits"]
         == []
     )
@@ -157,16 +157,12 @@ def test_unknown_knowledge_base_is_not_searchable(tmp_path: Path, monkeypatch) -
     )
     client = TestClient(create_app(components))
 
-    assert client.get("/api/v1/spaces/not-found/documents").status_code == 404
+    assert client.get("/api/spaces/not-found/documents").status_code == 404
     assert (
-        client.post(
-            "/api/v1/search", json={"query": "anything", "space_id": "not-found"}
-        ).status_code
+        client.post("/api/search", json={"query": "anything", "space_id": "not-found"}).status_code
         == 404
     )
     assert (
-        client.post(
-            "/api/v1/ask", json={"question": "anything", "space_id": "not-found"}
-        ).status_code
+        client.post("/api/ask", json={"question": "anything", "space_id": "not-found"}).status_code
         == 404
     )

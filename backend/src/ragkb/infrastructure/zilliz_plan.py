@@ -8,7 +8,7 @@ from typing import Any
 
 from ragkb.config import EnvSettings
 
-ZILLIZ_PLAN_REVISION = "zilliz-collection-plan:g2-v1"
+ZILLIZ_PLAN_REVISION = "zilliz-collection-plan"
 
 
 def _varchar(name: str, max_length: int = 128) -> dict[str, object]:

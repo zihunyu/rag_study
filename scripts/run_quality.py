@@ -11,19 +11,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 RUN_INTEGRATION = False
-INTEGRATION_CHECKS = frozenset(
-    {
-        "real_format_validation",
-        "embedding_v3_plan",
-        "real_uat_plan",
-        "real_uat_runner_plan",
-        "real_uat_failure_review",
-    }
-)
 
 
 def _run(name: str, command: list[str], working_directory: Path = ROOT) -> dict[str, object]:
-    if not RUN_INTEGRATION and (name in INTEGRATION_CHECKS or name.startswith("uat_")):
+    if not RUN_INTEGRATION and name == "final_local_samples":
         print(f"===== {name} =====\nSKIPPED: requires immutable real-provider artifacts")
         return {"name": name, "status": "SKIPPED"}
     completed = subprocess.run(  # noqa: S603
@@ -165,96 +156,9 @@ def main() -> int:
                     "artifacts/final-validation/external-call-plan.json",
                 ],
             ),
-            _run("mineru_provider_plan", [sys.executable, "scripts/run_mineru_provider.py"]),
             _run(
-                "docx_pdf_inputs",
-                [sys.executable, "scripts/prepare_docx_pdf_inputs.py", "validate"],
-            ),
-            _run(
-                "real_format_validation",
-                [
-                    sys.executable,
-                    "scripts/generate_real_format_validation.py",
-                    "--output",
-                    "artifacts/final-validation/real-format-validation.json",
-                ],
-            ),
-            _run(
-                "embedding_provider_plan",
-                [sys.executable, "scripts/run_embedding_provider.py"],
-            ),
-            _run(
-                "embedding_v3_plan",
-                [sys.executable, "scripts/run_embedding_format_remainder.py"],
-            ),
-            _run(
-                "uat_candidates",
-                [
-                    sys.executable,
-                    "scripts/generate_uat_candidates.py",
-                    "--output",
-                    "artifacts/final-validation/uat-candidates/pending-review.json",
-                ],
-            ),
-            _run(
-                "uat_approval",
-                [
-                    sys.executable,
-                    "scripts/approve_uat_candidates.py",
-                    "--validate",
-                    "--expected-hash",
-                    "fee7e5931d0930f3c8a2f29786abdbf791592d92e2dfc7c355688d965d7558b2",
-                ],
-            ),
-            _run(
-                "real_uat_plan",
-                [
-                    sys.executable,
-                    "scripts/generate_real_uat_plan.py",
-                    "--output",
-                    "artifacts/final-validation/real-uat-plan.json",
-                ],
-            ),
-            _run("real_uat_runner_plan", [sys.executable, "scripts/run_real_uat.py"]),
-            _run(
-                "real_uat_failure_review",
-                [sys.executable, "scripts/generate_reranker_failure_review.py"],
-            ),
-            _run(
-                "uat_candidate2_revision_proposals",
-                [sys.executable, "scripts/generate_candidate2_revision_proposals.py"],
-            ),
-            _run(
-                "uat_reranker_diagnostic_v2_plan",
-                [sys.executable, "scripts/run_uat_reranker_diagnostic_v2.py", "plan"],
-            ),
-            _run(
-                "uat_continuation_v3_plan",
-                [sys.executable, "scripts/run_uat_continuation_v3.py", "plan"],
-            ),
-            _run(
-                "uat_systematic_v4_execution_plan",
-                [sys.executable, "scripts/run_uat_systematic_v4.py", "plan"],
-            ),
-            _run(
-                "uat_systematic_v5_execution_plan",
-                [sys.executable, "scripts/run_uat_systematic_v5.py", "plan"],
-            ),
-            _run(
-                "uat_generic_remediation_content_scan",
+                "claim_content_scan",
                 [sys.executable, "scripts/check_uat_generic_remediation.py"],
-            ),
-            _run(
-                "uat_future_claim_remediation_plan",
-                [sys.executable, "scripts/plan_uat_future_claim_remediation.py"],
-            ),
-            _run(
-                "uat_future_error_retest_prepare",
-                [sys.executable, "scripts/prepare_uat_future_error_retest.py"],
-            ),
-            _run(
-                "uat_future_error_retest_plan",
-                [sys.executable, "scripts/run_uat_future_error_retest.py", "plan"],
             ),
             _run("backend_entry", [sys.executable, "run_backend.py", "--check"]),
             _run("worker_entry", [sys.executable, "run_worker.py", "--check"]),

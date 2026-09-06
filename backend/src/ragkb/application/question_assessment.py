@@ -12,7 +12,7 @@ from ragkb.domain.rag import QuestionAssessment, QuestionDisposition
 
 
 class ConservativeQuestionAssessor:
-    revision = "conservative-question-assessor:v1"
+    revision = "conservative-question-assessor"
 
     def assess(self, question: str) -> QuestionAssessment:
         query = question.strip()

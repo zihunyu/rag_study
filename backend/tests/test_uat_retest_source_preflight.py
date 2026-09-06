@@ -19,7 +19,7 @@ def test_generated_preflight_cli(tmp_path: Path):
         json.dumps({"a": {"fixture_ref": "x", "source_integrity": True, "question_sha256": "h"}})
     )
     out = tmp_path / "o"
-    script = Path(__file__).resolve().parents[2] / "scripts/prepare_uat_retest_sources_v5.py"
+    script = Path(__file__).resolve().parents[2] / "scripts/prepare_claim_sources.py"
     subprocess.run(  # noqa: S603 - fixed repository script under test
         [sys.executable, str(script), str(review), str(scan), str(cases), "--output", str(out)],
         check=True,

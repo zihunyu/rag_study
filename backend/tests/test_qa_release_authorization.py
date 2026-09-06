@@ -48,7 +48,7 @@ def published_runtime(tmp_path, monkeypatch):
     document, version, _ = _upload(client, runtime.space_id)
     _process_next(runtime, client, version)
     published = client.post(
-        f"/api/v1/document-versions/{version}:publish", headers={"Idempotency-Key": "publish"}
+        f"/api/document-versions/{version}:publish", headers={"Idempotency-Key": "publish"}
     )
     assert published.status_code == 200
     runtime.qa_service.generator = EchoGenerator()
@@ -56,7 +56,7 @@ def published_runtime(tmp_path, monkeypatch):
     return runtime, client, document, published.json()["row_version"]
 
 
-@pytest.mark.parametrize("path", ["/api/v1/ask", "/api/v1/ask:stream"])
+@pytest.mark.parametrize("path", ["/api/ask", "/api/ask:stream"])
 @pytest.mark.parametrize("warm_cache", [False, True])
 @pytest.mark.parametrize("mutation", ["revoke", "permissions"])
 def test_verifier_wait_cannot_release_revoked_evidence(
@@ -65,7 +65,7 @@ def test_verifier_wait_cannot_release_revoked_evidence(
     runtime, client, document, row_version = published_runtime
     service = runtime.qa_service
     if warm_cache:
-        assert client.post("/api/v1/ask", json={"question": "fact source"}).json()["verified"]
+        assert client.post("/api/ask", json={"question": "fact source"}).json()["verified"]
     cache = service.cache
     before_writes = cache.writes
     before_calls = service.generator.calls
@@ -91,10 +91,10 @@ def test_verifier_wait_cannot_release_revoked_evidence(
     def change_permissions():
         if mutation == "revoke":
             return client.post(
-                f"/api/v1/documents/{document}:revoke", headers={"Idempotency-Key": "revoke"}
+                f"/api/documents/{document}:revoke", headers={"Idempotency-Key": "revoke"}
             )
         return client.put(
-            f"/api/v1/resources/document/{document}/permissions",
+            f"/api/resources/document/{document}/permissions",
             headers={"Idempotency-Key": "restrict", "If-Match": f'"{row_version}"'},
             json={
                 "security_projection": {
@@ -159,7 +159,7 @@ def test_release_and_revoke_share_one_application_boundary(published_runtime, mo
     monkeypatch.setattr(service.cache, "put", waiting_put)
     monkeypatch.setattr(service.repository, "save_run", save)
     with ThreadPoolExecutor(max_workers=2) as pool:
-        answer_future = pool.submit(client.post, "/api/v1/ask", json={"question": "fact source"})
+        answer_future = pool.submit(client.post, "/api/ask", json={"question": "fact source"})
         try:
             assert writing.wait(10), "cache write was not reached"
             acquired = runtime.lifecycle_store.lock.acquire(blocking=False)
@@ -175,5 +175,5 @@ def test_release_and_revoke_share_one_application_boundary(published_runtime, mo
     assert response.json()["verified"] is True
     assert order == ["cache_written", "run_saved", "revoked"]
     assert client.get(response.json()["citations"][0]["source_url"]).status_code == 404
-    subsequent = client.post("/api/v1/ask", json={"question": "fact source"}).json()
+    subsequent = client.post("/api/ask", json={"question": "fact source"}).json()
     assert subsequent["answer"] is None and subsequent["citations"] == []

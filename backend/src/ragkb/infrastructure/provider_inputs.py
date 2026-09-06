@@ -24,11 +24,11 @@ def _sha256(payload: bytes) -> str:
 
 
 class SingleFrameTiffPngDeriver:
-    revision = "single-frame-tiff-to-png:v1"
+    revision = "single-frame-tiff-to-png"
     _png_modes = frozenset({"1", "L", "P", "RGB", "RGBA", "I", "I;16"})
 
     def __init__(self, controlled_root: Path) -> None:
-        self.root = (controlled_root / "provider-inputs" / "mineru-scan-v5").resolve()
+        self.root = (controlled_root / "provider-inputs" / "mineru-scan").resolve()
 
     @staticmethod
     def _artifact_id(anonymous_id: str, source_sha256: str) -> str:
@@ -79,7 +79,7 @@ class SingleFrameTiffPngDeriver:
         return {
             **loaded,
             "derived_path": png_path,
-            "artifact_ref": f"provider-inputs/mineru-scan-v5/{artifact_id}",
+            "artifact_ref": f"provider-inputs/mineru-scan/{artifact_id}",
         }
 
     def load(self, anonymous_id: str, source_sha256: str) -> dict[str, object]:
@@ -121,7 +121,7 @@ class SingleFrameTiffPngDeriver:
         temporary = Path(tempfile.mkdtemp(prefix=f".{artifact_id}-", dir=self.root)).resolve()
         try:
             manifest = {
-                "revision": "provider-derived-input-manifest:v1",
+                "revision": "provider-derived-input-manifest",
                 "artifact_id": artifact_id,
                 "anonymous_sample_id": anonymous_id,
                 "source_sha256": source_sha256,
@@ -173,7 +173,7 @@ class SubprocessOwnedProcessRunner:
 
 
 class LibreOfficeDocxPdfDeriver:
-    revision = "libreoffice-docx-to-pdf:v1"
+    revision = "libreoffice-docx-to-pdf"
 
     def __init__(
         self,
@@ -185,8 +185,8 @@ class LibreOfficeDocxPdfDeriver:
         process_runner: OwnedProcessRunnerPort | None = None,
         timeout_seconds: float = 120,
     ) -> None:
-        self.root = (artifacts_root / "provider-inputs" / "mineru-docx-pdf-v1").resolve()
-        self.work_root = (temporary_root / "provider-inputs" / "mineru-docx-pdf-v1-work").resolve()
+        self.root = (artifacts_root / "provider-inputs" / "mineru-docx-pdf").resolve()
+        self.work_root = (temporary_root / "provider-inputs" / "mineru-docx-pdf-work").resolve()
         self.launcher = launcher.resolve()
         if not self.launcher.is_file() or self.launcher.name.casefold() not in {
             "soffice.com",
@@ -274,7 +274,7 @@ class LibreOfficeDocxPdfDeriver:
         return {
             **manifest,
             "derived_path": pdf_path,
-            "artifact_ref": f"provider-inputs/mineru-docx-pdf-v1/{artifact_id}",
+            "artifact_ref": f"provider-inputs/mineru-docx-pdf/{artifact_id}",
         }
 
     def load(self, anonymous_id: str, source_sha256: str) -> dict[str, object]:
@@ -332,7 +332,7 @@ class LibreOfficeDocxPdfDeriver:
                 raise ValueError("DOCX_PDF_SOURCE_MUTATED")
             derived_sha256 = _sha256(pdf_payload)
             manifest = {
-                "revision": "provider-derived-input-manifest:v1",
+                "revision": "provider-derived-input-manifest",
                 "artifact_id": artifact_id,
                 "anonymous_sample_id": anonymous_id,
                 "source_sha256": source_sha256,

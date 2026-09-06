@@ -48,7 +48,7 @@ def build_acceptance_router(runtime: RuntimeComponents) -> APIRouter:
     router = APIRouter()
 
     @router.post(
-        "/api/v1/governance/observations",
+        "/api/governance/observations",
         response_model=ObservationResponse,
         tags=["acceptance"],
     )
@@ -71,7 +71,7 @@ def build_acceptance_router(runtime: RuntimeComponents) -> APIRouter:
         return _observation_response(item)
 
     @router.get(
-        "/api/v1/governance/observations/{window_id}",
+        "/api/governance/observations/{window_id}",
         response_model=ObservationResponse,
         tags=["acceptance"],
     )
@@ -85,7 +85,7 @@ def build_acceptance_router(runtime: RuntimeComponents) -> APIRouter:
             raise ResourceNotFoundError(window_id) from error
 
     @router.put(
-        "/api/v1/governance/observations/{window_id}/metrics",
+        "/api/governance/observations/{window_id}/metrics",
         response_model=ObservationResponse,
         tags=["acceptance"],
     )
@@ -114,7 +114,7 @@ def build_acceptance_router(runtime: RuntimeComponents) -> APIRouter:
             raise ResourceNotFoundError(window_id) from error
         return _observation_response(item)
 
-    @router.post("/api/v1/governance/observations/{window_id}/signoffs", tags=["acceptance"])
+    @router.post("/api/governance/observations/{window_id}/signoffs", tags=["acceptance"])
     def observation_signoff(
         window_id: str,
         body: GovernanceSignoffRequest,
@@ -148,7 +148,7 @@ def build_acceptance_router(runtime: RuntimeComponents) -> APIRouter:
         )
 
     @router.post(
-        "/api/v1/governance/observations/{window_id}/incidents",
+        "/api/governance/observations/{window_id}/incidents",
         response_model=IncidentResponse,
         tags=["acceptance"],
     )
@@ -178,7 +178,7 @@ def build_acceptance_router(runtime: RuntimeComponents) -> APIRouter:
         return IncidentResponse.model_validate(item)
 
     @router.put(
-        "/api/v1/governance/incidents/{incident_id}:resolve",
+        "/api/governance/incidents/{incident_id}:resolve",
         response_model=IncidentResponse,
         tags=["acceptance"],
     )
@@ -207,7 +207,7 @@ def build_acceptance_router(runtime: RuntimeComponents) -> APIRouter:
         return IncidentResponse.model_validate(item)
 
     @router.post(
-        "/api/v1/governance/observations/{window_id}:close",
+        "/api/governance/observations/{window_id}:close",
         response_model=ObservationResponse,
         tags=["acceptance"],
     )
@@ -238,7 +238,7 @@ def build_acceptance_router(runtime: RuntimeComponents) -> APIRouter:
         return _observation_response(item)
 
     @router.post(
-        "/api/v1/governance/observations/{window_id}:evaluate",
+        "/api/governance/observations/{window_id}:evaluate",
         response_model=ReadinessResponse,
         tags=["acceptance"],
     )
@@ -271,7 +271,7 @@ def build_acceptance_router(runtime: RuntimeComponents) -> APIRouter:
         return ReadinessResponse.model_validate(item)
 
     @router.get(
-        "/api/v1/governance/observations/{window_id}/final-acceptance-report",
+        "/api/governance/observations/{window_id}/final-acceptance-report",
         response_model=FinalAcceptanceResponse,
         tags=["acceptance"],
     )

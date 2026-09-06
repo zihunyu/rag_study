@@ -41,7 +41,7 @@ def main() -> int:
         "status": "ANALYZER_PARITY_PASSED" if all(matches) else "ANALYZER_PARITY_FAILED",
         "sample_count": len(PUBLIC_SAMPLES),
         "matches": matches,
-        "local_revision": "milvus-chinese-jieba-search-cnalphanumonly:v1",
+        "local_revision": "milvus-chinese-jieba-search-cnalphanumonly",
         "sample_set_sha256": hashlib.sha256("\n".join(PUBLIC_SAMPLES).encode()).hexdigest(),
         "raw_tokens_in_output": False,
     }

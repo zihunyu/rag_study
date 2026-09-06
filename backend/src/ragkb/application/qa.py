@@ -64,7 +64,7 @@ def _normalized_fact_text(value: str) -> str:
 class DeterministicClaimVerifier:
     """Fail-closed structural checks that run before any answer is marked verified."""
 
-    revision = "deterministic-claim-verifier:structured-numeric-and-conflicts:v4"
+    revision = "deterministic-claim-verifier:structured-numeric-and-conflicts"
 
     def __init__(self, allowed_output_domains: tuple[str, ...] = ()) -> None:
         self.allowed_output_domains = frozenset(
@@ -236,7 +236,7 @@ class CompositeClaimVerifier:
 
 
 class TrustedQAService:
-    revision = "trusted-qa:g3-v1"
+    revision = "trusted-qa"
 
     def __init__(
         self,
@@ -674,7 +674,7 @@ class InMemoryVerifiedAnswerCache:
 def verified_answer_cache_key(package: EvidencePackage) -> str:
     payload = {
         "verifier_revision": package.verifier_revision,
-        "permission_policy_revision": "guarded-final-release+full-pool-conflicts:v4",
+        "permission_policy_revision": "guarded-final-release+full-pool-conflicts",
         "tenant_id": package.tenant_id,
         "user_id": package.user_id,
         "permission_revision": package.permission_revision,

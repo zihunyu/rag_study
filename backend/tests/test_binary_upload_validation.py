@@ -24,7 +24,7 @@ def _wav() -> bytes:
 def _complete(client: TestClient, space_id: str, filename: str, content: bytes, mime: str):
     key = filename.replace(".", "-")
     created = client.post(
-        f"/api/v1/spaces/{space_id}/upload-sessions",
+        f"/api/spaces/{space_id}/upload-sessions",
         headers={"Idempotency-Key": f"binary-create-{key}"},
         json={
             "filename": filename,
@@ -39,7 +39,7 @@ def _complete(client: TestClient, space_id: str, filename: str, content: bytes, 
         content=content,
     )
     return client.post(
-        f"/api/v1/upload-sessions/{created.json()['upload_session_id']}:complete",
+        f"/api/upload-sessions/{created.json()['upload_session_id']}:complete",
         headers={
             "If-Match": uploaded.headers["etag"],
             "Idempotency-Key": f"binary-complete-{key}",

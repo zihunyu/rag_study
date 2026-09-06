@@ -45,7 +45,7 @@ def build_assurance() -> dict[str, object]:
         for item in npm_packages
     ]
     return {
-        "revision": "offline-assurance:g5-v1",
+        "revision": "offline-assurance",
         "python_sbom": sorted(python_packages, key=lambda item: str(item["name"]).casefold()),
         "npm_sbom": sorted(npm_packages, key=lambda item: str(item["path"])),
         "license_unknown_count": sum(item["license"] == "UNKNOWN" for item in python_packages),

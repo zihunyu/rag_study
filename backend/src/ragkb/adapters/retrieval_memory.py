@@ -22,7 +22,7 @@ class TextAnalyzerPort(Protocol):
 class MilvusChineseAnalyzer:
     """Jieba search-mode plus alphanumeric filtering, matching Milvus `chinese`."""
 
-    revision = "milvus-chinese-jieba-search-cnalphanumonly:v1"
+    revision = "milvus-chinese-jieba-search-cnalphanumonly"
 
     def analyze(self, text: str) -> tuple[str, ...]:
         return tuple(
@@ -54,7 +54,7 @@ class LocalIndexRecord:
 class LocalHybridIndex:
     """A query-driven BM25 and cosine index intended for local acceptance tests."""
 
-    revision = "local-bm25-cosine-index:v1"
+    revision = "local-bm25-cosine-index"
 
     def __init__(
         self,
@@ -177,7 +177,7 @@ class LocalHybridIndex:
 class FakeHybridIndex:
     """Predetermined candidates used only when a unit test needs a strict fake."""
 
-    revision = "fake-hybrid-index:v1"
+    revision = "fake-hybrid-index"
 
     def __init__(
         self,
@@ -213,7 +213,7 @@ InMemoryHybridIndex = FakeHybridIndex
 
 
 class InMemoryRetrievalControlPlane:
-    revision = "in-memory-retrieval-control:g2-test-v1"
+    revision = "in-memory-retrieval-control:test"
 
     def __init__(self, chunks: Mapping[str, AuthorizedChunk] | None = None) -> None:
         self._chunks = dict(chunks or {})

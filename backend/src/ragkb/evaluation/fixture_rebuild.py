@@ -30,4 +30,4 @@ def fixture_rebuild_plan(fixtures: Sequence[Mapping[str, object]]) -> dict[str, 
                 "missing_codepoint_count": coverage["missing_codepoint_count"],
             }
         )
-    return {"revision": "fixture-rebuild-plan:v1", "dry_run": True, "records": records}
+    return {"revision": "fixture-rebuild-plan", "dry_run": True, "records": records}

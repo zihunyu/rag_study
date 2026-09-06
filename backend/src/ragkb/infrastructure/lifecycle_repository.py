@@ -21,7 +21,7 @@ from ragkb.infrastructure.sqlite import SQLiteDatabase
 
 
 class SQLiteLifecycleStore(InMemoryLifecycleStore):
-    revision = "sqlite-lifecycle-store:g3-v1"
+    revision = "sqlite-lifecycle-store"
 
     def __init__(self, database: SQLiteDatabase) -> None:
         super().__init__()

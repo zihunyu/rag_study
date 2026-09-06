@@ -373,23 +373,23 @@ def test_search_api_is_independent_and_does_not_expose_acl_or_tenant_filters(
     app = create_app(replace(components, search_service=service))
     client = TestClient(app)
 
-    response = client.post("/api/v1/search", json={"query": "searchable"})
+    response = client.post("/api/search", json={"query": "searchable"})
     schema = app.openapi()
     request_properties = schema["components"]["schemas"]["SearchRequest"]["properties"]
 
     assert response.status_code == 200
     assert response.json()["hits"][0]["chunk_id"] == "chunk-api"
     assert response.json()["real_acceptance"] is False
-    assert "/api/v1/search" in schema["paths"]
-    assert "/api/v1/ask" in schema["paths"]
+    assert "/api/search" in schema["paths"]
+    assert "/api/ask" in schema["paths"]
     assert (
-        schema["paths"]["/api/v1/search"]["post"]["operationId"]
-        != schema["paths"]["/api/v1/ask"]["post"]["operationId"]
+        schema["paths"]["/api/search"]["post"]["operationId"]
+        != schema["paths"]["/api/ask"]["post"]["operationId"]
     )
     assert {"tenant_id", "acl_scope_tokens", "subject_scope_tokens"}.isdisjoint(request_properties)
 
     components.lifecycle_service.delete("document-api", event_id="delete", trace_id="trace")
-    after_delete = client.post("/api/v1/search", json={"query": "searchable"})
+    after_delete = client.post("/api/search", json={"query": "searchable"})
     assert after_delete.json()["hits"] == []
 
 

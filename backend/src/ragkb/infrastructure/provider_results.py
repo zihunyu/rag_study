@@ -17,7 +17,7 @@ def _sha256(payload: bytes) -> str:
 
 
 class LocalProviderResultStore:
-    revision = "local-provider-result-store:v1"
+    revision = "local-provider-result-store"
 
     def __init__(self, artifacts_root: Path) -> None:
         self.root = (artifacts_root / "provider-results" / "mineru").resolve()
@@ -94,7 +94,7 @@ class LocalProviderResultStore:
         temporary = Path(tempfile.mkdtemp(prefix=f".{artifact_id}-", dir=self.root)).resolve()
         try:
             nodes_document = {
-                "revision": "mineru-normalized-nodes:v1",
+                "revision": "mineru-normalized-nodes",
                 "artifact_id": artifact_id,
                 "anonymous_sample_id": anonymous_id,
                 "result_hash": result_hash.casefold(),

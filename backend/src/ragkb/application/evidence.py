@@ -20,7 +20,7 @@ from ragkb.domain.retrieval import SearchContext, SearchHit, SearchSource
 
 
 class SearchBackedEvidenceProvider:
-    revision = "search-backed-evidence:question-assessment:v4"
+    revision = "search-backed-evidence:question-assessment"
 
     def __init__(
         self,
