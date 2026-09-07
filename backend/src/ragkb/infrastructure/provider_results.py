@@ -145,3 +145,8 @@ class LocalProviderResultStore:
         if not isinstance(nodes, list) or any(not isinstance(node, dict) for node in nodes):
             raise ValueError("PROVIDER_NORMALIZED_NODES_INVALID")
         return nodes
+
+    def read_mineru_zip(self, artifact_id: str) -> bytes:
+        target = self._target(artifact_id)
+        self._metadata(artifact_id, target)
+        return (target / "provider-result.zip").read_bytes()

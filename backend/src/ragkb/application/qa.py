@@ -306,6 +306,25 @@ class TrustedQAService:
         verified: bool = False,
         retryable: bool = False,
     ) -> AskResult:
+        report = dict(package.coverage_report)
+        if answer and report.get("mode") == "overview":
+            cited_ids = {c.evidence_id for c in citations}
+            cited_sections = {
+                (e.document_version_id, str(e.locator.get("section_path", "")))
+                for e in package.evidence
+                if e.evidence_id in cited_ids
+            }
+            missing = [
+                s["section"]
+                for s in report.get("sections", [])
+                if (s["version_id"], s["section"]) not in cited_sections
+            ]
+            report["answer_sections"] = len(cited_sections)
+            if missing:
+                report["complete"] = False
+                report["gaps"] = list(report.get("gaps", [])) + [
+                    "最终回答未引用以下章节：" + "、".join(missing)
+                ]
         result = AskResult(
             rag_run_id=package.rag_run_id,
             status=status,
@@ -323,6 +342,7 @@ class TrustedQAService:
             ),
             clarification_question=package.clarification_question,
             coverage=package.coverage,
+            coverage_report=report,
         )
         self.repository.save_run(package, result)
         return result

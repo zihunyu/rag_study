@@ -42,6 +42,8 @@
           "type": "object",
           "minProperties": 1,
           "properties": {
+            "part": {"type": "string", "minLength": 1},
+            "paragraph": {"type": "integer", "minimum": 1},
             "page": {"type": "integer", "minimum": 1},
             "slide": {"type": "integer", "minimum": 1},
             "sheet": {"type": "string", "minLength": 1},

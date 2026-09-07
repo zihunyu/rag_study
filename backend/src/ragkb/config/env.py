@@ -205,6 +205,54 @@ class EnvSettings(BaseModel):
     llm_prompt_revision: str = "grounded-qa"
     llm_generation_cache_ttl_seconds: int = Field(default=3600, gt=0)
     llm_allowed_output_domains: tuple[str, ...] = ()
+    ocr_enabled: bool = False
+    ocr_base_url: str = ""
+    ocr_allow_http: bool = False
+    ocr_api_key: SecretStr | None = None
+    ocr_model: str = ""
+    ocr_timeout_seconds: float = Field(default=180, gt=0)
+    ocr_max_concurrency: int = Field(default=2, gt=0)
+    ocr_max_output_tokens: int = Field(default=8192, gt=0)
+    ocr_temperature: float = Field(default=0, ge=0, le=2)
+    ocr_top_p: float = Field(default=1, gt=0, le=1)
+    ocr_prompt_revision: str = "visual-evidence-v1"
+    ocr_generation_cache_ttl_seconds: int = Field(default=3600, gt=0)
+    ocr_allowed_output_domains: tuple[str, ...] = ()
+    ocr_input_cost_per_million_cny: float = Field(default=0, ge=0)
+    ocr_output_cost_per_million_cny: float = Field(default=0, ge=0)
+    ocr_max_image_bytes: int = Field(default=20 * 1024 * 1024, gt=0)
+    ocr_max_image_pixels: int = Field(default=40_000_000, gt=0)
+    ocr_max_images_per_document: int = Field(default=100, gt=0)
+    ocr_max_repair_attempts: int = Field(default=1, ge=0, le=2)
+    ocr_query_recheck: bool = True
+    ocr_query_max_images: int = Field(default=4, gt=0, le=16)
+    ocr_verify_enabled: bool = False
+    ocr_verify_base_url: str = ""
+    ocr_verify_api_key: SecretStr | None = None
+    ocr_verify_model: str = ""
+    ocr_verify_allow_http: bool = False
+    ocr_verify_timeout_seconds: float = Field(default=180, gt=0)
+    ocr_local_check_enabled: bool = False
+    ocr_render_fallback_enabled: bool = True
+    ocr_render_max_pages: int = Field(default=100, ge=1, le=1000)
+    ocr_render_dpi: int = Field(default=150, ge=72, le=300)
+    ocr_render_timeout_seconds: int = Field(default=120, ge=5, le=600)
+    ocr_soffice_path: str = ""
+    ocr_cross_version_cache_enabled: bool = True
+    model_account_limit_enabled: bool = False
+    model_usage_enabled: bool = False
+    ocr_verify_input_cost_per_million_cny: float = Field(default=0, ge=0)
+    ocr_verify_output_cost_per_million_cny: float = Field(default=0, ge=0)
+    model_account_group: str = ""
+    model_account_max_concurrency: int = Field(default=3, ge=1, le=64)
+    model_account_requests_per_minute: int = Field(default=60, ge=1)
+    model_account_tokens_per_minute: int = Field(default=200000, ge=1000)
+    overview_enabled: bool = True
+    overview_max_output_tokens: int = Field(default=8192, ge=2048, le=32768)
+    overview_max_chunks: int = Field(default=1200, ge=30, le=20000)
+    overview_max_images: int = Field(default=24, ge=1, le=200)
+    overview_timeout_seconds: int = Field(default=900, ge=120, le=3600)
+    overview_evidence_tokens: int = Field(default=18000, ge=2000, le=64000)
     verifier_base_url: str = ""
     verifier_api_key: SecretStr | None = None
     verifier_model: str = ""
@@ -333,6 +381,7 @@ class EnvSettings(BaseModel):
         "ai_trusted_private_transport_services",
         "oidc_allowed_algorithms",
         "rag_acceptance_required_query_types",
+        "ocr_allowed_output_domains",
         mode="before",
     )
     @classmethod
@@ -383,6 +432,8 @@ SECRET_KEYS = frozenset(
         "ZILLIZ_CLOUD_TOKEN",
         "MINERU_TOKENS",
         "LLM_API_KEY",
+        "OCR_API_KEY",
+        "OCR_VERIFY_API_KEY",
         "VERIFIER_API_KEY",
         "EMBEDDING_API_KEY",
         "RERANKER_API_KEY",

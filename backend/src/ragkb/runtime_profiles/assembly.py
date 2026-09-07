@@ -9,6 +9,7 @@ from pathlib import Path
 
 from pydantic import SecretStr
 
+from ragkb.adapters.chapter_reader import ChapterReader
 from ragkb.adapters.local_indexing import SQLiteLocalIndexingSink
 from ragkb.adapters.local_storage import LocalFileStorage
 from ragkb.adapters.model_http import (
@@ -51,8 +52,10 @@ from ragkb.engineering_security.file_validation import UploadFileValidator
 from ragkb.engineering_security.malware import SignatureMalwareScanner, SystemMalwareScanner
 from ragkb.engineering_security.references import HMACReferenceSigner, ReferenceStorePort
 from ragkb.infrastructure.governance_repository import SQLiteGovernanceRepository
+from ragkb.infrastructure.overview import OverviewReader
 from ragkb.infrastructure.sqlite import SQLiteDatabase
 from ragkb.infrastructure.upload_repository import SQLiteUploadRepository
+from ragkb.infrastructure.visual_assets import VisualAssetStore
 from ragkb.runtime_profiles.factory import select_runtime_factory
 
 
@@ -212,6 +215,45 @@ def build_runtime_components(
         else TokenAwareChunker(chunking_config, tokenizer=tokenizer)
     )
     parser_router = profile_factory.build_parser(settings, root, storage)
+    visual_enricher = None
+    if settings.ocr_enabled:
+        from ragkb.adapters.visual_http import VisualAnalyzer
+        from ragkb.document_processing.parsers import ParserRouter
+        from ragkb.document_processing.visual_parser import VisualDocumentParser
+        from ragkb.infrastructure.visual_evidence import VisualEvidenceEnricher
+
+        visual_store = VisualAssetStore(storage)
+
+        def bind_visual_plan(session_id: str, version_id: str) -> None:
+            plan = visual_store.ledger.get("session_plan", session_id)
+            if plan:
+                visual_store.ledger.put("version_plan", version_id, plan, immutable=True)
+
+        uploads.before_enqueue = bind_visual_plan
+        visual_analyzer = VisualAnalyzer(settings)
+        if isinstance(visual_analyzer.transport, HttpxJsonTransport):
+            provider_transports = (*provider_transports, visual_analyzer.transport)
+        parser_router = ParserRouter(
+            {
+                kind: VisualDocumentParser(
+                    parser_router.route(kind),
+                    kind,
+                    visual_analyzer,
+                    visual_store,
+                    settings,
+                    scope=tenant_id,
+                )
+                for kind in ("pdf", "pdf_scanned", "doc", "docx", "ppt", "pptx", "xlsx", "image")
+            }
+            | {
+                kind: parser_router.route(kind)
+                for kind in ("txt", "markdown", "html", "xls", "csv", "audio")
+            }
+        )
+        if settings.ocr_query_recheck:
+            visual_enricher = VisualEvidenceEnricher(
+                visual_store, visual_analyzer, settings.ocr_query_max_images
+            )
     retrieval_release = profile_factory.build_retrieval_release(
         settings, retrieval, lifecycle_store, tenant_id, space_id
     )
@@ -301,13 +343,35 @@ def build_runtime_components(
             default=0,
         ),
         required_security_watermark=lambda: 0,
-        prompt_revision=settings.llm_prompt_revision,
+        prompt_revision=settings.llm_prompt_revision
+        + (
+            ":visual-v3:"
+            + settings.ocr_model
+            + ":"
+            + settings.ocr_prompt_revision
+            + ":"
+            + settings.ocr_verify_model
+            + (":recheck" if settings.ocr_query_recheck else ":no-recheck")
+            if settings.ocr_enabled
+            else ""
+        ),
         model_revision=generator.revision,
         verifier_revision=verifier.revision,
         final_evidence_count=settings.retrieval_final_evidence_count,
         release_provider=retrieval_release,
         question_assessor=retrieval.question_assessor,
         evidence_selector=retrieval.evidence_selector,
+        visual_enricher=visual_enricher,
+        overview_reader=OverviewReader(
+            repository,
+            authorization,
+            VisualAssetStore(storage),
+            settings,
+            ChapterReader(settings, model_transport),
+            visual_enricher,
+        )
+        if settings.overview_enabled
+        else None,
     )
     answer_cache = profile_factory.build_answer_cache(settings, persistence)
     qa_service = TrustedQAService(

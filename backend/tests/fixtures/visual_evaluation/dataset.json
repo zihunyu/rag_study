@@ -1,0 +1,306 @@
+{
+  "name": "synthetic-visual-fields-v1",
+  "annotation": "Synthetic values are explicitly drawn and manually checked against the source creation specification.",
+  "cases": [
+    {
+      "id": "power-1",
+      "split": "development",
+      "image": "power-1.png",
+      "gold": {
+        "kind": "table",
+        "title": "",
+        "transcription": "Parameter Value Rated power 420 W",
+        "description": "",
+        "body_text": "",
+        "graphs": [],
+        "tables": [
+          {
+            "title": "",
+            "rows": 2,
+            "columns": 2,
+            "header_rows": 1,
+            "notes": [],
+            "cells": [
+              {
+                "row": 0,
+                "column": 0,
+                "rowspan": 1,
+                "colspan": 1,
+                "text": "Parameter"
+              },
+              {
+                "row": 0,
+                "column": 1,
+                "rowspan": 1,
+                "colspan": 1,
+                "text": "Value"
+              },
+              {
+                "row": 1,
+                "column": 0,
+                "rowspan": 1,
+                "colspan": 1,
+                "text": "Rated power"
+              },
+              {
+                "row": 1,
+                "column": 1,
+                "rowspan": 1,
+                "colspan": 1,
+                "text": "420 W"
+              }
+            ]
+          }
+        ],
+        "uncertainties": []
+      }
+    },
+    {
+      "id": "power-2",
+      "split": "development",
+      "image": "power-2.png",
+      "gold": {
+        "kind": "table",
+        "title": "",
+        "transcription": "Parameter Value Rated power 8 W",
+        "description": "",
+        "body_text": "",
+        "graphs": [],
+        "tables": [
+          {
+            "title": "",
+            "rows": 2,
+            "columns": 2,
+            "header_rows": 1,
+            "notes": [],
+            "cells": [
+              {
+                "row": 0,
+                "column": 0,
+                "rowspan": 1,
+                "colspan": 1,
+                "text": "Parameter"
+              },
+              {
+                "row": 0,
+                "column": 1,
+                "rowspan": 1,
+                "colspan": 1,
+                "text": "Value"
+              },
+              {
+                "row": 1,
+                "column": 0,
+                "rowspan": 1,
+                "colspan": 1,
+                "text": "Rated power"
+              },
+              {
+                "row": 1,
+                "column": 1,
+                "rowspan": 1,
+                "colspan": 1,
+                "text": "8 W"
+              }
+            ]
+          }
+        ],
+        "uncertainties": []
+      }
+    },
+    {
+      "id": "power-3",
+      "split": "heldout",
+      "image": "power-3.png",
+      "gold": {
+        "kind": "table",
+        "title": "",
+        "transcription": "Parameter Value Rated power 323 W",
+        "description": "",
+        "body_text": "",
+        "graphs": [],
+        "tables": [
+          {
+            "title": "",
+            "rows": 2,
+            "columns": 2,
+            "header_rows": 1,
+            "notes": [],
+            "cells": [
+              {
+                "row": 0,
+                "column": 0,
+                "rowspan": 1,
+                "colspan": 1,
+                "text": "Parameter"
+              },
+              {
+                "row": 0,
+                "column": 1,
+                "rowspan": 1,
+                "colspan": 1,
+                "text": "Value"
+              },
+              {
+                "row": 1,
+                "column": 0,
+                "rowspan": 1,
+                "colspan": 1,
+                "text": "Rated power"
+              },
+              {
+                "row": 1,
+                "column": 1,
+                "rowspan": 1,
+                "colspan": 1,
+                "text": "323 W"
+              }
+            ]
+          }
+        ],
+        "uncertainties": []
+      }
+    },
+    {
+      "id": "power-4",
+      "split": "heldout",
+      "image": "power-4.png",
+      "gold": {
+        "kind": "table",
+        "title": "",
+        "transcription": "Parameter Value Rated power 23 mW",
+        "description": "",
+        "body_text": "",
+        "graphs": [],
+        "tables": [
+          {
+            "title": "",
+            "rows": 2,
+            "columns": 2,
+            "header_rows": 1,
+            "notes": [],
+            "cells": [
+              {
+                "row": 0,
+                "column": 0,
+                "rowspan": 1,
+                "colspan": 1,
+                "text": "Parameter"
+              },
+              {
+                "row": 0,
+                "column": 1,
+                "rowspan": 1,
+                "colspan": 1,
+                "text": "Value"
+              },
+              {
+                "row": 1,
+                "column": 0,
+                "rowspan": 1,
+                "colspan": 1,
+                "text": "Rated power"
+              },
+              {
+                "row": 1,
+                "column": 1,
+                "rowspan": 1,
+                "colspan": 1,
+                "text": "23 mW"
+              }
+            ]
+          }
+        ],
+        "uncertainties": []
+      }
+    },
+    {
+      "id": "one-way",
+      "split": "heldout",
+      "image": "one-way.png",
+      "gold": {
+        "kind": "diagram",
+        "title": "",
+        "transcription": "Gateway Service API",
+        "description": "",
+        "body_text": "",
+        "tables": [],
+        "uncertainties": [],
+        "graphs": [
+          {
+            "direction": "LR",
+            "groups": [],
+            "nodes": [
+              {
+                "id": "a",
+                "label": "Gateway",
+                "group": null,
+                "shape": "rectangle"
+              },
+              {
+                "id": "b",
+                "label": "Service",
+                "group": null,
+                "shape": "rectangle"
+              }
+            ],
+            "edges": [
+              {
+                "source": "a",
+                "target": "b",
+                "label": "API",
+                "direction": "forward",
+                "style": "solid"
+              }
+            ],
+            "uncertainties": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "two-way",
+      "split": "heldout",
+      "image": "two-way.png",
+      "gold": {
+        "kind": "diagram",
+        "title": "",
+        "transcription": "Gateway Service API",
+        "description": "",
+        "body_text": "",
+        "tables": [],
+        "uncertainties": [],
+        "graphs": [
+          {
+            "direction": "LR",
+            "groups": [],
+            "nodes": [
+              {
+                "id": "a",
+                "label": "Gateway",
+                "group": null,
+                "shape": "rectangle"
+              },
+              {
+                "id": "b",
+                "label": "Service",
+                "group": null,
+                "shape": "rectangle"
+              }
+            ],
+            "edges": [
+              {
+                "source": "a",
+                "target": "b",
+                "label": "API",
+                "direction": "both",
+                "style": "dashed"
+              }
+            ],
+            "uncertainties": []
+          }
+        ]
+      }
+    }
+  ]
+}

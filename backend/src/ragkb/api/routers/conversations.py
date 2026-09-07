@@ -14,6 +14,7 @@ from starlette.concurrency import run_in_threadpool
 
 from ragkb.api.pagination import read_cursor, write_cursor
 from ragkb.api.support import principal, require_local_tenant, require_role
+from ragkb.application.reading_scope import ReadingOptions
 from ragkb.domain.auth import RequestPrincipal
 from ragkb.domain.uploads import ResourceNotFoundError
 from ragkb.infrastructure.conversation_service import ConversationService
@@ -32,6 +33,7 @@ class UpdateConversation(BaseModel):
 
 
 class SendTurn(BaseModel):
+    reading: ReadingOptions = Field(default_factory=ReadingOptions)
     question: str = Field(min_length=1, max_length=4000, pattern=r".*\S.*")
     client_request_id: str = Field(min_length=1, max_length=191)
 
@@ -134,7 +136,11 @@ def build_conversations_router(
         conversation = owned(identity, subject)
         try:
             turn = repository.submit(
-                identity, subject, body.question.strip(), body.client_request_id
+                identity,
+                subject,
+                body.question.strip(),
+                body.client_request_id,
+                body.reading.model_dump(mode="json", exclude_defaults=True),
             )
         except ConversationBusy as error:
             raise HTTPException(409, str(error)) from error
@@ -145,7 +151,10 @@ def build_conversations_router(
             ticks = 0
             while True:
                 current = await run_in_threadpool(repository.turn, turn["id"])
-                if previous != current["state"]:
+                if previous != current["state"] or ticks % 6 == 0:
+                    progress_item = await run_in_threadpool(
+                        service.present, current, conversation, subject
+                    )
                     yield (
                         "event: turn\ndata: "
                         + json.dumps(
@@ -155,6 +164,7 @@ def build_conversations_router(
                                 "state": current["state"],
                                 "original_question": current["original_question"],
                                 "sequence_number": current["sequence_number"],
+                                "reading_progress": progress_item.get("reading_progress", {}),
                             },
                             ensure_ascii=False,
                         )

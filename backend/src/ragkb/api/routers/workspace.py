@@ -51,6 +51,9 @@ def workspace_queries(runtime: RuntimeComponents) -> WorkspaceQueries:
 
 def build_workspace_router(runtime: RuntimeComponents) -> APIRouter:
     router = APIRouter(tags=["workspace"])
+    from ragkb.api.routers.visuals import build_visual_router
+
+    router.include_router(build_visual_router(runtime))
     queries = workspace_queries(runtime)
     db = queries.db
 

@@ -188,6 +188,19 @@ describe('upload persistence and isolation', () => {
   });
 });
 describe('conversation result gating', () => {
+  it('explains unrelated images even when abstention itself passed verification', async () => {
+    routes.set('/api/conversations/c', () => json({ conversation: { id: 'c', space_id: 'a', title: '产品 B' }, turns: [{ id: 't', sequence_number: 1, original_question: '产品 B 功率', state: 'completed', result: { status: 'insufficient_evidence', verified: true, answer: null, citations: [], warnings: ['VISUAL_EVIDENCE_EXCLUDED:not_relevant'] } }], next_before: null }));
+    await app('/chat/c'); await flushPromises();
+    expect(wrapper.get('.answer-notice').text()).toContain('找到的图片未提供问题所需的信息');
+    expect(wrapper.find('.verified-label').exists()).toBe(false);
+  });
+  it('explains rejected image evidence without displaying the rejected answer', async () => {
+    routes.set('/api/conversations/c', () => json({ conversation: { id: 'c', space_id: 'a', title: '图片参数' }, turns: [{ id: 't', conversation_id: 'c', sequence_number: 1, original_question: '功率多少', state: 'completed', result: { status: 'INSUFFICIENT_EVIDENCE', verified: false, answer: '错误的旧文字 999 W', citations: [], warnings: ['VISUAL_EVIDENCE_EXCLUDED:conflict'] } }], next_before: null }));
+    await app('/chat/c'); await flushPromises();
+    expect(wrapper.get('.answer-notice').text()).toContain('图片与旧识别文字存在冲突');
+    expect(wrapper.text()).not.toContain('999 W');
+    expect(wrapper.find('.citation-button').exists()).toBe(false);
+  });
   it('renders a verified summary and table with working inline source links', async () => {
     const citation = { evidence_id: 'E2', source_url: '/api/test-source', filename: '设备参数.csv', version_no: 2, version_id: 'v2', document_id: 'doc', chunk_id: 'chunk', locator: { row: 2 } };
     routes.set('/api/conversations/c', () => json({ conversation: { id: 'c', space_id: 'a', title: '设备功率' }, turns: [{ id: 't', conversation_id: 'c', sequence_number: 1, original_question: '总结功率', state: 'completed', result: { verified: true, answer: '功率随环境变化。[E2]\n\n| 环境 | 功率 |\n| --- | --- |\n| 常温 | **420 W** [E2] |\n| 低温 | 390 W [E2] |', citations: [citation] } }], next_before: null }));

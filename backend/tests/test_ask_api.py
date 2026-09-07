@@ -75,6 +75,7 @@ def test_ask_source_preview_and_feedback_contract(tmp_path: Path) -> None:
         "evidence_id": "E1",
         "text": "设备保修期为三年。",
         "locator": {"page": 2},
+        "visuals": [],
     }
     assert "hidden-document" not in source.text
     feedback = client.post(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from fastapi import APIRouter, Header, Query, Request, Response, status
+from fastapi import APIRouter, Header, HTTPException, Query, Request, Response, status
 
 from ragkb.api.models import (
     DocumentChunkResponse,
@@ -417,6 +417,10 @@ def apply_document_review(
         require_document_manager(runtime, principal, str(version["document_id"]))
         ensure_document_previewable(runtime, str(version["document_id"]), principal)
         quality = runtime.repository.get_quality_report(version_id)
+        if body.decision == "APPROVED" and any(
+            str(issue).startswith("VISUAL_") for issue in quality["issue_codes"]
+        ):
+            raise HTTPException(409, "VISUAL_REVIEW_REQUIRED")
         now = int(time.time())
         security = None
         security_body = body.security_projection

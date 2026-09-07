@@ -30,6 +30,12 @@ class LocalOriginalCleanupExecutor:
             postcondition = all(
                 not self.storage.exists(partition, key) for partition, key in lineage
             )
+            if postcondition:
+                from ragkb.infrastructure.visual_assets import VisualAssetStore
+
+                VisualAssetStore(self.storage).ledger.purge_artifacts(
+                    [key for partition, key in lineage if partition == "artifacts"]
+                )
         except OSError:
             return CleanupExecutionResult(False, False, "LOCAL_FILE_DELETE_FAILED")
         return CleanupExecutionResult(

@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Iterator
+from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response
 from fastapi.responses import StreamingResponse
 
 from ragkb.api.models import (
@@ -37,6 +38,7 @@ from ragkb.api.support import (
     require_role as _require_role,
 )
 from ragkb.application.deadlines import request_deadline
+from ragkb.application.reading_scope import reading_scope
 from ragkb.domain.retrieval import SearchContext
 from ragkb.domain.uploads import (
     ResourceNotFoundError,
@@ -135,21 +137,26 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=AskResponse,
         tags=["trusted-qa"],
     )
-    @request_deadline()
     def ask(request: Request, body: AskRequest) -> AskResponse:
         principal = _principal(request)
         _require_role(principal, "reader", "knowledge_maintainer", "admin")
         _require_local_tenant(runtime, principal)
         space_id = selected_space(principal.tenant_id, body.space_id)
         runtime.lifecycle_store.reload()
-        result = runtime.qa_service.ask(
-            body.question,
-            principal.tenant_id,
-            principal.user_id,
-            subject_scope_tokens=principal.scope_tokens,
-            clearance_level=principal.clearance_level,
-            space_id=space_id,
-        )
+        with (
+            reading_scope(body.reading),
+            request_deadline(
+                runtime.settings.overview_timeout_seconds if body.reading.mode != "fact" else 120
+            ),
+        ):
+            result = runtime.qa_service.ask(
+                body.question,
+                principal.tenant_id,
+                principal.user_id,
+                subject_scope_tokens=principal.scope_tokens,
+                clearance_level=principal.clearance_level,
+                space_id=space_id,
+            )
         return _ask_response(result)
 
     @router.post(
@@ -167,7 +174,14 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
         def stream() -> Iterator[str]:
             for stage in ("retrieval_started", "evidence_validation_started"):
                 yield f"event: progress\ndata: {json.dumps({'stage': stage})}\n\n"
-            with request_deadline():
+            with (
+                reading_scope(body.reading),
+                request_deadline(
+                    runtime.settings.overview_timeout_seconds
+                    if body.reading.mode != "fact"
+                    else 120
+                ),
+            ):
                 result = runtime.qa_service.ask(
                     body.question,
                     principal.tenant_id,
@@ -226,6 +240,75 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
             evidence_id=evidence.evidence_id,
             text=evidence.display_text or evidence.text,
             locator=evidence.locator,
+            visuals=source_visuals(evidence, run_token, evidence_token, run_id),
+        )
+
+    def source_visuals(
+        evidence: Any, run_token: str, evidence_token: str, run_id: str
+    ) -> list[dict[str, Any]]:
+        from ragkb.infrastructure.visual_assets import VisualAssetStore
+
+        store = VisualAssetStore(runtime.storage)
+        visuals = []
+        for identity in evidence.locator.get("visual_asset_ids", []):
+            try:
+                asset = store.get(evidence.document_version_id, identity)
+                if asset.get("status") != "verified":
+                    raise ResourceNotFoundError(identity)
+                public = store.public(asset, evidence.document_version_id)
+                public["image_url"] = (
+                    f"/api/rag-runs/{run_token}/evidence/{evidence_token}/visuals/{identity}/image"
+                )
+                result = runtime.rag_repository.get_result(run_id)
+                if result and result.answer:
+                    from ragkb.document_processing.local_visual_check import (
+                        compact,
+                        mentions_region,
+                    )
+
+                    paragraphs = "\n".join(
+                        p for p in result.answer.split("\n\n") if f"[{evidence.evidence_id}]" in p
+                    )
+                    regions = asset.get("regions", [])
+                    public["focus_region_ids"] = [
+                        r["id"]
+                        for r in regions
+                        if len(compact(r["text"])) > 1
+                        and r.get("score", 0) >= 0.9
+                        and mentions_region(paragraphs, r["text"])
+                        and sum(compact(other["text"]) == compact(r["text"]) for other in regions)
+                        == 1
+                    ][:24]
+                visuals.append(public)
+            except (FileNotFoundError, ValueError) as error:
+                raise ResourceNotFoundError(identity) from error
+        return visuals
+
+    @router.get("/api/rag-runs/{run_token}/evidence/{evidence_token}/visuals/{asset_id}/image")
+    def cited_image(
+        run_token: str,
+        evidence_token: str,
+        asset_id: str,
+        request: Request,
+        normalized: bool = False,
+    ) -> Response:
+        from ragkb.api.routers.visuals import image_response
+        from ragkb.infrastructure.visual_assets import VisualAssetStore
+
+        source = evidence_source(run_token, evidence_token, request)
+        if asset_id not in source.locator.get("visual_asset_ids", []):
+            raise ResourceNotFoundError(asset_id)
+        subject = _principal(request)
+        run_id, identity = runtime.reference_signer.resolve(
+            run_token, evidence_token, subject.tenant_id, subject.user_id
+        )
+        evidence = runtime.rag_repository.get_evidence(run_id, identity)
+        assert evidence is not None
+        return image_response(
+            VisualAssetStore(runtime.storage),
+            evidence.document_version_id,
+            asset_id,
+            normalized=normalized,
         )
 
     @router.post(

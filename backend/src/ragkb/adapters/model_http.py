@@ -8,7 +8,9 @@ import secrets
 import threading
 import time
 from collections.abc import Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 import httpx
@@ -80,9 +82,103 @@ class HttpxJsonTransport:
         self._consecutive_failures = 0
         self._circuit_opened_at = 0.0
         self.metrics = TransportMetrics()
+        from ragkb.infrastructure.model_account import AccountLimiter
+        from ragkb.infrastructure.visual_ledger import VisualLedger
+
+        self._account = (
+            AccountLimiter(self._settings) if self._settings.model_account_limit_enabled else None
+        )
+        self._usage = (
+            VisualLedger(
+                Path(self._settings.local_storage_root).resolve()
+                / "artifacts"
+                / "visual-ledger.sqlite"
+            )
+            if self._settings.model_usage_enabled
+            else None
+        )
+
+    def _account_post(
+        self, url: str, *, headers: dict[str, str], json: dict[str, Any], timeout: httpx.Timeout
+    ) -> httpx.Response:
+        from ragkb.application.cancellation import check_cancelled
+        from ragkb.infrastructure.model_account import operation
+
+        scope = (
+            self._account.reserve(url, headers, json, float(timeout.read or 120))
+            if self._account
+            else nullcontext(None)
+        )
+        started = time.time()
+        outcome, usage = "failed", {}
+        sent = False
+        try:
+            with scope as lease:
+                check_cancelled()
+                sent = True
+                response = self._client.post(url, headers=headers, json=json, timeout=timeout)
+                outcome = str(response.status_code)
+                try:
+                    body = response.json()
+                    if isinstance(body, dict) and isinstance(body.get("usage"), dict):
+                        usage = body["usage"]
+                except ValueError:
+                    pass
+                if self._account and lease:
+                    self._account.settle(
+                        lease, usage, response.status_code, response.headers.get("Retry-After", "")
+                    )
+                return response
+        finally:
+            if self._usage and sent:
+                version, asset, role = operation.get()
+                model = str(json.get("model", ""))
+                cost = None
+                input_price, output_price = 0.0, 0.0
+                if role in {"ocr_verify", "ocr_query_verify"}:
+                    input_price, output_price = (
+                        self._settings.ocr_verify_input_cost_per_million_cny,
+                        self._settings.ocr_verify_output_cost_per_million_cny,
+                    )
+                elif role in {"ocr", "ocr_query"}:
+                    input_price, output_price = (
+                        self._settings.ocr_input_cost_per_million_cny,
+                        self._settings.ocr_output_cost_per_million_cny,
+                    )
+                elif model == self._settings.llm_model:
+                    input_price, output_price = (
+                        self._settings.llm_input_cost_per_million_cny,
+                        self._settings.llm_output_cost_per_million_cny,
+                    )
+                elif model == self._settings.verifier_model:
+                    input_price, output_price = (
+                        self._settings.verifier_input_cost_per_million_cny,
+                        self._settings.verifier_output_cost_per_million_cny,
+                    )
+                elif model == self._settings.embedding_model:
+                    input_price = self._settings.embedding_input_cost_per_million_cny
+                elif model == self._settings.reranker_model:
+                    input_price = self._settings.reranker_input_cost_per_million_cny
+                if usage and (input_price or output_price):
+                    cost = (
+                        usage.get("prompt_tokens", 0) * input_price
+                        + usage.get("completion_tokens", 0) * output_price
+                    ) / 1_000_000
+                self._usage.usage(
+                    version,
+                    asset,
+                    role=role or "model",
+                    model=model,
+                    started=started,
+                    outcome=outcome,
+                    usage=usage,
+                    cost=cost,
+                )
 
     def close(self) -> None:
         self._client.close()
+        if self._account:
+            self._account.redis.close()
 
     def __enter__(self) -> HttpxJsonTransport:
         return self
@@ -172,7 +268,7 @@ class HttpxJsonTransport:
                     raise ProviderTimeout("MODEL_PROVIDER_DEADLINE_EXCEEDED")
                 self._metric("request_count")
                 try:
-                    response = self._client.post(
+                    response = self._account_post(
                         url,
                         headers=dict(headers),
                         json=dict(payload),
@@ -446,6 +542,8 @@ class OpenAICompatibleBufferedGenerator(_GuardedModelAdapter):
         return str(message["content"])
 
     def generate(self, question: str, evidence: tuple[Evidence, ...]) -> DraftAnswer:
+        from ragkb.application.reading_scope import is_overview
+
         self._guard()
         if not question.strip() or not evidence:
             raise ValueError("question and evidence are required")
@@ -472,7 +570,9 @@ class OpenAICompatibleBufferedGenerator(_GuardedModelAdapter):
                 "model": self._settings.llm_model,
                 "temperature": self._settings.llm_temperature,
                 "top_p": self._settings.llm_top_p,
-                "max_tokens": self._settings.llm_max_output_tokens,
+                "max_tokens": self._settings.overview_max_output_tokens
+                if is_overview(question)
+                else self._settings.llm_max_output_tokens,
                 "response_format": {"type": "json_object"},
                 "messages": [
                     {
@@ -492,6 +592,11 @@ class OpenAICompatibleBufferedGenerator(_GuardedModelAdapter):
                             "The answer is a reader-facing synthesis, NOT the claims ledger. "
                             "Read all relevant supplied evidence, reconcile conditions, merge "
                             "overlapping facts and write one coherent response to the question. "
+                            "For an explicitly requested whole-document or chapter-by-chapter "
+                            "summary, cover every supplied relevant chapter, retaining each "
+                            "component's scope. If a locator has reading_coverage_complete=false, "
+                            "do not claim to have covered the entire original document; "
+                            "describe only the available content. "
                             "Lead with a direct useful answer, then the necessary explanation. "
                             "Use natural paragraphs, pronouns and transitions; do not repeat the "
                             "full subject in every sentence. Do not dump source fields or narrate "

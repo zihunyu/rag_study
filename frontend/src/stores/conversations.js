@@ -40,14 +40,14 @@ export const useConversations = defineStore('conversations', () => {
     catch (cause) { if (own === revision) error.value = cause; }
   }
   async function create(spaceId) { const conversation = await command('/conversations', { space_id: spaceId }); await list(spaceId); return conversation; }
-  async function send(question) {
+  async function send(question, reading = {}) {
     if (!current.value || busy.value || !question.trim()) return;
     const own = revision, id = current.value.id;
     sending.value = true; error.value = null; controller = new AbortController();
     const key = `ragkb.pending-turn.${id}`;
     let pending;
     try { pending = JSON.parse(sessionStorage.getItem(key)); } catch { /* malformed local state */ }
-    if (pending?.question !== question.trim()) pending = { question: question.trim(), client_request_id: crypto.randomUUID() };
+    if (pending?.question !== question.trim() || JSON.stringify(pending?.reading || {}) !== JSON.stringify(reading)) pending = { question: question.trim(), reading, client_request_id: crypto.randomUUID() };
     sessionStorage.setItem(key, JSON.stringify(pending));
     try {
       const response = await fetch(apiUrl(`/conversations/${id}/turns:stream`), { method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' }, body: JSON.stringify(pending) });

@@ -13,10 +13,12 @@ from typing import Any
 from ragkb.adapters.conversation_context import ContextResolverPort, bounded_history
 from ragkb.application.cancellation import cancellation_scope, check_cancelled
 from ragkb.application.deadlines import request_deadline
+from ragkb.application.reading_scope import ReadingOptions, reading_scope
 from ragkb.domain.auth import RequestPrincipal
 from ragkb.domain.errors import IngestionCancelled
 from ragkb.domain.ids import new_uuid7
 from ragkb.infrastructure.conversations import ACTIVE_STATES, ConversationRepository
+from ragkb.infrastructure.visual_assets import VisualAssetStore
 from ragkb.infrastructure.workspace_queries import WorkspaceQueries
 from ragkb.runtime_components import RuntimeComponents
 
@@ -77,6 +79,10 @@ class ConversationService:
                 "updated_at",
             )
         }
+        item["reading"] = self.repository.turn(turn["id"]).get("reading", {})
+        item["reading_progress"] = VisualAssetStore(self.runtime.storage).ledger.get(
+            "reading", turn["id"]
+        )
         result = json.loads(turn["result_json"]) if turn.get("result_json") else None
         item["result"] = result
         if not result:
@@ -196,7 +202,21 @@ class ConversationService:
                 return
             heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
             heartbeat_thread.start()
-            with cancellation_scope(cancellation), request_deadline():
+            reading = ReadingOptions.model_validate(turn.get("reading") or {})
+            ledger = VisualAssetStore(self.runtime.storage).ledger
+
+            def save_reading(report: dict[str, Any]) -> None:
+                ledger.put("reading", identity, report)
+
+            with (
+                cancellation_scope(cancellation),
+                reading_scope(reading, save_reading),
+                request_deadline(
+                    self.runtime.settings.overview_timeout_seconds
+                    if reading.mode != "fact"
+                    else 120
+                ),
+            ):
                 rows = self.repository.turns(
                     conversation["id"], before=turn["sequence_number"], limit=6
                 )

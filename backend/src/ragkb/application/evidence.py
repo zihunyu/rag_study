@@ -9,9 +9,10 @@ from dataclasses import replace
 
 from ragkb.application.provider_budget import ConservativeTokenCounter
 from ragkb.application.question_assessment import ConservativeQuestionAssessor
+from ragkb.application.reading_scope import is_overview, options
 from ragkb.application.search import HybridSearchService
 from ragkb.contracts.ports import RetrievalReleasePort
-from ragkb.contracts.rag import EvidenceSelectorPort, QuestionAssessmentPort
+from ragkb.contracts.rag import EvidenceSelectorPort, OverviewReadingPort, QuestionAssessmentPort
 from ragkb.domain.errors import (
     InvalidProviderResponse,
     QuestionAssessmentFailed,
@@ -25,6 +26,7 @@ from ragkb.domain.retrieval import (
     SearchHit,
     SearchResult,
     SearchSource,
+    SecurityWatermarkNotReady,
 )
 
 
@@ -47,6 +49,8 @@ class SearchBackedEvidenceProvider:
         clock: Callable[[], float] = time.time,
         question_assessor: QuestionAssessmentPort | None = None,
         evidence_selector: EvidenceSelectorPort | None = None,
+        visual_enricher: Callable[[str, tuple[Evidence, ...]], tuple[Evidence, ...]] | None = None,
+        overview_reader: OverviewReadingPort | None = None,
     ) -> None:
         self.search_service = search_service
         self.space_id = space_id
@@ -61,6 +65,8 @@ class SearchBackedEvidenceProvider:
         self.clock = clock
         self.question_assessor = question_assessor or ConservativeQuestionAssessor()
         self.evidence_selector = evidence_selector
+        self.visual_enricher = visual_enricher
+        self.overview_reader = overview_reader
 
     def build_package(
         self,
@@ -95,6 +101,13 @@ class SearchBackedEvidenceProvider:
                 r"它|这个|那个|该产品|\b(it|its|that|this|they|their)\b", question, re.I
             )
             and self.evidence_selector is not None
+        ):
+            assessment = QuestionAssessment()
+        if (
+            self.overview_reader
+            and is_overview(question)
+            and assessment.disposition is QuestionDisposition.NEEDS_CLARIFICATION
+            and not re.search(r"它|那个|上面|\b(it|that)\b", question, re.I)
         ):
             assessment = QuestionAssessment()
         if assessment.disposition is not QuestionDisposition.ANSWERABLE:
@@ -145,6 +158,28 @@ class SearchBackedEvidenceProvider:
             active_permission_revision=permission_revision,
             required_security_watermark=required_watermark,
         )
+        if self.overview_reader and is_overview(question):
+            if self.search_service.index.observed_security_watermark(context) < required_watermark:
+                raise SecurityWatermarkNotReady("SECURITY_WATERMARK_NOT_READY")
+            contents, report = self.overview_reader.read(question, context)
+            return EvidencePackage(
+                rag_run_id=new_uuid7(),
+                tenant_id=tenant_id,
+                user_id=user_id,
+                query=question,
+                query_time_epoch=query_time,
+                index_generation_id=active_generation_id,
+                retrieval_revision=self.search_service.revision + ":chapter-reading-v1",
+                prompt_revision=self.prompt_revision + ":overview-v1",
+                model_revision=self.model_revision,
+                permission_revision=permission_revision,
+                evidence=contents,
+                verifier_revision=self.verifier_revision,
+                coverage_report=report,
+                coverage="complete" if report["complete"] else "partial",
+                retrieval_warnings=() if report["complete"] else ("DOCUMENT_COVERAGE_INCOMPLETE",),
+                retrieval_queries=(question,),
+            )
         result = self.search_service.search(
             question,
             context,
@@ -155,6 +190,8 @@ class SearchBackedEvidenceProvider:
         parent_ids: set[str] = set()
 
         def append_source(source: SearchHit | SearchSource, *, review_only: bool = False) -> None:
+            if options.get().document_ids and source.document_id not in options.get().document_ids:
+                return
             key = (source.document_id, source.document_version_id, source.chunk_id)
             if key in seen_sources:
                 return
@@ -210,7 +247,26 @@ class SearchBackedEvidenceProvider:
                     parent_ids.add(parent.chunk_id)
                     append_source(parent, review_only=True)
 
+        visual_session_factory = getattr(self.visual_enricher, "session", None)
+        visual_session = (
+            visual_session_factory(question) if callable(visual_session_factory) else None
+        )
+
+        def check_visuals() -> None:
+            nonlocal evidence
+            if self.overview_reader:
+                for related in self.overview_reader.related_sources(tuple(evidence), context):
+                    key = (related.document_id, related.document_version_id, related.chunk_id)
+                    if key not in seen_sources:
+                        seen_sources.add(key)
+                        evidence.append(replace(related, evidence_id=f"E{len(evidence) + 1}"))
+            if visual_session is not None:
+                evidence = list(visual_session(tuple(evidence)))
+            elif self.visual_enricher is not None:
+                evidence = list(self.visual_enricher(question, tuple(evidence)))
+
         collect(result)
+        check_visuals()
         queries = [question]
         coverage, clarification = "unchecked", None
         health = result.retrieval_health
@@ -238,6 +294,7 @@ class SearchBackedEvidenceProvider:
                         ):
                             health = RetrievalHealth.DEGRADED
                     if len(queries) > 1 and health is not RetrievalHealth.UNAVAILABLE:
+                        check_visuals()
                         choice = self.evidence_selector.select(question, tuple(evidence))
                 coverage, clarification = choice.coverage, choice.clarification
                 selected: set[str] = set()
@@ -269,6 +326,8 @@ class SearchBackedEvidenceProvider:
                 raise QuestionAssessmentFailed(
                     "EVIDENCE_SELECTION_PROTOCOL_INVALID", retryable=False
                 ) from error
+        if visual_session is not None:
+            warnings.extend(visual_session.warnings)
         return EvidencePackage(
             rag_run_id=new_uuid7(),
             tenant_id=tenant_id,

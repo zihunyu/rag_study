@@ -28,8 +28,12 @@ class SourceLocator:
     char_range: tuple[int, int] | None = None
     start_time: float | None = None
     end_time: float | None = None
+    part: str | None = None
+    paragraph: int | None = None
 
     def __post_init__(self) -> None:
+        if self.paragraph is not None and self.paragraph < 1:
+            raise ValueError("paragraph is one-based")
         if self.page is not None and self.page < 1:
             raise ValueError("page is one-based")
         if self.slide is not None and self.slide < 1:
@@ -51,6 +55,8 @@ class SourceLocator:
             value is not None
             for value in (
                 self.page,
+                self.part,
+                self.paragraph,
                 self.slide,
                 self.sheet,
                 self.row,
@@ -63,6 +69,8 @@ class SourceLocator:
 
     def to_dict(self) -> dict[str, object]:
         values = {
+            "part": self.part,
+            "paragraph": self.paragraph,
             "page": self.page,
             "slide": self.slide,
             "sheet": self.sheet,

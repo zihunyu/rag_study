@@ -34,6 +34,9 @@
             "title": "Question",
             "type": "string"
           },
+          "reading": {
+            "$ref": "#/components/schemas/ReadingOptions"
+          },
           "space_id": {
             "anyOf": [
               {
@@ -97,6 +100,11 @@
             "default": "unchecked",
             "title": "Coverage",
             "type": "string"
+          },
+          "coverage_report": {
+            "additionalProperties": true,
+            "title": "Coverage Report",
+            "type": "object"
           },
           "degraded": {
             "default": false,
@@ -892,6 +900,49 @@
         "title": "DocumentVersionResponse",
         "type": "object"
       },
+      "Edge": {
+        "additionalProperties": false,
+        "properties": {
+          "direction": {
+            "enum": [
+              "forward",
+              "both",
+              "none"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "style": {
+            "enum": [
+              "solid",
+              "dashed"
+            ],
+            "title": "Style",
+            "type": "string"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "target",
+          "label",
+          "direction",
+          "style"
+        ],
+        "title": "Edge",
+        "type": "object"
+      },
       "ErrorResponse": {
         "additionalProperties": false,
         "properties": {
@@ -1008,6 +1059,14 @@
           "text": {
             "title": "Text",
             "type": "string"
+          },
+          "visuals": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Visuals",
+            "type": "array"
           }
         },
         "required": [
@@ -1266,6 +1325,100 @@
           "decision"
         ],
         "title": "GovernanceSignoffRequest",
+        "type": "object"
+      },
+      "Graph": {
+        "additionalProperties": false,
+        "properties": {
+          "direction": {
+            "enum": [
+              "TB",
+              "LR",
+              "BT",
+              "RL"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/Edge"
+            },
+            "title": "Edges",
+            "type": "array"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/Group"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/Node"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "uncertainties": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Uncertainties",
+            "type": "array"
+          }
+        },
+        "required": [
+          "direction",
+          "groups",
+          "nodes",
+          "edges",
+          "uncertainties"
+        ],
+        "title": "Graph",
+        "type": "object"
+      },
+      "Group": {
+        "additionalProperties": false,
+        "properties": {
+          "direction": {
+            "enum": [
+              "TB",
+              "LR",
+              "BT",
+              "RL"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "parent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "parent",
+          "direction"
+        ],
+        "title": "Group",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -1658,6 +1811,49 @@
         "title": "LifecycleResponse",
         "type": "object"
       },
+      "Node": {
+        "additionalProperties": false,
+        "properties": {
+          "group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "shape": {
+            "enum": [
+              "rectangle",
+              "rounded",
+              "diamond",
+              "database",
+              "circle"
+            ],
+            "title": "Shape",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "group",
+          "shape"
+        ],
+        "title": "Node",
+        "type": "object"
+      },
       "ObservationCreateRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1899,6 +2095,33 @@
           "real_acceptance"
         ],
         "title": "ReadinessResponse",
+        "type": "object"
+      },
+      "ReadingOptions": {
+        "additionalProperties": false,
+        "properties": {
+          "document_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Document Ids",
+            "type": "array"
+          },
+          "mode": {
+            "default": "auto",
+            "enum": [
+              "auto",
+              "fact",
+              "overview",
+              "compare"
+            ],
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "title": "ReadingOptions",
         "type": "object"
       },
       "RetrievalHealth": {
@@ -2253,6 +2476,9 @@
             "pattern": ".*\\S.*",
             "title": "Question",
             "type": "string"
+          },
+          "reading": {
+            "$ref": "#/components/schemas/ReadingOptions"
           }
         },
         "required": [
@@ -2678,6 +2904,244 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "VisualCell": {
+        "additionalProperties": false,
+        "properties": {
+          "colspan": {
+            "maximum": 1000.0,
+            "minimum": 1.0,
+            "title": "Colspan",
+            "type": "integer"
+          },
+          "column": {
+            "maximum": 1000.0,
+            "minimum": 0.0,
+            "title": "Column",
+            "type": "integer"
+          },
+          "row": {
+            "maximum": 1000.0,
+            "minimum": 0.0,
+            "title": "Row",
+            "type": "integer"
+          },
+          "rowspan": {
+            "maximum": 1000.0,
+            "minimum": 1.0,
+            "title": "Rowspan",
+            "type": "integer"
+          },
+          "text": {
+            "maxLength": 10000,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "row",
+          "column",
+          "rowspan",
+          "colspan",
+          "text"
+        ],
+        "title": "VisualCell",
+        "type": "object"
+      },
+      "VisualEdit": {
+        "properties": {
+          "asset_id": {
+            "pattern": "^[a-f0-9]{32}$",
+            "title": "Asset Id",
+            "type": "string"
+          },
+          "extraction": {
+            "$ref": "#/components/schemas/VisualExtraction"
+          }
+        },
+        "required": [
+          "asset_id",
+          "extraction"
+        ],
+        "title": "VisualEdit",
+        "type": "object"
+      },
+      "VisualExtraction": {
+        "additionalProperties": false,
+        "properties": {
+          "body_text": {
+            "default": "",
+            "maxLength": 80000,
+            "title": "Body Text",
+            "type": "string"
+          },
+          "description": {
+            "maxLength": 16000,
+            "title": "Description",
+            "type": "string"
+          },
+          "graphs": {
+            "items": {
+              "$ref": "#/components/schemas/Graph"
+            },
+            "maxItems": 12,
+            "title": "Graphs",
+            "type": "array"
+          },
+          "kind": {
+            "enum": [
+              "diagram",
+              "table",
+              "photo",
+              "chart",
+              "text",
+              "mixed",
+              "unknown"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "tables": {
+            "items": {
+              "$ref": "#/components/schemas/VisualTable"
+            },
+            "maxItems": 12,
+            "title": "Tables",
+            "type": "array"
+          },
+          "title": {
+            "maxLength": 1000,
+            "title": "Title",
+            "type": "string"
+          },
+          "transcription": {
+            "maxLength": 80000,
+            "title": "Transcription",
+            "type": "string"
+          },
+          "uncertainties": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "title": "Uncertainties",
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "title",
+          "transcription",
+          "description",
+          "graphs",
+          "tables",
+          "uncertainties"
+        ],
+        "title": "VisualExtraction",
+        "type": "object"
+      },
+      "VisualRevisionRequest": {
+        "properties": {
+          "confirm_independent_sections": {
+            "default": false,
+            "title": "Confirm Independent Sections",
+            "type": "boolean"
+          },
+          "confirmed_against_original": {
+            "default": false,
+            "title": "Confirmed Against Original",
+            "type": "boolean"
+          },
+          "edits": {
+            "items": {
+              "$ref": "#/components/schemas/VisualEdit"
+            },
+            "maxItems": 100,
+            "title": "Edits",
+            "type": "array"
+          },
+          "exclude_assets": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "title": "Exclude Assets",
+            "type": "array"
+          },
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "title": "Reason",
+            "type": "string"
+          },
+          "retry_assets": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "title": "Retry Assets",
+            "type": "array"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "VisualRevisionRequest",
+        "type": "object"
+      },
+      "VisualTable": {
+        "additionalProperties": false,
+        "properties": {
+          "cells": {
+            "items": {
+              "$ref": "#/components/schemas/VisualCell"
+            },
+            "maxItems": 10000,
+            "title": "Cells",
+            "type": "array"
+          },
+          "columns": {
+            "maximum": 1000.0,
+            "minimum": 1.0,
+            "title": "Columns",
+            "type": "integer"
+          },
+          "header_rows": {
+            "default": 0,
+            "maximum": 1000.0,
+            "minimum": 0.0,
+            "title": "Header Rows",
+            "type": "integer"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "title": "Notes",
+            "type": "array"
+          },
+          "rows": {
+            "maximum": 1000.0,
+            "minimum": 1.0,
+            "title": "Rows",
+            "type": "integer"
+          },
+          "title": {
+            "maxLength": 1000,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "rows",
+          "columns",
+          "cells"
+        ],
+        "title": "VisualTable",
         "type": "object"
       }
     },
@@ -3765,6 +4229,292 @@
         ]
       }
     },
+    "/api/document-versions/{version_id}/visual-diff": {
+      "get": {
+        "operationId": "diff_api_document_versions__version_id__visual_diff_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "title": "Version Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "base_version_id",
+            "required": true,
+            "schema": {
+              "title": "Base Version Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Diff Api Document Versions  Version Id  Visual Diff Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Diff",
+        "tags": [
+          "workspace",
+          "visual-evidence",
+          "visual-revisions"
+        ]
+      }
+    },
+    "/api/document-versions/{version_id}/visual-exclusion-preview": {
+      "get": {
+        "operationId": "preview_api_document_versions__version_id__visual_exclusion_preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "title": "Version Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "title": "Asset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Preview Api Document Versions  Version Id  Visual Exclusion Preview Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Preview",
+        "tags": [
+          "workspace",
+          "visual-evidence",
+          "visual-revisions"
+        ]
+      }
+    },
+    "/api/document-versions/{version_id}/visual-usage": {
+      "get": {
+        "operationId": "usage_api_document_versions__version_id__visual_usage_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "title": "Version Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Usage Api Document Versions  Version Id  Visual Usage Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Usage",
+        "tags": [
+          "workspace",
+          "visual-evidence",
+          "visual-revisions"
+        ]
+      }
+    },
+    "/api/document-versions/{version_id}/visuals": {
+      "get": {
+        "operationId": "list_visuals_api_document_versions__version_id__visuals_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "title": "Version Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Visuals Api Document Versions  Version Id  Visuals Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "List Visuals",
+        "tags": [
+          "workspace",
+          "visual-evidence"
+        ]
+      }
+    },
+    "/api/document-versions/{version_id}/visuals/{asset_id}/image": {
+      "get": {
+        "operationId": "original_image_api_document_versions__version_id__visuals__asset_id__image_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "title": "Version Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "title": "Asset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "normalized",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Normalized",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Original Image",
+        "tags": [
+          "workspace",
+          "visual-evidence"
+        ]
+      }
+    },
     "/api/document-versions/{version_id}:publish": {
       "post": {
         "operationId": "publish_version_api_document_versions__version_id__publish_post",
@@ -3819,6 +4569,76 @@
         "summary": "Publish Version",
         "tags": [
           "lifecycle"
+        ]
+      }
+    },
+    "/api/document-versions/{version_id}:reparse-visuals": {
+      "post": {
+        "operationId": "reparse_api_document_versions__version_id__reparse_visuals_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "title": "Version Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "title": "If-Match",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 160,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Reparse Api Document Versions  Version Id  Reparse Visuals Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Reparse",
+        "tags": [
+          "workspace",
+          "visual-evidence"
         ]
       }
     },
@@ -3889,6 +4709,87 @@
         "summary": "Review Publish",
         "tags": [
           "workspace"
+        ]
+      }
+    },
+    "/api/document-versions/{version_id}:revise-visuals": {
+      "post": {
+        "operationId": "revise_api_document_versions__version_id__revise_visuals_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "title": "Version Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "title": "If-Match",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 160,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VisualRevisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Revise Api Document Versions  Version Id  Revise Visuals Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Revise",
+        "tags": [
+          "workspace",
+          "visual-evidence",
+          "visual-revisions"
         ]
       }
     },
@@ -6209,6 +7110,76 @@
         "tags": [
           "trusted-qa"
         ]
+      }
+    },
+    "/api/rag-runs/{run_token}/evidence/{evidence_token}/visuals/{asset_id}/image": {
+      "get": {
+        "operationId": "cited_image_api_rag_runs__run_token__evidence__evidence_token__visuals__asset_id__image_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_token",
+            "required": true,
+            "schema": {
+              "title": "Run Token",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "evidence_token",
+            "required": true,
+            "schema": {
+              "title": "Evidence Token",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "title": "Asset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "normalized",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Normalized",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Cited Image"
       }
     },
     "/api/resources/document/{document_id}/permissions": {

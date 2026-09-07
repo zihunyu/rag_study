@@ -7,7 +7,7 @@ import hashlib
 import json
 import re
 import time
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, Callable
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -60,6 +60,7 @@ class UploadService:
         self.validator = validator
         self.malware_scanner = malware_scanner
         self.tenant_id = tenant_id
+        self.before_enqueue: Callable[[str, str], None] | None = None
         self.queue_max_attempts = queue_max_attempts
         self.quarantine_max_bytes = quarantine_max_bytes or validator.max_size_bytes * 10
         self._stream_slots = asyncio.Semaphore(max_concurrent_streams)
@@ -366,6 +367,8 @@ class UploadService:
                 original_key=original_key,
             )
         document_id, version_id = self.repository.ensure_document_version(session)
+        if self.before_enqueue:
+            self.before_enqueue(session.id, version_id)
         session = self.repository.get_session(session.id)
         queue_hash = self.request_hash(
             {

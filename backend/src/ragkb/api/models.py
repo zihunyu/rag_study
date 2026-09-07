@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ragkb.application.reading_scope import ReadingOptions
 from ragkb.domain.retrieval import RetrievalHealth
 
 
@@ -235,6 +236,7 @@ class SearchResponse(StrictModel):
 class AskRequest(StrictModel):
     question: str = Field(min_length=1, max_length=4000)
     space_id: str | None = Field(default=None, min_length=1, max_length=255)
+    reading: ReadingOptions = Field(default_factory=ReadingOptions)
 
 
 class CitationResponse(StrictModel):
@@ -257,12 +259,14 @@ class AskResponse(StrictModel):
     clarification_fields: list[str] = Field(default_factory=list)
     clarification_question: str | None = None
     coverage: str = "unchecked"
+    coverage_report: dict[str, Any] = Field(default_factory=dict)
 
 
 class EvidenceSourceResponse(StrictModel):
     evidence_id: str
     text: str
     locator: dict[str, Any]
+    visuals: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class FeedbackRequest(StrictModel):

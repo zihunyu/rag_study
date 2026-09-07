@@ -37,6 +37,16 @@ class MinerUProductionParser:
         self.source_format = source_format
         self.is_ocr = is_ocr
 
+    def visual_sources(self, document: CanonicalDocument, max_bytes: int) -> list[Any]:
+        from ragkb.document_processing.visual_sources import mineru_images
+
+        ids = {n.metadata["artifact_id"] for n in document.nodes if "artifact_id" in n.metadata}
+        return [
+            image
+            for identity in ids
+            for image in mineru_images(self.result_store.read_mineru_zip(identity), max_bytes)
+        ]
+
     def parse(self, source: Path, document_version_id: str) -> CanonicalDocument:
         check_cancelled()
         source_hash = checksum(source)
@@ -59,6 +69,8 @@ class MinerUProductionParser:
             check_cancelled()
             text = str(raw.get("display_text", "")).strip()
             locator = raw.get("locator")
+            if not text and str(raw.get("type", "")).casefold() in {"image", "chart"}:
+                text = "图片内容待核对。"
             if not text or not isinstance(locator, dict):
                 continue
             page = locator.get("page")

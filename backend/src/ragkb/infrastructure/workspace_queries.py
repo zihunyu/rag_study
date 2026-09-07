@@ -149,19 +149,19 @@ class WorkspaceQueries:
         availability = row["availability"]
         actions = ["view", "download", "upload_version", "delete"]
         if row["processing_state"] == "VALIDATED" and (
-            availability in ('pending_review', 'withdrawn', 'inconsistent')
+            availability in ("pending_review", "withdrawn", "inconsistent")
             or (availability == "available" and row["version_id"] != row["current_version_id"])
         ):
             actions.append("review_publish")
         if availability == "available":
             actions.extend(["ask", "revoke"])
-        if row["job_id"] and row['processing_state'] in ('FAILED', 'CANCELLED'):
+        if row["job_id"] and row["processing_state"] in ("FAILED", "CANCELLED"):
             actions.append("retry")
-        if row['processing_state'] in ('DRAFT', 'PROCESSING') and row["job_id"]:
+        if row["processing_state"] in ("DRAFT", "PROCESSING") and row["job_id"]:
             actions.append("cancel")
         reasons = [REASONS[availability]] if availability in REASONS else []
-        if availability == 'available' and row['current_version_id'] != row['version_id']:
-            reasons.append('当前发布版本可用于问答；最新上传版本尚未发布。')
+        if availability == "available" and row["current_version_id"] != row["version_id"]:
+            reasons.append("当前发布版本可用于问答；最新上传版本尚未发布。")
         return {
             **row,
             "is_answerable": availability == "available",

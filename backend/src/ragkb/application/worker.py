@@ -347,8 +347,20 @@ class LocalIngestionWorker:
                     dependency_failure=False,
                 )
         finally:
-            guard.stop()
-            scope.close()
+            try:
+                artifacts = getattr(self.parser_router, "artifact_keys", None)
+                if initialized and callable(artifacts):
+                    for key in artifacts(version_id):
+                        self.repository.record_local_content(
+                            str(job.payload["document_id"]),
+                            version_id,
+                            "artifacts",
+                            key,
+                            "visual_asset",
+                        )
+            finally:
+                guard.stop()
+                scope.close()
         return True
 
     def _chunk(self, document: Any, *, tenant_id: str) -> Any:

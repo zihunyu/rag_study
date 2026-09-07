@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import csv
-import re
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -16,29 +15,39 @@ from pptx import Presentation
 from pptx.enum.shapes import PP_PLACEHOLDER
 
 from ragkb.contracts.ports import ParsingDeferred
+from ragkb.document_processing.docx_positions import paragraph_positions
 from ragkb.document_processing.parser_common import canonical_document, text_nodes
 from ragkb.domain.documents import CanonicalDocument, CanonicalNode, NodeType, SourceLocator
 from ragkb.domain.ids import new_uuid7
 
 
 class DOCXParser:
-    revision = "python-docx"
+    revision = "python-docx:positions-v2"
 
     def parse(self, source: Path, document_version_id: str) -> CanonicalDocument:
         document = DocxDocument(str(source))
         paragraphs = {paragraph._p: paragraph for paragraph in document.paragraphs}
         tables = {table._tbl: table for table in document.tables}
+        positions = {p.element: p for p in paragraph_positions(document)}
         texts: list[str] = []
+        paragraph_numbers: list[int | None] = []
         node_types: list[NodeType] = []
         metadata: list[dict[str, Any]] = []
         for child in document.element.body.iterchildren():
             paragraph = paragraphs.get(child)
             if paragraph is not None:
+                position = positions[child]
+                paragraph_numbers.append(position.number)
                 texts.append(paragraph.text)
-                style_name = str(getattr(paragraph.style, "name", ""))
-                heading = re.match(r"(?i)^heading\s+([1-6])$", style_name)
-                node_types.append(NodeType.HEADING if heading else NodeType.PARAGRAPH)
-                metadata.append({"heading_level": int(heading.group(1))} if heading else {})
+                heading = position.heading_level
+                node_types.append(NodeType.HEADING if heading is not None else NodeType.PARAGRAPH)
+                metadata.append(
+                    {
+                        **({"heading_level": heading} if heading is not None else {}),
+                        "section_path": position.section_path,
+                        "source_order": [position.number, 0],
+                    }
+                )
                 continue
             table = tables.get(child)
             if table is not None:
@@ -46,13 +55,22 @@ class DOCXParser:
                 texts.extend(rows)
                 node_types.extend(NodeType.TABLE for _ in rows)
                 header = rows[0] if rows else ""
-                metadata.extend(
-                    {"table_row": index + 1, "table_header": header} for index in range(len(rows))
-                )
+                for index, row in enumerate(table.rows):
+                    paragraphs_in_row = row._tr.xpath(".//w:p")
+                    row_position = positions[paragraphs_in_row[0]] if paragraphs_in_row else None
+                    paragraph_numbers.append(row_position.number if row_position else None)
+                    metadata.append(
+                        {
+                            "table_row": index + 1,
+                            "table_header": header,
+                            "section_path": row_position.section_path if row_position else "root",
+                            "source_order": [row_position.number, 0] if row_position else [],
+                        }
+                    )
         nodes = text_nodes(
             texts,
-            locator_factory=lambda _index, offset, length: SourceLocator(
-                char_range=(offset, offset + length)
+            locator_factory=lambda index, offset, length: SourceLocator(
+                char_range=(offset, offset + length), paragraph=paragraph_numbers[index]
             ),
             node_types=node_types,
             metadata=metadata,
@@ -85,6 +103,8 @@ class PPTXParser:
         presentation = Presentation(str(source))
         nodes: list[CanonicalNode] = []
         for slide_number, slide in enumerate(presentation.slides, start=1):
+            title = slide.shapes.title.text.strip() if slide.shapes.title else ""
+            section = f"第 {slide_number} 张幻灯片" + (f" / {title}" if title else "")
             column_width = max(1, presentation.slide_width // 4)
             shapes = sorted(
                 slide.shapes,
@@ -113,13 +133,16 @@ class PPTXParser:
                         original_text=text,
                         display_text=text,
                         locator=SourceLocator(slide=slide_number),
-                        metadata=(
-                            {"heading_level": 1}
-                            if node_type is NodeType.HEADING
-                            else {"table_header": text.splitlines()[0]}
-                            if node_type is NodeType.TABLE
-                            else {}
-                        ),
+                        metadata={
+                            "section_path": section,
+                            **(
+                                {"heading_level": 1}
+                                if node_type is NodeType.HEADING
+                                else {"table_header": text.splitlines()[0]}
+                                if node_type is NodeType.TABLE
+                                else {}
+                            ),
+                        },
                     )
                 )
         if not nodes:
@@ -155,6 +178,7 @@ class SpreadsheetParser:
                 row=row_number,
             ),
             metadata={
+                "section_path": sheet,
                 "row": row_number,
                 "source_row_index": row_number,
                 "column_count": len(rendered),

@@ -55,6 +55,13 @@ WORKSPACE_INDEXES = {
     "idx_conversation_recovery": "conversation_turns(state, lease_expires_at)",
 }
 
+# New relation avoids altering or reassigning any historical turn.
+WORKSPACE_TABLES["conversation_turn_options"] = """
+    turn_id VARCHAR(191) PRIMARY KEY,
+    payload_json TEXT NOT NULL,
+    FOREIGN KEY (turn_id) REFERENCES conversation_turns(id)
+"""
+
 
 def mysql_workspace_migrations() -> tuple[tuple[str, str], ...]:
     tables = tuple(

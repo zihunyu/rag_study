@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -112,6 +112,7 @@ class EvidencePackage:
     coverage: str = "unchecked"
     retrieval_queries: tuple[str, ...] = ()
     clarification_question: str | None = None
+    coverage_report: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         expected = [f"E{index}" for index in range(1, len(self.evidence) + 1)]
@@ -203,6 +204,7 @@ class AskResult:
     clarification_fields: tuple[str, ...] = ()
     clarification_question: str | None = None
     coverage: str = "unchecked"
+    coverage_report: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

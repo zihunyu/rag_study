@@ -16,6 +16,31 @@ ARTIFACT_BOUND_TEST_MODULES = frozenset(
 )
 
 
+@pytest.fixture(autouse=True)
+def isolated_unit_runtime(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A developer's real .env must not turn temporary-file tests into production writes.
+
+    Explicit integration tests retain their own configuration; individual profile
+    contract tests may override these defaults with their existing monkeypatches.
+    """
+    if request.node.get_closest_marker("integration"):
+        return
+    for key, value in {
+        "APP_ENV": "testing",
+        "RAG_RUNTIME_PROFILE": "local",
+        "VECTOR_BACKEND": "local",
+        "AUTH_MODE": "local_single_user",
+        "REAL_PROVIDER_CALLS_ENABLED": "false",
+        "EXTERNAL_LIFECYCLE_MUTATIONS_ENABLED": "false",
+        "OTEL_ENABLED": "false",
+        "OCR_ENABLED": "false",
+        "OCR_VERIFY_ENABLED": "false",
+        "MODEL_ACCOUNT_LIMIT_ENABLED": "false",
+        "MODEL_USAGE_ENABLED": "false",
+    }.items():
+        monkeypatch.setenv(key, value)
+
+
 def pytest_collection_modifyitems(items: Sequence[pytest.Item]) -> None:
     marker = pytest.mark.integration
     for item in items:

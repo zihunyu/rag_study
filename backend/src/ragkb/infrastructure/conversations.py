@@ -128,7 +128,12 @@ class ConversationRepository:
             return self._owned(connection, identity, subject)
 
     def submit(
-        self, identity: str, subject: RequestPrincipal, question: str, request_id: str
+        self,
+        identity: str,
+        subject: RequestPrincipal,
+        question: str,
+        request_id: str,
+        reading: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         self.recover()
         with self.db.transaction() as connection:
@@ -139,7 +144,14 @@ class ConversationRepository:
                 (identity, request_id),
             )
             if existing:
-                if existing["original_question"] != question:
+                prior = self.db.one(
+                    connection,
+                    "SELECT payload_json FROM conversation_turn_options WHERE turn_id=?",
+                    (existing["id"],),
+                )
+                if existing["original_question"] != question or (
+                    json.loads(prior["payload_json"]) if prior else {}
+                ) != (reading or {}):
                     raise IdempotencyConflictError("CONVERSATION_REQUEST_CHANGED")
                 return existing
             if conversation["archived"]:
@@ -165,6 +177,11 @@ class ConversationRepository:
                     now + 180,
                 ),
             )
+            self.db.execute(
+                connection,
+                "INSERT INTO conversation_turn_options(turn_id,payload_json) VALUES(?,?)",
+                (turn_id, json.dumps(reading or {}, ensure_ascii=False, sort_keys=True)),
+            )
             title = (
                 question[:60]
                 if conversation["next_sequence"] == 1 and conversation["title"] == "新对话"
@@ -182,6 +199,12 @@ class ConversationRepository:
         row = self.db.one(connection, "SELECT * FROM conversation_turns WHERE id=?", (identity,))
         if not row:
             raise ResourceNotFoundError(identity)
+        reading = self.db.one(
+            connection,
+            "SELECT payload_json FROM conversation_turn_options WHERE turn_id=?",
+            (identity,),
+        )
+        row["reading"] = json.loads(reading["payload_json"]) if reading else {}
         return row
 
     def turn(self, identity: str) -> dict[str, Any]:

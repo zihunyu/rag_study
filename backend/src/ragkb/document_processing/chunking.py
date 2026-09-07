@@ -12,6 +12,7 @@ from typing import Protocol
 
 from ragkb.application.cancellation import check_cancelled
 from ragkb.contracts.ports import EmbeddingPort
+from ragkb.document_processing.visual_tables import table_windows
 from ragkb.domain.documents import CanonicalDocument, CanonicalNode, NodeType, SourceLocator
 from ragkb.domain.entities import Chunk
 
@@ -108,17 +109,7 @@ def _locator_for_slice(node: CanonicalNode, start: int, end: int) -> SourceLocat
     char_range = locator.char_range
     if char_range is not None:
         char_range = (char_range[0] + start, char_range[0] + end)
-    return SourceLocator(
-        page=locator.page,
-        slide=locator.slide,
-        sheet=locator.sheet,
-        cell_range=locator.cell_range,
-        row=locator.row,
-        bbox=locator.bbox,
-        char_range=char_range,
-        start_time=locator.start_time,
-        end_time=locator.end_time,
-    )
+    return replace(locator, char_range=char_range)
 
 
 def _windows(
@@ -203,7 +194,7 @@ class TokenAwareChunker:
         self.tokenizer = tokenizer or _DEFAULT_TOKENIZER
         self.tokenizer_id = self.tokenizer.revision
         self.revision = (
-            f"token-aware:v3:{self.config.strategy}:"
+            f"token-aware:v4:{self.config.strategy}:"
             f"{self.config.target_tokens}:{self.config.overlap_tokens}"
         )
 
@@ -226,6 +217,7 @@ class TokenAwareChunker:
             ),
             str(document.nodes[0].metadata.get("document_title", "")),
         )
+        document_title = str(document.nodes[0].metadata.get("document_title") or document_title)
         for node in document.nodes:
             check_cancelled()
             if node.node_type is NodeType.HEADING:
@@ -235,12 +227,22 @@ class TokenAwareChunker:
                 heading = " / ".join(title for _, title in headings)
                 if self.config.strategy == "structure":
                     continue
-            section_id, section_path = self._section(node, heading, document.document_version_id)
-            for piece_index, (text, start, end) in enumerate(
-                (_table_windows if node.node_type is NodeType.TABLE else _windows)(
-                    node.original_text, self.config, self.tokenizer
-                )
-            ):
+            node_heading = str(node.metadata.get("section_path", heading))
+            node_heading = "" if node_heading == "root" else node_heading
+            section_id, section_path = self._section(
+                node, node_heading, document.document_version_id
+            )
+            windows = (
+                table_windows(node, self.config, self.tokenizer)
+                if node.metadata.get("visual_table")
+                else [
+                    (text, start, end, {})
+                    for text, start, end in (
+                        _table_windows if node.node_type is NodeType.TABLE else _windows
+                    )(node.original_text, self.config, self.tokenizer)
+                ]
+            )
+            for piece_index, (text, start, end, window_metadata) in enumerate(windows):
                 chunk_id = _stable_id(
                     "chunk", document.document_version_id, node.node_id, str(piece_index), text
                 )
@@ -254,7 +256,9 @@ class TokenAwareChunker:
                         ordinal=len(children),
                         original_text=text,
                         display_text=text,
-                        retrieval_text=self._retrieval_text(node, heading, text, document_title),
+                        retrieval_text=self._retrieval_text(
+                            node, node_heading, text, document_title
+                        ),
                         locator=_locator_for_slice(node, start, end),
                         content_sha256=checksum,
                         token_count=count_tokens(text, self.tokenizer),
@@ -262,11 +266,15 @@ class TokenAwareChunker:
                         chunking_revision=self.revision,
                         tokenizer_id=self.tokenizer_id,
                         metadata={
-                            **node.metadata,
+                            **{
+                                key: value
+                                for key, value in node.metadata.items()
+                                if key != "visual_table"
+                            },
                             "chunk_index": len(children),
                             "node_id": node.node_id,
                             "section_path": section_path,
-                            "heading": heading,
+                            "heading": node_heading,
                             "document_title": document_title,
                             **(
                                 {
@@ -281,6 +289,7 @@ class TokenAwareChunker:
                                 and "source_spans" not in node.metadata
                                 else {}
                             ),
+                            **window_metadata,
                         },
                     )
                 )
@@ -319,6 +328,11 @@ class TokenAwareChunker:
                 tokenizer_id=self.tokenizer_id,
                 metadata={
                     "child_chunk_ids": [item.id for item in grouped],
+                    "visual_asset_ids": list(
+                        dict.fromkeys(
+                            identity for item in grouped for identity in visual_ids(item.metadata)
+                        )
+                    ),
                     "source_spans": [
                         {
                             "chunk_id": item.id,
@@ -369,7 +383,12 @@ class TokenAwareChunker:
         table_header = str(node.metadata.get("table_header", "")).strip()
         if node.node_type is NodeType.TABLE and not table_header and "|" in node.original_text:
             table_header = node.original_text.splitlines()[0].strip()
-        if node.node_type is NodeType.TABLE and table_header and table_header != text:
+        if (
+            node.node_type is NodeType.TABLE
+            and table_header
+            and table_header != text
+            and not node.metadata.get("visual_table")
+        ):
             context.append(f"TABLE_HEADER: {table_header}")
         context.append(text)
         return "\n".join(context)
@@ -400,7 +419,17 @@ class SemanticChunker(TokenAwareChunker):
         preload = getattr(self.boundary_score, "preload", None)
         if callable(preload):
             preload(
-                tuple(node.display_text for node in nodes if node.node_type is not NodeType.HEADING)
+                tuple(
+                    node.display_text
+                    for node in nodes
+                    if node.node_type
+                    not in {
+                        NodeType.HEADING,
+                        NodeType.TABLE,
+                        NodeType.IMAGE,
+                        NodeType.AUDIO,
+                    }
+                )
             )
 
         def compatible(left: CanonicalNode, right: CanonicalNode) -> bool:
@@ -422,8 +451,8 @@ class SemanticChunker(TokenAwareChunker):
             text = "\n".join(item.original_text for item in current)
             metadata = {
                 **(current[0].metadata if len(current) == 1 else {}),
-                "section_path": heading or "root",
-                "heading": heading,
+                "section_path": current[0].metadata.get("section_path", heading or "root"),
+                "heading": current[0].metadata.get("section_path", heading),
                 "source_node_ids": [item.node_id for item in current],
                 "source_spans": [item.locator.to_dict() for item in current],
             }
@@ -541,3 +570,8 @@ class EmbeddingSemanticBoundaryScorer:
             left_value * right_value
             for left_value, right_value in zip(left_vector, right_vector, strict=True)
         ) / (left_norm * right_norm)
+
+
+def visual_ids(metadata: dict[str, object]) -> list[str]:
+    value = metadata.get("visual_asset_ids")
+    return [str(item) for item in value] if isinstance(value, list) else []

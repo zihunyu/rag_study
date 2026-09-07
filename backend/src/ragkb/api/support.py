@@ -79,6 +79,7 @@ def ask_response(result: AskResult) -> AskResponse:
         clarification_fields=list(result.clarification_fields),
         clarification_question=result.clarification_question,
         coverage=result.coverage,
+        coverage_report=result.coverage_report,
     )
 
 

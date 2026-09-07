@@ -39,7 +39,7 @@ class DocumentQualityReport:
         uses_stub = any("stub" in issue.casefold() for issue in issues)
         disposition = (
             QualityDisposition.BLOCKED_REAL_VALIDATION
-            if uses_stub
+            if uses_stub or any(issue.startswith("VISUAL_") for issue in issues)
             else QualityDisposition.DEGRADED
             if issues
             else QualityDisposition.READY_FOR_REVIEW

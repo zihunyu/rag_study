@@ -124,8 +124,10 @@ def build_spaces_router(runtime: RuntimeComponents) -> APIRouter:
         require_space(subject.tenant_id, space_id)
         if not document_manager(subject, space_id):
             raise AuthorizationError("DOCUMENT_MANAGE_SCOPE_REQUIRED")
-        scope = (f'workspace-documents:{subject.tenant_id}:{space_id}:'
-                 f'{q}:{processing}:{availability}:{sort}')
+        scope = (
+            f"workspace-documents:{subject.tenant_id}:{space_id}:"
+            f"{q}:{processing}:{availability}:{sort}"
+        )
         page = workspace_queries(runtime).documents(
             space_id,
             q=q,

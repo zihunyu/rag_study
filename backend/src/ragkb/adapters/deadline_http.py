@@ -49,13 +49,15 @@ class DeadlineHttpClient:
             if self.closed:
                 return
             self.closed = True
-            if self.started:
-                try:
-                    asyncio.run_coroutine_threadsafe(self.client.aclose(), self.loop).result(5)
-                finally:
-                    self.loop.call_soon_threadsafe(self.loop.stop)
-                    self.thread.join(1)
-            else:
-                self.loop.run_until_complete(self.client.aclose())
+            # Shutdown may run inside the ASGI event loop, even when no request
+            # ever used this lazy client. Always close on our dedicated loop.
+            if not self.started:
+                self.thread.start()
+                self.started = True
+            try:
+                asyncio.run_coroutine_threadsafe(self.client.aclose(), self.loop).result(5)
+            finally:
+                self.loop.call_soon_threadsafe(self.loop.stop)
+                self.thread.join(1)
             if not self.loop.is_running():
                 self.loop.close()

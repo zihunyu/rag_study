@@ -233,12 +233,19 @@ def conditional_issues(result: EnvLoadResult) -> tuple[EnvIssue, ...]:
         ("reranker", settings.reranker_base_url, "RERANKER_BASE_URL", "G2"),
         ("asr", settings.asr_base_url, "ASR_BASE_URL", "G4"),
         ("llm", settings.llm_base_url, "LLM_BASE_URL", "G3"),
+        ("ocr", settings.ocr_base_url, "OCR_BASE_URL", "G4"),
+        ("ocr_verify", settings.ocr_verify_base_url, "OCR_VERIFY_BASE_URL", "G4"),
     ):
         if (
             sensitive
             and _configured(result, key)
             and not (service == "asr" and not settings.asr_enabled)
             and not (service == "llm" and settings.llm_allow_http)
+            and not (service == "ocr" and (not settings.ocr_enabled or settings.ocr_allow_http))
+            and not (
+                service == "ocr_verify"
+                and (not settings.ocr_verify_enabled or settings.ocr_verify_allow_http)
+            )
             and not _is_https_or_approved_private(settings, service, url)
         ):
             issues.append(EnvIssue(key, "SENSITIVE_TRANSPORT_ENCRYPTION_REQUIRED", gate))
@@ -255,6 +262,12 @@ def conditional_issues(result: EnvLoadResult) -> tuple[EnvIssue, ...]:
     if settings.asr_enabled:
         for key in ("ASR_BASE_URL", "ASR_API_KEY", "ASR_MODEL"):
             require(key, "G4")
+    if settings.ocr_enabled:
+        for key in ("OCR_BASE_URL", "OCR_API_KEY", "OCR_MODEL"):
+            require(key, "G4")
+        if settings.ocr_verify_enabled:
+            for key in ("OCR_VERIFY_BASE_URL", "OCR_VERIFY_API_KEY", "OCR_VERIFY_MODEL"):
+                require(key, "G4")
     for key in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"):
         require(key, "G3")
     if settings.app_env == "production":

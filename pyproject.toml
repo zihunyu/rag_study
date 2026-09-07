@@ -20,6 +20,8 @@ dependencies = [
   "pymilvus>=2.6,<3",
   "PyJWT[crypto]>=2.10,<3",
   "pypdf>=6,<7",
+  "pypdfium2>=5.13,<6",
+  "rapidocr_onnxruntime==1.4.4",
   "python-docx>=1.2,<2",
   "python-pptx>=1.0,<2",
   "PyYAML>=6.0,<7",
@@ -94,5 +96,5 @@ strict = true
 packages = ["ragkb"]
 
 [[tool.mypy.overrides]]
-module = ["pymilvus", "pymilvus.*", "jieba", "jieba.*"]
+module = ["pymilvus", "pymilvus.*", "jieba", "jieba.*", "pypdfium2", "pypdfium2.*", "rapidocr_onnxruntime", "rapidocr_onnxruntime.*"]
 ignore_missing_imports = true

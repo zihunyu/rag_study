@@ -352,10 +352,10 @@ class PublicationRepair:
                     if record:
                         cursor = self.db.execute(
                             connection,
-                            'UPDATE lifecycle_entities SET '
-                            'payload_json=?,entity_revision=entity_revision+1,updated_at=NOW(6)'
+                            "UPDATE lifecycle_entities SET "
+                            "payload_json=?,entity_revision=entity_revision+1,updated_at=NOW(6)"
                             " WHERE tenant_id=? AND entity_type='documents' AND entity_id=?"
-                            ' AND entity_revision=?',
+                            " AND entity_revision=?",
                             (payload, self.tenant, document_id, record["entity_revision"]),
                         )
                         if cursor.rowcount != 1:
@@ -363,8 +363,8 @@ class PublicationRepair:
                     else:
                         self.db.execute(
                             connection,
-                            'INSERT INTO '
-                            'lifecycle_entities(tenant_id,entity_type,entity_id,logical_key,parent_id,ordinal,payload_json,entity_revision,created_at,updated_at)'
+                            "INSERT INTO "
+                            "lifecycle_entities(tenant_id,entity_type,entity_id,logical_key,parent_id,ordinal,payload_json,entity_revision,created_at,updated_at)"
                             " VALUES (?,'documents',?,?,NULL,0,?,1,NOW(6),NOW(6))",
                             (self.tenant, document_id, document_id, payload),
                         )
@@ -382,8 +382,8 @@ class PublicationRepair:
                     ).hexdigest()
                     self.db.execute(
                         connection,
-                        'INSERT INTO '
-                        'lifecycle_entities(tenant_id,entity_type,entity_id,logical_key,parent_id,ordinal,payload_json,entity_revision,created_at,updated_at)'
+                        "INSERT INTO "
+                        "lifecycle_entities(tenant_id,entity_type,entity_id,logical_key,parent_id,ordinal,payload_json,entity_revision,created_at,updated_at)"
                         " VALUES (?,'audit_events',?,?,?,?,?,1,NOW(6),NOW(6))",
                         (
                             self.tenant,

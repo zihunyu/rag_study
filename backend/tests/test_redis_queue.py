@@ -71,7 +71,7 @@ class _Client:
     def zrevrangebylex(self, name, maximum, minimum, start=0, num=30):
         assert minimum == "-"
         rows = sorted(self.sorted_sets.get(name, {}), reverse=True)
-        return [key for key in rows if maximum == "+" or key < maximum[1:]][start:start + num]
+        return [key for key in rows if maximum == "+" or key < maximum[1:]][start : start + num]
 
     @contextmanager
     def lock(self, name, **kwargs):
@@ -151,10 +151,12 @@ def test_redis_fresh_job_is_not_starved_by_due_retry() -> None:
 def test_queue_browse_backfills_once_filters_before_paging_and_tracks_states(monkeypatch):
     redis = _Redis()
     queue = RedisPersistentJobQueue(redis)  # type: ignore[arg-type]
-    jobs = [queue.enqueue("process", {"tenant_id": tenant, "space_id": space},
-                          str(i), str(i), available_at=1)
-            for i, (tenant, space) in enumerate((("t", "a"), ("t", "b"),
-                                                ("other", "a"), ("t", "a")))]
+    jobs = [
+        queue.enqueue(
+            "process", {"tenant_id": tenant, "space_id": space}, str(i), str(i), available_at=1
+        )
+        for i, (tenant, space) in enumerate((("t", "a"), ("t", "b"), ("other", "a"), ("t", "a")))
+    ]
     # Simulate an existing queue from before browsing indexes were deployed.
     for key in list(redis.client.sorted_sets):
         if ":browse:" in key:
@@ -164,8 +166,10 @@ def test_queue_browse_backfills_once_filters_before_paging_and_tracks_states(mon
     other = queue.list_jobs_page("t", "a", limit=1, after=page.next_key)
     assert {page.items[0]["id"], other.items[0]["id"]} == {jobs[0].id, jobs[3].id}
     assert other.next_key is None
+
     def no_scan(*args, **kwargs):
         raise AssertionError("A completed backfill must not scan the queue again")
+
     with monkeypatch.context() as context:
         context.setattr(redis.client, "hscan_iter", no_scan)
         assert queue.job_counts("t", "a")["QUEUED"] == 2
@@ -176,4 +180,7 @@ def test_queue_browse_backfills_once_filters_before_paging_and_tracks_states(mon
     queue.complete(leased.id, "worker")
     monkeypatch.setattr(redis.client, "hscan_iter", no_scan)
     assert queue.job_counts(scope["tenant_id"], scope["space_id"])["SUCCEEDED"] == 1
-    assert queue.list_jobs_page(scope["tenant_id"], scope["space_id"], "SUCCEEDED").items[0]["id"] == leased.id
+    assert (
+        queue.list_jobs_page(scope["tenant_id"], scope["space_id"], "SUCCEEDED").items[0]["id"]
+        == leased.id
+    )

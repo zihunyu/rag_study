@@ -126,9 +126,26 @@ def build_health_router(runtime: RuntimeComponents) -> APIRouter:
     def workspace_status() -> dict[str, object]:
         # Reuse real readiness probes. Failed dependencies remain readable to the dashboard.
         snapshot = ready(Response()).model_dump()
+        from ragkb.infrastructure.visual_assets import VisualAssetStore
+
+        usage = VisualAssetStore(runtime.storage).ledger.usage_report()
         return {
             **snapshot,
             "checked_at": time.time(),
+            "model_usage": {k: v for k, v in usage.items() if k != "records"},
+            "visual_processing": {
+                "enabled": runtime.settings.ocr_enabled,
+                "ocr_model": runtime.settings.ocr_model,
+                "verifier_model": runtime.settings.ocr_verify_model
+                if runtime.settings.ocr_verify_enabled
+                else runtime.settings.ocr_model,
+                "local_ocr": "RapidOCR / PP-OCRv4"
+                if runtime.settings.ocr_local_check_enabled
+                else "未启用",
+                "account_limit_enabled": runtime.settings.model_account_limit_enabled,
+                "account_concurrency": runtime.settings.model_account_max_concurrency,
+                "render_fallback_enabled": runtime.settings.ocr_render_fallback_enabled,
+            },
             "worker": {"state": "unprobed", "reason": "没有独立的 Worker 心跳探针"},
             "parser": {
                 "state": "configured" if runtime.settings.mineru_tokens else "unconfigured",

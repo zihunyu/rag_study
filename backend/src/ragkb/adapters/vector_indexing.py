@@ -423,6 +423,7 @@ class ZillizChunkIndexingSink:
                         **chunk.locator.to_dict(),
                         "section_id": chunk.section_id,
                         "section_path": chunk.metadata.get("section_path", "root"),
+                        "visual_asset_ids": chunk.metadata.get("visual_asset_ids", []),
                         "heading": chunk.metadata.get("heading", ""),
                         **(
                             {"source_spans": chunk.metadata["source_spans"]}

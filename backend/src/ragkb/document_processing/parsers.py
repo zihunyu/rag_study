@@ -67,6 +67,14 @@ class ParserRouter:
                 "PARSE_ROUTE_UNAVAILABLE", f"no parser route for {source_format}"
             ) from error
 
+    def artifact_keys(self, version_id: str) -> tuple[str, ...]:
+        keys: set[str] = set()
+        for parser in self._routes.values():
+            method = getattr(parser, "artifact_keys", None)
+            if callable(method):
+                keys.update(method(version_id))
+        return tuple(sorted(keys))
+
     def parse(
         self,
         source_format: str,

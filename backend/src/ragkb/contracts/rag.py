@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from ragkb.domain.rag import (
     AskResult,
@@ -14,6 +14,7 @@ from ragkb.domain.rag import (
     QuestionAssessment,
     VerificationResult,
 )
+from ragkb.domain.retrieval import SearchContext
 
 
 @dataclass(frozen=True)
@@ -113,3 +114,13 @@ class RAGRunRepositoryPort(Protocol):
     def save_feedback(self, feedback: Feedback) -> None: ...
 
     def get_evidence(self, run_id: str, evidence_id: str) -> Evidence | None: ...
+
+
+class OverviewReadingPort(Protocol):
+    def read(
+        self, question: str, context: SearchContext
+    ) -> tuple[tuple[Evidence, ...], dict[str, Any]]: ...
+
+    def related_sources(
+        self, evidence: tuple[Evidence, ...], context: SearchContext
+    ) -> tuple[Evidence, ...]: ...
