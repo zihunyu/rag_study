@@ -15,7 +15,11 @@ from PIL import Image
 from ragkb.adapters.visual_http import VisualAnalyzer
 from ragkb.application.cancellation import check_cancelled
 from ragkb.config import EnvSettings
-from ragkb.document_processing.local_visual_check import check_extraction, read_regions
+from ragkb.document_processing.local_visual_check import (
+    LOCAL_CHECK_REVISION,
+    check_extraction,
+    read_regions,
+)
 from ragkb.document_processing.visual_sources import SourceImage
 from ragkb.domain.errors import IngestionCancelled
 from ragkb.domain.visuals import VisualExtraction, reviewed_extraction
@@ -188,7 +192,10 @@ class VisualProcessor:
                 asset["_source_version_id"] = version
                 with Image.open(io.BytesIO(picture.data)) as image:
                     asset.update(width=image.width, height=image.height)
-                if self.settings.ocr_local_check_enabled and not asset.get("local_check"):
+                if (
+                    self.settings.ocr_local_check_enabled
+                    and asset.get("local_check", {}).get("revision") != LOCAL_CHECK_REVISION
+                ):
                     stage("checking_text")
                     reading = read_regions(picture.data, self.settings)
                     asset.update(
@@ -203,16 +210,21 @@ class VisualProcessor:
                         )
                         asset["local_check"] = check
                         if (
-                            check["status"] == "disagreement"
+                            check["status"] != "consistent"
                             and asset.get("origin") != "human_review"
                         ):
                             asset.update(
                                 status="needs_review",
                                 issues=list(asset.get("issues", []))
-                                + [
-                                    "独立 OCR 无法确认以下数字或单位："
-                                    + "、".join(check["unmatched_critical_tokens"])
-                                ],
+                                + check["issues"]
+                                + (
+                                    [
+                                        "独立 OCR 无法确认以下数字或单位："
+                                        + "、".join(check["unmatched_critical_tokens"])
+                                    ]
+                                    if check["unmatched_critical_tokens"]
+                                    else []
+                                ),
                             )
                 if edited:
                     asset["source_asset_id"] = identity

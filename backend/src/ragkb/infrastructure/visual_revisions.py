@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from ragkb.contracts.uploads import UploadRepositoryPort
+from ragkb.domain.source_references import mentions_section, references
 
 
 def exclusion_closure(
@@ -29,16 +29,19 @@ def exclusion_closure(
     excluded = set(sections)
     while True:
         terms = {s for s in excluded if s != "root" and len(s) > 2}
+        figure_ids: set[str] = set()
         for asset in assets.values():
-            if asset.get("section_path", "root") in excluded:
-                terms.update(
-                    re.findall(r"(?:图|表|Figure|Table)\s*\d+", str(asset.get("caption", "")), re.I)
-                )
+            section = asset.get("section_path", "root")
+            if any(section == s or section.startswith(s + " / ") for s in excluded):
+                figure_ids.update(key for key, _ in references(str(asset.get("caption", ""))))
         additions = {
             section
             for section, parts in texts.items()
             if section not in excluded
-            and any(term.casefold() in "\n".join(parts).casefold() for term in terms)
+            and (
+                any(mentions_section("\n".join(parts), term) for term in terms)
+                or bool(figure_ids.intersection(key for key, _ in references("\n".join(parts))))
+            )
         }
         if not additions:
             return sorted(excluded)

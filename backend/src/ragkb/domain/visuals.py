@@ -175,6 +175,7 @@ class VisualQueryResult(StrictModel):
     status: Literal["supported", "not_relevant", "uncertain", "conflict"]
     text: str = Field(max_length=10000)
     uncertainties: list[str] = Field(max_length=100)
+    unanswered_topics: list[str] = Field(default_factory=list, max_length=30)
 
 
 @dataclass(frozen=True)

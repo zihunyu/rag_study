@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from dataclasses import replace
 from typing import Any
 
@@ -15,10 +14,12 @@ from ragkb.application.provider_budget import ConservativeTokenCounter
 from ragkb.application.reading_scope import options, progress
 from ragkb.config import EnvSettings
 from ragkb.contracts.uploads import UploadRepositoryPort
+from ragkb.domain.answer_conditions import condition_quotes
 from ragkb.domain.errors import InvalidProviderResponse, TransientProviderError
 from ragkb.domain.pagination import PageKey
 from ragkb.domain.rag import Evidence
 from ragkb.domain.retrieval import SearchContext
+from ragkb.domain.source_references import references
 from ragkb.infrastructure.model_account import provider_operation
 from ragkb.infrastructure.visual_assets import VisualAssetStore
 from ragkb.infrastructure.visual_evidence import VisualEvidenceEnricher
@@ -274,6 +275,14 @@ class OverviewReader:
                     except (InvalidProviderResponse, TransientProviderError):
                         section_report["state"] = "incomplete"
                         report["gaps"].append(section + "：章节提要生成失败，保留原文待重试")
+            # A model's chosen quotes must not silently discard a separate exception,
+            # prerequisite or branch. Retain its complete source for the final reverse check.
+            for item in checked:
+                if condition_quotes(item.text) and item.chunk_id not in {
+                    e.chunk_id for e in output
+                }:
+                    output.append(item)
+            section_report["condition_count"] = sum(len(condition_quotes(e.text)) for e in checked)
             reduced.append(output)
             report["sections"].append(section_report)
             report["read_sections"] += 1
@@ -322,17 +331,16 @@ def explicit_image_links(
     assets: list[dict[str, Any]], evidence: list[Evidence]
 ) -> list[dict[str, Any]]:
     """Only unique, explicit figure references in one version establish a relationship."""
-    pattern = r"(?:图|Figure)\s*\d+(?:[.\-]\d+)*"
     labels: dict[str, list[str]] = {}
     for asset in assets:
         if asset.get("status") != "verified":
             continue
-        for label in re.findall(pattern, asset.get("caption", ""), re.I):
-            labels.setdefault(re.sub(r"\s", "", label).casefold(), []).append(asset["id"])
+        for key, _ in references(asset.get("caption", "")):
+            labels.setdefault(key, []).append(asset["id"])
     links = []
     for item in evidence:
-        for label in re.findall(pattern, item.text, re.I):
-            targets = labels.get(re.sub(r"\s", "", label).casefold(), [])
+        for key, label in references(item.text):
+            targets = labels.get(key, [])
             if len(set(targets)) == 1:
                 links.append(
                     {

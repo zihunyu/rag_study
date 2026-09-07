@@ -166,6 +166,7 @@ class VerificationResult:
     conflict_checked: bool = True
     policy_checked: bool = True
     conflicting_evidence_ids: tuple[str, ...] = ()
+    condition_checks: tuple[dict[str, str], ...] = ()
 
     @property
     def supported(self) -> bool:
@@ -177,6 +178,7 @@ class VerificationResult:
             and self.conflict_checked
             and self.policy_checked
             and not self.conflicting_evidence_ids
+            and all(c["status"] != "missing" for c in self.condition_checks)
             and all(item.verdict == "SUPPORTED" for item in self.verdicts)
         )
 

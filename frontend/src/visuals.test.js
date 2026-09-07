@@ -5,12 +5,24 @@ import MermaidDiagram from './components/MermaidDiagram.vue';
 import VisualAsset from './components/VisualAsset.vue';
 import MarkdownContent from './components/MarkdownContent.vue';
 import VisualEditor from './components/VisualEditor.vue';
+import ConditionCoverage from './components/ConditionCoverage.vue';
 
 const render = vi.hoisted(() => vi.fn());
 vi.mock('./mermaid.js', () => ({ renderDiagram: render }));
 let wrapper;
 afterEach(() => { wrapper?.unmount(); vi.unstubAllGlobals(); vi.clearAllMocks(); sessionStorage.clear(); });
 const json = data => new Response(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } });
+
+it('shows condition omissions without presenting a false complete badge or source excerpts', async () => {
+  wrapper = mount(ConditionCoverage, { props:{ report:{ checked:3,covered:1,not_applicable:1,missing:1,complete:false,source_quote:'不可泄露旧版原文' } } });
+  expect(wrapper.text()).toContain('1 项关键条件未完整保留');
+  expect(wrapper.text()).toContain('答案未展示');
+  expect(wrapper.text()).not.toContain('不可泄露旧版原文');
+  await wrapper.setProps({report:{ checked:3,covered:2,not_applicable:1,missing:0,complete:true }});
+  expect(wrapper.text()).toContain('2 项已保留');
+  expect(wrapper.text()).toContain('1 项与本题无关');
+  expect(wrapper.text()).not.toContain('未展示');
+});
 const asset = (id, title) => ({ id, status: 'verified', image_url: `/api/document-versions/${id}/visuals/image/image`, locator: { part: 'word/media/image1.png', paragraph: 3 }, extraction: { kind: 'table', title, description: '', transcription: '420 W' }, table_html: ['<table><tr><td rowspan="2">420 W</td><td><img src="x" onerror="alert(1)"><script>alert(1)</script>功率</td></tr></table>'] });
 
 it('does not display a late image manifest from the previous document version', async () => {

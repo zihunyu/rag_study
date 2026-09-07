@@ -11,22 +11,14 @@ import numpy as np
 from ragkb.application.cancellation import check_cancelled
 from ragkb.config import EnvSettings
 from ragkb.document_processing.image_views import TILE_SIZE, normalize_image, tile_offsets
+from ragkb.document_processing.visual_table_binding import bind_table
+from ragkb.domain.visual_numbers import compact as compact
+from ragkb.domain.visual_numbers import contains_number, critical_tokens
 from ragkb.domain.visuals import VisualExtraction
 
 _engine: Any = None
 _lock = threading.Lock()
-
-
-def compact(text: str) -> str:
-    # SI unit case is meaningful: mW and MW must never be treated as equal.
-    return re.sub(r"\s+", "", text)
-
-
-def critical_tokens(text: str) -> list[str]:
-    return re.findall(
-        r"(?<![\w])[-+±]?\d+(?:[.,]\d+)*(?:\s*(?:MW|kW|mW|W|kV|mV|V|mA|A|MHz|kHz|Hz|GB|MB|mm|cm|kg|mg|°C|℃|%))?",
-        text,
-    )
+LOCAL_CHECK_REVISION = "ocr-numbers-and-table-binding-v2"
 
 
 def mentions_region(text: str, region_text: str) -> bool:
@@ -106,7 +98,8 @@ def check_extraction(extraction: VisualExtraction, reading: dict[str, Any]) -> d
     visible = "\n".join(
         [
             extraction.transcription,
-            extraction.description,
+            # Descriptions may count visible objects ("three nodes") rather than
+            # transcribe printed numerals; the independent vision audit checks them.
             extraction.body_text,
             *(cell.text for table in extraction.tables for cell in table.cells),
             *(note for table in extraction.tables for note in table.notes),
@@ -115,13 +108,15 @@ def check_extraction(extraction: VisualExtraction, reading: dict[str, Any]) -> d
         ]
     )
     # Token boundaries matter: 23 is not confirmed by an OCR reading of 323.
-    missing = [
-        token
-        for token in critical_tokens(visible)
-        if re.search(r"(?<![\d.,])" + re.escape(compact(token)) + r"(?![\d.,])", all_text) is None
-    ]
+    missing = [token for token in critical_tokens(visible) if not contains_number(all_text, token)]
     targets: list[dict[str, Any]] = []
+    bindings = []
     for ti, table in enumerate(extraction.tables):
+        binding = bind_table(table, regions, ti)
+        bindings.append(binding)
+        if binding["status"] == "consistent":
+            targets.extend(binding["targets"])
+            continue
         for cell in table.cells:
             matches = [
                 r["id"]
@@ -134,7 +129,9 @@ def check_extraction(extraction: VisualExtraction, reading: dict[str, Any]) -> d
                     "table": ti,
                     "row": cell.row,
                     "column": cell.column,
-                    "region_ids": matches if len(matches) == 1 else [],
+                    "region_ids": matches
+                    if binding["status"] == "not_required" and len(matches) == 1
+                    else [],
                 }
             )
     for gi, graph in enumerate(extraction.graphs):
@@ -152,9 +149,18 @@ def check_extraction(extraction: VisualExtraction, reading: dict[str, Any]) -> d
                     "region_ids": matches if len(matches) == 1 else [],
                 }
             )
+    issues = [issue for binding in bindings for issue in binding["issues"]]
+    status = (
+        "disagreement"
+        if missing or any(b["status"] == "disagreement" for b in bindings)
+        else ("inconclusive" if issues else "consistent")
+    )
     return {
         "engine": reading["engine"],
-        "status": "disagreement" if missing else "consistent",
+        "revision": LOCAL_CHECK_REVISION,
+        "status": status,
+        "issues": issues,
+        "table_checks": [{"table": i, "status": b["status"]} for i, b in enumerate(bindings)],
         "unmatched_critical_tokens": list(dict.fromkeys(missing))[:100],
         "targets": targets,
         "note": "文字坐标来自独立 OCR；重复文字无法唯一定位时不猜测位置。",

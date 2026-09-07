@@ -9,7 +9,7 @@ import threading
 import time
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Literal
 from urllib.parse import urlparse
 
@@ -23,6 +23,7 @@ from ragkb.contracts.rag import (
     RAGRunRepositoryPort,
     VerifiedAnswerCachePort,
 )
+from ragkb.domain.answer_conditions import condition_report
 from ragkb.domain.claim_coverage import render_verified_claims, verify_answer_claim_coverage
 from ragkb.domain.errors import (
     InvalidProviderResponse,
@@ -267,6 +268,7 @@ class CompositeClaimVerifier:
             conflict_checked=structural.conflict_checked and semantic.conflict_checked,
             policy_checked=structural.policy_checked and semantic.policy_checked,
             conflicting_evidence_ids=semantic.conflicting_evidence_ids,
+            condition_checks=semantic.condition_checks,
         )
 
 
@@ -305,8 +307,16 @@ class TrustedQAService:
         warnings: tuple[str, ...] = (),
         verified: bool = False,
         retryable: bool = False,
+        condition_checks: tuple[dict[str, str], ...] = (),
     ) -> AskResult:
         report = dict(package.coverage_report)
+        if condition_checks:
+            report["conditions"] = condition_report(condition_checks)
+            if not report["conditions"]["complete"]:
+                report["complete"] = False
+                report["gaps"] = list(report.get("gaps", [])) + [
+                    "答案未完整保留资料中的关键条件，未展示该答案"
+                ]
         if answer and report.get("mode") == "overview":
             cited_ids = {c.evidence_id for c in citations}
             cited_sections = {
@@ -568,6 +578,52 @@ class TrustedQAService:
         try:
             with self.tracer.span("rag.ask.claim.verify"):
                 verification = self.verifier.verify(question, draft, package.evidence)
+            if (
+                any(c["status"] == "missing" for c in verification.condition_checks)
+                and not verification.conflicting_evidence_ids
+            ):
+                # One bounded repair; use source quotes rather than the verifier's free-form
+                # explanation. The repaired answer crosses every verification gate again.
+                missing = [c for c in verification.condition_checks if c["status"] == "missing"]
+                repair_evidence = tuple(
+                    replace(
+                        e,
+                        locator={
+                            **e.locator,
+                            "conditions_to_preserve": [
+                                c["source_quote"]
+                                for c in missing
+                                if c["evidence_id"] == e.evidence_id
+                            ],
+                        },
+                    )
+                    for e in package.generation_evidence
+                )
+                with self.tracer.span("rag.ask.conditions.repair"):
+                    repaired = self.generator.generate(question, repair_evidence)
+                if repaired.status is DraftAnswerStatus.ANSWERED:
+                    repaired_ids = tuple(
+                        dict.fromkeys(i for c in repaired.claims for i in c.evidence_ids)
+                    )
+                    if (
+                        not repaired.text.strip()
+                        or not repaired.claims
+                        or not repaired.citation_ids
+                        or len(set(repaired.citation_ids)) != len(repaired.citation_ids)
+                        or not repaired_ids
+                        or any(i not in available for i in repaired.citation_ids)
+                        or not set(repaired_ids).issubset(repaired.citation_ids)
+                    ):
+                        raise InvalidProviderResponse("CONDITION_REPAIR_CITATIONS_INVALID")
+                    if not self._permission_recheck(package, subject_scope_tokens, clearance_level):
+                        return self._save(
+                            package,
+                            AnswerStatus.SYSTEM_ERROR,
+                            warnings=("PRE_VERIFIER_PERMISSION_RECHECK_FAILED",),
+                        )
+                    draft, claim_citation_ids = repaired, repaired_ids
+                    cited = tuple(available[i] for i in repaired_ids)
+                    verification = self.verifier.verify(question, draft, package.evidence)
         except TransientProviderError:
             return self._save(
                 package,
@@ -575,11 +631,13 @@ class TrustedQAService:
                 warnings=("CLAIM_VERIFIER_UNAVAILABLE",),
                 retryable=True,
             )
-        except (InvalidProviderResponse, ValueError):
+        except (InvalidProviderResponse, ValueError) as error:
             return self._save(
                 package,
                 AnswerStatus.SYSTEM_ERROR,
-                warnings=("CLAIM_VERIFIER_PROTOCOL_INVALID",),
+                warnings=("CLAIM_VERIFIER_PROTOCOL_INVALID", str(error))
+                if str(error).startswith("VERIFIER_CONDITION_")
+                else ("CLAIM_VERIFIER_PROTOCOL_INVALID",),
             )
         if verification.conflicting_evidence_ids:
             with self.response_release_guard():
@@ -600,6 +658,7 @@ class TrustedQAService:
                 package,
                 AnswerStatus.INSUFFICIENT_EVIDENCE,
                 warnings=tuple(item.reason_code for item in verification.verdicts),
+                condition_checks=verification.condition_checks,
             )
         verified_draft = DraftAnswer(
             draft.text if draft.synthesized else render_verified_claims(draft.claims),
@@ -648,6 +707,7 @@ class TrustedQAService:
                 answer=verified_draft.text,
                 citations=citations,
                 verified=True,
+                condition_checks=verification.condition_checks,
             )
 
     def ask(
