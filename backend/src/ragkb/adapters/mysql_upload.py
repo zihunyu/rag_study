@@ -183,8 +183,8 @@ class MySQLUploadRepository:
         def mutate(state: dict[str, Any]) -> tuple[str, str]:
             space_id = space_id_override or next(iter(state["spaces"]), new_uuid7())
             existing = state["spaces"].get(space_id)
-            if existing is not None and existing["name"] != space_name:
-                raise ValueError("SPACE_ID_OVERRIDE_MISMATCH")
+            if existing is not None:
+                return self.tenant_id, space_id
             state["spaces"][space_id] = {
                 "id": space_id,
                 "tenant_id": self.tenant_id,
@@ -198,6 +198,20 @@ class MySQLUploadRepository:
 
     def list_spaces(self) -> list[dict[str, str]]:
         return [dict(item) for item in self._read()["spaces"].values()]
+
+    def rename_space(self, space_id: str, name: str) -> None:
+        def mutate(state: dict[str, Any]) -> None:
+            space = state["spaces"].get(space_id)
+            if space is None:
+                raise ResourceNotFoundError(space_id)
+            if any(
+                item["id"] != space_id and item["name"].casefold() == name.casefold()
+                for item in state["spaces"].values()
+            ):
+                raise IdempotencyConflictError("SPACE_NAME_EXISTS")
+            space["name"] = name
+
+        self._mutate(mutate)
 
     def get_space(self, space_id: str) -> dict[str, str]:
         item = self._read()["spaces"].get(space_id)

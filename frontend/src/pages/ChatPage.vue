@@ -1,0 +1,71 @@
+<script setup>
+import { computed, ref, watch, nextTick, onUnmounted } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import { Plus, MessagesSquare, Send, Square, Sparkles, ArrowUpRight, FileText, Copy, ThumbsUp, ThumbsDown, X, PanelLeft, Pencil, Archive, Check, BookOpen, LoaderCircle, ChevronDown } from '@lucide/vue';
+import { useConversations } from '../stores/conversations.js';
+import { useWorkspace } from '../stores/workspace.js';
+import { request, sourceUrl } from '../api.js';
+import { locationLabel, dateTime } from '../format.js';
+import { useResource } from '../composables/useResource.js';
+import MarkdownContent from '../components/MarkdownContent.vue';
+import ErrorNotice from '../components/ErrorNotice.vue';
+import AppDialog from '../components/AppDialog.vue';
+const route = useRoute(), router = useRouter(), store = useConversations(), workspace = useWorkspace();
+const spaceId = ref(route.query.space || workspace.selectedId || ''), question = ref(''), historyOpen = ref(false), source = ref(null), copied = ref(''), feedback = ref({}), actionError = ref(null), renameOpen = ref(false), title = ref(''), renameBusy = ref(false), creating = ref(false);
+const bodyElement = ref(null);
+const currentSpace = computed(() => workspace.spaces.find(space => space.id === spaceId.value));
+const sourceResource = useResource(async signal => { const response = await fetch(sourceUrl(source.value.source_url), { signal }); if (!response.ok) throw new Error('SOURCE_REFERENCE_NOT_FOUND'); return response.json(); });
+watch(() => route.params.conversationId, async id => { source.value = null; sourceResource.clear(); historyOpen.value = false; question.value = ''; actionError.value = null; await store.activate(id); if (store.current) { spaceId.value = store.current.space_id; workspace.select(spaceId.value); } store.list(spaceId.value); await scrollBottom(); }, { immediate: true });
+watch(() => workspace.spaces, spaces => { if (!spaceId.value && spaces.length) { spaceId.value = spaces[0].id; store.list(spaceId.value); } }, { immediate: true });
+async function switchSpace() { workspace.select(spaceId.value); source.value = null; await router.push('/chat'); await store.activate(null); store.list(spaceId.value); }
+async function newConversation() { historyOpen.value = false; if (route.params.conversationId) await router.push('/chat'); else store.activate(null); question.value = ''; }
+async function submit(text = question.value) {
+  if (!text.trim() || !spaceId.value || store.busy || creating.value) return;
+  actionError.value = null;
+  try {
+    if (!store.current) { creating.value = true; const conversation = await store.create(spaceId.value); await router.push(`/chat/${conversation.id}`); if (store.current?.id !== conversation.id) await store.activate(conversation.id); }
+    question.value = ''; const sending = store.send(text); await nextTick(); await scrollBottom(); await sending; await scrollBottom();
+    if (store.error && !store.turns.some(turn => turn.original_question === text.trim())) question.value = text;
+  } catch (cause) { actionError.value = cause; question.value = text; } finally { creating.value = false; }
+}
+function keydown(event) { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); submit(); } }
+async function scrollBottom() { await nextTick(); if (bodyElement.value) bodyElement.value.scrollTop = bodyElement.value.scrollHeight; }
+watch(() => store.turns.map(turn => `${turn.id}:${turn.state}`).join(','), scrollBottom);
+const timer = setInterval(store.poll, 3000);
+onUnmounted(() => { clearInterval(timer); store.activate(null); });
+function citedText(turn) {
+  let answer = turn.result?.verified ? turn.result.answer || '' : '';
+  for (const [index, citation] of (turn.result?.citations || []).entries()) answer = answer.replaceAll(`[${citation.evidence_id}]`, `[${index + 1}](#citation-${citation.evidence_id})`);
+  return answer;
+}
+function inlineCitation(event, turn) { const link = event.target.closest('a[href^="#citation-"]'); if (link) { event.preventDefault(); const evidenceId = link.getAttribute('href').slice('#citation-'.length); const citation = turn.result?.citations.find(item => item.evidence_id === evidenceId); if (citation) openSource(citation); } }
+function openSource(citation) { source.value = citation; sourceResource.clear(); sourceResource.load(); }
+async function copy(turn) { try { await navigator.clipboard.writeText(turn.result.answer); copied.value = turn.id; } catch (cause) { actionError.value = cause; } }
+async function rate(turn, rating) { try { await request(`/rag-runs/${turn.rag_run_id}/feedback`, { method: 'POST', body: JSON.stringify({ rating, reason_code: rating === 5 ? 'HELPFUL' : 'NOT_HELPFUL', comment: '' }) }); feedback.value[turn.id] = rating; } catch (cause) { actionError.value = cause; } }
+async function rename() { renameBusy.value = true; try { await store.update(store.current.id, { title: title.value.trim() }); renameOpen.value = false; } catch (cause) { actionError.value = cause; } finally { renameBusy.value = false; } }
+async function archive() { try { await store.update(store.current.id, { archived: true }); await router.push('/chat'); } catch (cause) { actionError.value = cause; } }
+const stageLabels = { queued: '等待开始', resolving: '理解问题与对话上下文', retrieving: '检索当前资料并验证答案' };
+function resultMessage(turn) {
+  const result = turn.result || {};
+  const status = result.status?.toUpperCase();
+  if (result.sources_stale) return '这条回答的来源已撤回、更新或暂时无法校验。请重新生成，以当前有效资料为准。';
+  if (turn.state === 'cancelled') return '已停止本轮回答。';
+  if (turn.state === 'failed') return '本轮处理未完成，可以重新提问。';
+  if (status === 'NEEDS_CLARIFICATION') return result.clarification_question || '请补充问题中的具体产品、对象或必要条件。';
+  if (status === 'OUT_OF_SCOPE') return '当前知识问答支持基于资料回答问题，请描述你希望了解的具体信息。';
+  if (status === 'INSUFFICIENT_EVIDENCE') return '本轮检索到的资料不足以支持回答。可以补充对象、版本或条件后再试。';
+  return '本轮未得到通过验证的答案。可以补充问题、检查资料或重新提问。';
+}
+</script>
+<template><div class="chat-layout" :class="{ 'source-open': source }">
+  <button v-if="historyOpen" class="history-backdrop" aria-label="关闭会话列表" @click="historyOpen = false"/>
+  <aside :class="['chat-history', { open: historyOpen }]"><div class="chat-history-heading"><h2>知识问答</h2><span class="mini-label">CHAT</span></div><button class="btn new-chat-button" @click="newConversation"><Plus :size="18"/>新建对话</button><label class="field-label" for="chat-space">当前知识库</label><select id="chat-space" v-model="spaceId" :disabled="creating" @change="switchSpace"><option value="" disabled>选择知识库</option><option v-for="space in workspace.spaces" :key="space.id" :value="space.id">{{ space.name }}</option></select><p class="nav-caption">会话记录</p><div class="conversation-list"><RouterLink v-for="conversation in store.conversations" :key="conversation.id" :to="`/chat/${conversation.id}`" :class="['conversation-link', { active: route.params.conversationId === conversation.id }]"><MessagesSquare :size="16"/><div><strong>{{ conversation.title }}</strong><small>{{ dateTime(conversation.updated_at) }}</small></div><span v-if="conversation.active_turn_id" class="stage-dot running"/></RouterLink><p v-if="!store.conversations.length" class="small muted history-empty">你的对话会自动保存在这里。</p><button v-if="store.listCursor" class="btn ghost" @click="store.list(spaceId, true)">更多会话</button></div><div class="history-note"><BookOpen :size="17"/><p>每个会话固定一个知识库<br/>答案仅来自当前有效资料</p></div></aside>
+  <section class="chat-main"><header class="chat-topbar"><button class="icon-button chat-menu" aria-label="展开会话历史" @click="historyOpen = !historyOpen"><PanelLeft :size="19"/></button><div class="grow truncate"><strong>{{ store.current?.title || '新的知识探索' }}</strong><span class="small muted">{{ currentSpace?.name || '请先选择知识库' }}</span></div><template v-if="store.current"><button class="icon-button" aria-label="重命名对话" @click="title = store.current.title; renameOpen = true"><Pencil :size="16"/></button><button class="icon-button" aria-label="归档对话" :disabled="store.busy" @click="archive"><Archive :size="17"/></button></template></header>
+    <div ref="bodyElement" class="chat-scroll"><div v-if="!store.turns.length && !store.loading" class="chat-welcome"><div class="ask-symbol"><Sparkles :size="33"/></div><p class="eyebrow">ANSWERS, GROUNDED IN KNOWLEDGE</p><h1>让知识，回答你的问题。</h1><p>从「{{ currentSpace?.name || '你的知识库' }}」中寻找答案，<br/>每个结论都可以回到原文。</p><div class="chat-principles"><span><BookOpen :size="16"/>基于资料</span><span><Check :size="16"/>验证后呈现</span><span><MessagesSquare :size="16"/>支持上下文追问</span></div><RouterLink v-if="currentSpace && !currentSpace.answerable_count" :to="`/knowledge-bases/${spaceId}/documents`" class="notice warning"><FileText :size="18"/><span>这个知识库还没有可问答文档，先检查并发布资料。</span><ArrowUpRight :size="17"/></RouterLink></div>
+    <div v-if="store.loading && !store.turns.length" class="chat-loading"><LoaderCircle class="spin" :size="22"/>正在恢复对话…</div><button v-if="store.nextBefore" class="btn ghost load-more" :disabled="store.loading" @click="store.older">查看更早的对话</button>
+    <div class="message-list"><article v-for="turn in store.turns" :key="turn.id" class="conversation-turn"><div class="user-message"><span>你</span><p>{{ turn.original_question }}</p></div><div class="assistant-message"><span class="assistant-avatar"><Sparkles :size="18"/></span><div class="assistant-body"><div class="assistant-label">知识助手<span v-if="turn.result?.verified && turn.result.answer" class="verified-label"><Check :size="12"/>已验证</span></div><div v-if="['queued','resolving','retrieving'].includes(turn.state)" class="answer-processing"><LoaderCircle :size="16" class="spin"/>{{ stageLabels[turn.state] }}<span class="typing-dots">…</span></div><template v-else-if="turn.result?.verified && turn.result.answer"><div @click="inlineCitation($event, turn)"><MarkdownContent :text="citedText(turn)"/></div><p v-if="turn.result.coverage === 'partial'" class="answer-notice">以上仅回答资料能够支持的部分，其余问题在本轮检索中未找到充分依据。</p><div class="citation-list"><button v-for="(citation, i) in turn.result.citations" :key="citation.evidence_id" class="citation-button" @click="openSource(citation)"><span>{{ i + 1 }}</span><FileText :size="13"/><span class="truncate">{{ citation.filename }}</span><ArrowUpRight :size="13"/></button></div><div class="answer-actions"><button class="icon-button" :aria-label="copied === turn.id ? '已复制' : '复制答案'" @click="copy(turn)"><Check v-if="copied === turn.id" :size="15"/><Copy v-else :size="15"/></button><button class="icon-button" aria-label="答案有帮助" :class="{ accent: feedback[turn.id] === 5 }" @click="rate(turn, 5)"><ThumbsUp :size="15"/></button><button class="icon-button" aria-label="答案无帮助" :class="{ accent: feedback[turn.id] === 1 }" @click="rate(turn, 1)"><ThumbsDown :size="15"/></button><span v-if="feedback[turn.id]" class="small muted">反馈已记录</span></div></template><template v-else><p class="answer-notice">{{ resultMessage(turn) }}</p><button v-if="turn.state === 'failed' || turn.result?.retryable" class="btn small-button" :disabled="store.busy" @click="submit(turn.original_question)">重新提问</button></template><details v-if="turn.resolved_question && turn.resolved_question !== turn.original_question" class="resolved-question"><summary>本轮检索问题</summary><p>{{ turn.resolved_question }}</p></details><details v-if="turn.error_code" class="technical"><summary>技术详情</summary><code>{{ turn.error_code }}</code></details></div></div></article></div>
+    </div><div class="composer-area"><ErrorNotice :error="store.error || actionError"/><div class="composer"><textarea v-model="question" aria-label="向知识库提问" rows="2" maxlength="4000" :placeholder="store.turns.length ? '继续追问，或提出新的问题…' : '向知识库提问…'" :disabled="creating" @keydown="keydown"/><div class="composer-bottom"><span><BookOpen :size="14"/>{{ currentSpace?.name || '未选择知识库' }}</span><button v-if="store.busy" class="stop-button" :disabled="!store.activeTurn" @click="store.cancel"><Square :size="13"/>停止回答</button><button v-else class="send-button" :disabled="!question.trim() || !spaceId || creating" aria-label="发送问题" @click="submit()"><Send :size="17"/></button></div></div><p class="composer-hint">Enter 发送 · Shift + Enter 换行<span>答案通过验证后显示，请结合原文判断。</span></p></div>
+  </section>
+  <aside v-if="source" class="source-panel"><header><div><p class="eyebrow">SOURCE REFERENCE</p><h2>原文引用</h2></div><button class="icon-button" aria-label="关闭来源" @click="source = null; sourceResource.clear()"><X :size="20"/></button></header><div class="source-file"><FileText :size="24"/><div><strong>{{ source.filename }}</strong><p class="small muted">版本 {{ source.version_no }} · {{ locationLabel(source.locator) }}</p></div></div><ErrorNotice :error="sourceResource.error.value"/><div v-if="sourceResource.loading.value" class="chat-loading"><LoaderCircle class="spin" :size="20"/>正在校验来源…</div><div v-if="sourceResource.data.value" class="source-text"><MarkdownContent :text="sourceResource.data.value.text"/></div><RouterLink v-if="sourceResource.data.value" :to="`/knowledge-bases/${spaceId}/documents/${source.document_id}?version=${source.version_id}&chunk=${source.chunk_id}`" class="btn source-document-link">打开文档<ArrowUpRight :size="16"/></RouterLink></aside>
+  <AppDialog :open="renameOpen" title="重命名对话" @close="renameOpen = false"><form @submit.prevent="rename"><label class="field-label" for="conversation-title">对话名称</label><input id="conversation-title" v-model="title" required maxlength="100"/><ErrorNotice :error="actionError"/><div class="dialog-actions"><button type="button" class="btn" @click="renameOpen = false">取消</button><button class="btn primary" :disabled="renameBusy || !title.trim()">保存名称</button></div></form></AppDialog>
+</div></template>

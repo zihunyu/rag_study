@@ -9,6 +9,7 @@ from typing import Any
 
 from ragkb.contracts.jobs import QueueConflictError, QueueJob, QueueLeaseError, QueueStateError
 from ragkb.domain.ids import new_uuid7
+from ragkb.domain.pagination import PageKey, RepositoryPage
 from ragkb.domain.state_machines import JobState
 from ragkb.infrastructure.sqlite import SQLiteDatabase
 
@@ -19,6 +20,49 @@ class SQLitePersistentJobQueue:
     def __init__(self, database: SQLiteDatabase) -> None:
         self.database = database
         self.database.initialize()
+
+    def list_jobs_page(
+        self,
+        tenant: str,
+        space: str = "",
+        state: str = "",
+        *,
+        limit: int = 30,
+        after: PageKey | None = None,
+    ) -> RepositoryPage:
+        filters = ["json_extract(payload_json, '$.tenant_id') = ?"]
+        params: list[Any] = [tenant]
+        if space:
+            filters.append("json_extract(payload_json, '$.space_id') = ?")
+            params.append(space)
+        if state:
+            filters.append("state = ?")
+            params.append(state)
+        if after:
+            filters.append("(CAST(updated_at * 1000 AS INTEGER), id) < (?, ?)")
+            params.extend(after)
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM job_queue WHERE "  # noqa: S608 - closed SQL, bound values
+                + " AND ".join(filters)
+                + " ORDER BY CAST(updated_at * 1000 AS INTEGER) DESC, id DESC LIMIT ?",
+                (*params, limit + 1),
+            ).fetchall()
+        items = [{**dict(row), "payload": json.loads(row["payload_json"])} for row in rows[:limit]]
+        last = items[-1] if len(rows) > limit else None
+        return RepositoryPage(items, (int(last["updated_at"] * 1000), last["id"]) if last else None)
+
+    def job_counts(self, tenant: str, space: str = "") -> dict[str, int]:
+        query = (
+            "SELECT state,COUNT(*) FROM job_queue WHERE json_extract(payload_json,'$.tenant_id')=?"
+        )
+        params = [tenant]
+        if space:
+            query += " AND json_extract(payload_json,'$.space_id')=?"
+            params.append(space)
+        with self.database.connect() as connection:
+            rows = connection.execute(query + " GROUP BY state", params).fetchall()
+        return {str(row[0]): int(row[1]) for row in rows}
 
     @staticmethod
     def _timestamp(now: float | None) -> float:

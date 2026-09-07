@@ -10,6 +10,7 @@ from ragkb.adapters.auth import (
     OIDCDiscoveryJWTDecoder,
     OIDCJWTAuthenticator,
 )
+from ragkb.adapters.evidence_selection import ModelEvidenceSelector
 from ragkb.adapters.external_cleanup import (
     ExternalProjectionCleanupExecutor,
     ProjectionInspectorPort,
@@ -171,6 +172,7 @@ class ProductionRuntimeFactory:
                 transport=generator_transport,
                 external_call_approved=settings.real_provider_calls_enabled,
             ),
+            evidence_selector=ModelEvidenceSelector(settings, generator_transport),
             verifier=verifier,
             indexing_sink=ZillizChunkIndexingSink(
                 index,

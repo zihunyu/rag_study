@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Protocol
 
+from ragkb.infrastructure.workspace_schema import WORKSPACE_TABLES, mysql_workspace_migrations
+
 MYSQL_MIGRATION_REVISION = "mysql-current-schema"
 MYSQL_MIGRATION_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -247,6 +249,17 @@ MYSQL_MIGRATIONS: tuple[tuple[str, str], ...] = (
     ),
 )
 
+MYSQL_MIGRATIONS += mysql_workspace_migrations()
+
+# Event ordering uses epoch microseconds, which exceed INT UNSIGNED even today.
+# Append a widening migration so deployed databases retain their rows and migration IDs.
+MYSQL_MIGRATIONS += (
+    (
+        "widen_governance_event_ordinal",
+        "ALTER TABLE governance_entities MODIFY COLUMN ordinal BIGINT UNSIGNED NOT NULL DEFAULT 0",
+    ),
+)
+
 PROJECT_TABLES = frozenset(
     {
         "schema_migrations",
@@ -263,7 +276,7 @@ PROJECT_TABLES = frozenset(
         "index_batches",
         "ingestion_fences",
     }
-)
+) | frozenset(WORKSPACE_TABLES)
 
 
 class CursorLike(Protocol):

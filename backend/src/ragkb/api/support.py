@@ -77,6 +77,8 @@ def ask_response(result: AskResult) -> AskResponse:
         degraded=result.degraded,
         retryable=result.retryable,
         clarification_fields=list(result.clarification_fields),
+        clarification_question=result.clarification_question,
+        coverage=result.coverage,
     )
 
 

@@ -113,7 +113,13 @@ class PPTXParser:
                         original_text=text,
                         display_text=text,
                         locator=SourceLocator(slide=slide_number),
-                        metadata={"heading_level": 1} if node_type is NodeType.HEADING else {},
+                        metadata=(
+                            {"heading_level": 1}
+                            if node_type is NodeType.HEADING
+                            else {"table_header": text.splitlines()[0]}
+                            if node_type is NodeType.TABLE
+                            else {}
+                        ),
                     )
                 )
         if not nodes:

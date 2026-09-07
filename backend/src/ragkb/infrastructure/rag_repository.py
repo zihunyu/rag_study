@@ -30,6 +30,7 @@ def _package(data: dict[str, Any]) -> EvidencePackage:
             "retrieval_health": RetrievalHealth(data.get("retrieval_health", "healthy")),
             "retrieval_warnings": tuple(data.get("retrieval_warnings", ())),
             "clarification_fields": tuple(data.get("clarification_fields", ())),
+            "retrieval_queries": tuple(data.get("retrieval_queries", ())),
         }
     )
 

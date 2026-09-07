@@ -11,6 +11,7 @@ from ragkb.api.models import (
     HealthResponse,
 )
 from ragkb.domain.retrieval import SearchContext
+from ragkb.engineering_security.file_validation import FORMAT_BY_EXTENSION
 from ragkb.runtime_components import RuntimeComponents
 
 OPENAPI_VERSION = "1.0.0"
@@ -25,6 +26,13 @@ def build_health_router(runtime: RuntimeComponents) -> APIRouter:
         scanner = runtime.uploads.malware_scanner
         return {
             "profile": runtime.settings.rag_runtime_profile,
+            "max_file_size_bytes": runtime.settings.upload_max_file_size_mb * 1024 * 1024,
+            "accepted_extensions": [
+                ext for ext, (kind, _) in FORMAT_BY_EXTENSION.items() if kind != "audio"
+            ],
+            "file_mime_types": {
+                ext: mime for ext, (kind, mime) in FORMAT_BY_EXTENSION.items() if kind != "audio"
+            },
             "scanner_mode": "production" if production else "development",
             "scanner_available": bool(getattr(scanner, "executable", None)) if production else True,
             "scanner_certified": False,
@@ -113,6 +121,20 @@ def build_health_router(runtime: RuntimeComponents) -> APIRouter:
             dependencies=dependencies,
             degraded_reasons=degraded,
         )
+
+    @router.get("/api/system/status", tags=["health"])
+    def workspace_status() -> dict[str, object]:
+        # Reuse real readiness probes. Failed dependencies remain readable to the dashboard.
+        snapshot = ready(Response()).model_dump()
+        return {
+            **snapshot,
+            "checked_at": time.time(),
+            "worker": {"state": "unprobed", "reason": "没有独立的 Worker 心跳探针"},
+            "parser": {
+                "state": "configured" if runtime.settings.mineru_tokens else "unconfigured",
+                "reason": "配置状态；实际解析结果请查看文件处理任务",
+            },
+        }
 
     @router.get("/status/acceptance", response_model=HealthResponse, tags=["health"])
     def acceptance_status() -> HealthResponse:

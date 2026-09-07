@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol
 
 from ragkb.domain.rag import (
@@ -13,6 +14,20 @@ from ragkb.domain.rag import (
     QuestionAssessment,
     VerificationResult,
 )
+
+
+@dataclass(frozen=True)
+class EvidenceSelection:
+    source_ids: tuple[str, ...]
+    coverage: str = "sufficient"
+    queries: tuple[str, ...] = ()
+    clarification: str | None = None
+
+
+class EvidenceSelectorPort(Protocol):
+    revision: str
+
+    def select(self, question: str, evidence: tuple[Evidence, ...]) -> EvidenceSelection: ...
 
 
 class QuestionAssessmentPort(Protocol):

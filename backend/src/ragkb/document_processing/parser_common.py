@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +35,9 @@ def canonical_document(
         document_version_id=document_version_id,
         language="und",
         source_format=source_format,
-        nodes=tuple(nodes),
+        nodes=tuple(
+            replace(node, metadata={"document_title": path.stem, **node.metadata}) for node in nodes
+        ),
         parser_revision=parser_revision,
         normalization_revision="normalization",
         content_checksum=checksum(path),

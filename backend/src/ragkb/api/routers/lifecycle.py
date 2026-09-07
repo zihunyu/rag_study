@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from functools import wraps
+from typing import Any
+
 from fastapi import APIRouter, Header, Request
 
 from ragkb.api.models import (
@@ -28,11 +32,40 @@ from ragkb.api.support import (
     require_role as _require_role,
 )
 from ragkb.domain.uploads import (
+    OptimisticConcurrencyError,
     ResourceNotFoundError,
 )
 from ragkb.runtime_components import RuntimeComponents
 
 OPENAPI_VERSION = "1.0.0"
+
+
+def version_condition(runtime: RuntimeComponents) -> Callable[..., Any]:
+    """Optional condition for compatible legacy routes, checked under the mutation lock."""
+
+    def decorate(operation: Callable[..., Any]) -> Callable[..., Any]:
+        @wraps(operation)
+        def guarded(*args: Any, **kwargs: Any) -> Any:
+            request: Request = kwargs["request"]
+            document_id = kwargs.get("document_id")
+            if not document_id:
+                document_id = runtime.repository.get_version(kwargs["version_id"])["document_id"]
+            require_document_manager(runtime, _principal(request), document_id)
+            with runtime.lifecycle_store.lock:
+                runtime.lifecycle_store.reload()
+                record = runtime.lifecycle_store.documents.get(document_id)
+                expected = request.headers.get("If-Match")
+                if expected is not None and (
+                    record is None or record.row_version != parse_if_match(expected)
+                ):
+                    raise OptimisticConcurrencyError(
+                        "document lifecycle changed; refresh before retrying"
+                    )
+                return operation(*args, **kwargs)
+
+        return guarded
+
+    return decorate
 
 
 def build_lifecycle_router(runtime: RuntimeComponents) -> APIRouter:
@@ -54,6 +87,7 @@ def build_lifecycle_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=LifecycleResponse,
         tags=["lifecycle"],
     )
+    @version_condition(runtime)
     def publish_version(
         version_id: str,
         request: Request,
@@ -88,6 +122,7 @@ def build_lifecycle_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=LifecycleResponse,
         tags=["lifecycle"],
     )
+    @version_condition(runtime)
     def rollback_document(
         document_id: str,
         body: RollbackRequest,
@@ -149,6 +184,7 @@ def build_lifecycle_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=DeletionResponse,
         tags=["lifecycle"],
     )
+    @version_condition(runtime)
     def delete_document(
         document_id: str,
         request: Request,
@@ -176,6 +212,7 @@ def build_lifecycle_router(runtime: RuntimeComponents) -> APIRouter:
         response_model=LifecycleResponse,
         tags=["lifecycle"],
     )
+    @version_condition(runtime)
     def revoke_document(
         document_id: str,
         request: Request,

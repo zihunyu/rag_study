@@ -331,7 +331,11 @@ class LowCostRealAcceptanceRunner:
                         str(case["question"]), draft, evidence
                     )
                     verified = verification.supported
-                    answer = render_verified_claims(draft.claims) if verified else ""
+                    answer = (
+                        (draft.text if draft.synthesized else render_verified_claims(draft.claims))
+                        if verified
+                        else ""
+                    )
                     citations = [
                         next(item.chunk_id for item in evidence if item.evidence_id == evidence_id)
                         for evidence_id in draft.citation_ids

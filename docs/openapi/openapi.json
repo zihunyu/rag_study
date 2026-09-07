@@ -82,6 +82,22 @@
             "title": "Clarification Fields",
             "type": "array"
           },
+          "clarification_question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clarification Question"
+          },
+          "coverage": {
+            "default": "unchecked",
+            "title": "Coverage",
+            "type": "string"
+          },
           "degraded": {
             "default": false,
             "title": "Degraded",
@@ -238,6 +254,28 @@
           "real_acceptance"
         ],
         "title": "CompleteUploadResponse",
+        "type": "object"
+      },
+      "CreateConversation": {
+        "properties": {
+          "space_id": {
+            "maxLength": 191,
+            "minLength": 1,
+            "title": "Space Id",
+            "type": "string"
+          },
+          "title": {
+            "default": "新对话",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "space_id"
+        ],
+        "title": "CreateConversation",
         "type": "object"
       },
       "CreateSpaceRequest": {
@@ -1426,17 +1464,56 @@
       "KnowledgeDocumentResponse": {
         "additionalProperties": false,
         "properties": {
+          "availability": {
+            "default": "unknown",
+            "title": "Availability",
+            "type": "string"
+          },
+          "available_actions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Available Actions",
+            "type": "array"
+          },
           "chunk_count": {
             "title": "Chunk Count",
             "type": "integer"
+          },
+          "current_version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Version Id"
           },
           "document_id": {
             "title": "Document Id",
             "type": "string"
           },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
           "filename": {
             "title": "Filename",
             "type": "string"
+          },
+          "is_answerable": {
+            "default": false,
+            "title": "Is Answerable",
+            "type": "boolean"
           },
           "job_id": {
             "anyOf": [
@@ -1448,6 +1525,17 @@
               }
             ],
             "title": "Job Id"
+          },
+          "mime_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mime Type"
           },
           "parser_revision": {
             "anyOf": [
@@ -1468,9 +1556,32 @@
             "title": "Publication State",
             "type": "string"
           },
+          "size_bytes": {
+            "default": 0,
+            "title": "Size Bytes",
+            "type": "integer"
+          },
           "space_id": {
             "title": "Space Id",
             "type": "string"
+          },
+          "unavailability_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unavailability Reasons",
+            "type": "array"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
           },
           "version_id": {
             "title": "Version Id",
@@ -1739,6 +1850,18 @@
           "trigger"
         ],
         "title": "PilotRollbackRequest",
+        "type": "object"
+      },
+      "PublicationConfirmation": {
+        "properties": {
+          "comment": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Comment",
+            "type": "string"
+          }
+        },
+        "title": "PublicationConfirmation",
         "type": "object"
       },
       "ReadinessResponse": {
@@ -2116,6 +2239,29 @@
         "title": "SecurityProjectionRequest",
         "type": "object"
       },
+      "SendTurn": {
+        "properties": {
+          "client_request_id": {
+            "maxLength": 191,
+            "minLength": 1,
+            "title": "Client Request Id",
+            "type": "string"
+          },
+          "question": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "title": "Question",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question",
+          "client_request_id"
+        ],
+        "title": "SendTurn",
+        "type": "object"
+      },
       "SpaceResponse": {
         "additionalProperties": false,
         "properties": {
@@ -2143,6 +2289,28 @@
           "status"
         ],
         "title": "SpaceResponse",
+        "type": "object"
+      },
+      "SpaceUpdate": {
+        "properties": {
+          "description": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "SpaceUpdate",
         "type": "object"
       },
       "UATCaseCreateRequest": {
@@ -2327,6 +2495,37 @@
           "result"
         ],
         "title": "UATResultRequest",
+        "type": "object"
+      },
+      "UpdateConversation": {
+        "properties": {
+          "archived": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "title": "UpdateConversation",
         "type": "object"
       },
       "UploadSessionResponse": {
@@ -2788,6 +2987,441 @@
         ]
       }
     },
+    "/api/conversations": {
+      "get": {
+        "operationId": "conversations_api_conversations_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "space_id",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Space Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response Conversations Api Conversations Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Conversations",
+        "tags": [
+          "conversations"
+        ]
+      },
+      "post": {
+        "operationId": "create_api_conversations_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 191,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateConversation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Api Conversations Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Create",
+        "tags": [
+          "conversations"
+        ]
+      }
+    },
+    "/api/conversations/{identity}": {
+      "get": {
+        "operationId": "detail_api_conversations__identity__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identity",
+            "required": true,
+            "schema": {
+              "title": "Identity",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Detail Api Conversations  Identity  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Detail",
+        "tags": [
+          "conversations"
+        ]
+      },
+      "patch": {
+        "operationId": "update_api_conversations__identity__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identity",
+            "required": true,
+            "schema": {
+              "title": "Identity",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateConversation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Api Conversations  Identity  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Update",
+        "tags": [
+          "conversations"
+        ]
+      }
+    },
+    "/api/conversations/{identity}/turns/{turn_id}": {
+      "get": {
+        "operationId": "turn_status_api_conversations__identity__turns__turn_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identity",
+            "required": true,
+            "schema": {
+              "title": "Identity",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "turn_id",
+            "required": true,
+            "schema": {
+              "title": "Turn Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Turn Status Api Conversations  Identity  Turns  Turn Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Turn Status",
+        "tags": [
+          "conversations"
+        ]
+      }
+    },
+    "/api/conversations/{identity}/turns/{turn_id}:cancel": {
+      "post": {
+        "operationId": "cancel_api_conversations__identity__turns__turn_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identity",
+            "required": true,
+            "schema": {
+              "title": "Identity",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "turn_id",
+            "required": true,
+            "schema": {
+              "title": "Turn Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Cancel Api Conversations  Identity  Turns  Turn Id  Cancel Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Cancel",
+        "tags": [
+          "conversations"
+        ]
+      }
+    },
+    "/api/conversations/{identity}/turns:stream": {
+      "post": {
+        "operationId": "send_api_conversations__identity__turns_stream_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identity",
+            "required": true,
+            "schema": {
+              "title": "Identity",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendTurn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Send",
+        "tags": [
+          "conversations"
+        ]
+      }
+    },
     "/api/document-versions/{version_id}/chunks": {
       "get": {
         "operationId": "chunks_api_document_versions__version_id__chunks_get",
@@ -2972,6 +3606,51 @@
         ]
       }
     },
+    "/api/document-versions/{version_id}/original/preview": {
+      "get": {
+        "operationId": "original_api_document_versions__version_id__original_preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "title": "Version Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Original",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
     "/api/document-versions/{version_id}/quality-report": {
       "get": {
         "operationId": "quality_report_api_document_versions__version_id__quality_report_get",
@@ -3140,6 +3819,76 @@
         "summary": "Publish Version",
         "tags": [
           "lifecycle"
+        ]
+      }
+    },
+    "/api/document-versions/{version_id}:review-and-publish": {
+      "post": {
+        "operationId": "review_publish_api_document_versions__version_id__review_and_publish_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "title": "Version Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 191,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicationConfirmation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Review Publish Api Document Versions  Version Id  Review And Publish Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Review Publish",
+        "tags": [
+          "workspace"
         ]
       }
     },
@@ -5028,6 +5777,148 @@
         ]
       }
     },
+    "/api/ingestion-jobs": {
+      "get": {
+        "operationId": "jobs_api_ingestion_jobs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "space_id",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Space Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "State",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response Jobs Api Ingestion Jobs Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Jobs",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/api/ingestion-jobs/summary": {
+      "get": {
+        "operationId": "job_summary_api_ingestion_jobs_summary_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "space_id",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Space Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Job Summary Api Ingestion Jobs Summary Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Job Summary",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
     "/api/ingestion-jobs/{job_id}": {
       "get": {
         "operationId": "job_status_api_ingestion_jobs__job_id__get",
@@ -5526,6 +6417,93 @@
         ]
       }
     },
+    "/api/spaces/overview": {
+      "get": {
+        "operationId": "overview_api_spaces_overview_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Overview Api Spaces Overview Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Overview",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/api/spaces/{space_id}": {
+      "patch": {
+        "operationId": "update_space_api_spaces__space_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "title": "Space Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpaceUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Space Api Spaces  Space Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Update Space",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
     "/api/spaces/{space_id}/documents": {
       "get": {
         "operationId": "documents_api_spaces__space_id__documents_get",
@@ -5636,7 +6614,7 @@
             "name": "limit",
             "required": false,
             "schema": {
-              "default": 100,
+              "default": 30,
               "maximum": 100,
               "minimum": 1,
               "title": "Limit",
@@ -5669,6 +6647,50 @@
                 }
               ],
               "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 255,
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "processing",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 32,
+              "title": "Processing",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "availability",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 32,
+              "title": "Availability",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "default": "updated_desc",
+              "pattern": "^updated_(asc|desc)$",
+              "title": "Sort",
+              "type": "string"
             }
           }
         ],
@@ -5707,6 +6729,64 @@
         "tags": [
           "spaces",
           "management-preview"
+        ]
+      }
+    },
+    "/api/spaces/{space_id}/documents/{document_id}/workspace": {
+      "get": {
+        "operationId": "document_workspace_api_spaces__space_id__documents__document_id__workspace_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "title": "Space Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Document Workspace Api Spaces  Space Id  Documents  Document Id  Workspace Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Document Workspace",
+        "tags": [
+          "workspace"
         ]
       }
     },
@@ -5784,6 +6864,34 @@
         "summary": "Create Upload Session",
         "tags": [
           "ingestion"
+        ]
+      }
+    },
+    "/api/system/status": {
+      "get": {
+        "operationId": "workspace_status_api_system_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Workspace Status Api System Status Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Workspace Status",
+        "tags": [
+          "health"
         ]
       }
     },

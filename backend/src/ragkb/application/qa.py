@@ -55,6 +55,7 @@ _CREDENTIAL_REQUEST_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _NUMERIC_REVIEW_REQUIRED = "NUMERIC_FACT_REQUIRES_SEMANTIC_REVIEW"
+_SURFACE_REVIEW_REQUIRED = "ANSWER_SURFACE_REQUIRES_SEMANTIC_REVIEW"
 
 
 def _normalized_fact_text(value: str) -> str:
@@ -64,7 +65,7 @@ def _normalized_fact_text(value: str) -> str:
 class DeterministicClaimVerifier:
     """Fail-closed structural checks that run before any answer is marked verified."""
 
-    revision = "deterministic-claim-verifier:structured-numeric-and-conflicts"
+    revision = "deterministic-claim-verifier:surface-numeric-and-conflicts-v2"
 
     def __init__(self, allowed_output_domains: tuple[str, ...] = ()) -> None:
         self.allowed_output_domains = frozenset(
@@ -94,7 +95,7 @@ class DeterministicClaimVerifier:
                 answer_claims_covered=False,
             )
         coverage = verify_answer_claim_coverage(draft.text, claims)
-        if not coverage.complete:
+        if not coverage.complete and not draft.synthesized:
             return VerificationResult(
                 tuple(
                     ClaimVerdict(
@@ -127,6 +128,31 @@ class DeterministicClaimVerifier:
                 citation_ids_valid=False,
             )
         verdicts: list[ClaimVerdict] = []
+        if draft.synthesized:
+            # A summary is not established by string matching atomic claims.
+            # Inspect its complete surface before deferring semantic coverage.
+            inline_ids = re.findall(r"\[(E[^\]\s]*)\]", draft.text)
+            used_ids = {identity for claim in claims for identity in claim.evidence_ids}
+            invalid_inline = not inline_ids or any(i not in used_ids for i in inline_ids)
+            source_text = "\n".join(available[i].text for i in used_ids if i in available)
+            surface_reason = None
+            if invalid_inline:
+                surface_reason = "ANSWER_INLINE_CITATION_INVALID"
+            elif _CREDENTIAL_REQUEST_PATTERN.search(draft.text):
+                surface_reason = "UNSUPPORTED_CREDENTIAL_REQUEST"
+            elif any(url not in source_text for url in _URL_PATTERN.findall(draft.text)):
+                surface_reason = "UNSUPPORTED_EXTERNAL_URL"
+            elif any(
+                (urlparse(url).hostname or "").casefold().strip(".")
+                not in self.allowed_output_domains
+                for url in _URL_PATTERN.findall(draft.text)
+            ):
+                surface_reason = "OUTPUT_URL_DOMAIN_NOT_ALLOWED"
+            verdicts.append(
+                ClaimVerdict(
+                    draft.text, (), "INSUFFICIENT", surface_reason or _SURFACE_REVIEW_REQUIRED
+                )
+            )
         for claim in claims:
             cited = [available.get(evidence_id) for evidence_id in claim.evidence_ids]
             if not cited or any(item is None for item in cited):
@@ -172,7 +198,7 @@ class DeterministicClaimVerifier:
         return VerificationResult(
             tuple(verdicts),
             self.revision,
-            answer_claims_covered=True,
+            answer_claims_covered=not draft.synthesized,
             evidence_support_verified=all(item.verdict == "SUPPORTED" for item in verdicts),
             conflicting_evidence_ids=conflicting_sources(
                 evidence, at_epoch=int(time.time()), claims=claims
@@ -192,21 +218,29 @@ class CompositeClaimVerifier:
         self, question: str, draft: DraftAnswer, evidence: tuple[Evidence, ...]
     ) -> VerificationResult:
         structural = self.structural.verify(question, draft, evidence)
-        numeric_review = (
+        surface_review = (
+            draft.synthesized
+            and not structural.answer_claims_covered
+            and any(v.reason_code == _SURFACE_REVIEW_REQUIRED for v in structural.verdicts)
+        )
+        review_reasons = {_NUMERIC_REVIEW_REQUIRED}
+        if surface_review:
+            review_reasons.add(_SURFACE_REVIEW_REQUIRED)
+        semantic_review = (
             bool(structural.verdicts)
             and structural.citation_ids_valid
-            and structural.answer_claims_covered
+            and (structural.answer_claims_covered or surface_review)
             and structural.conflict_checked
             and structural.policy_checked
             and not structural.conflicting_evidence_ids
-            and any(v.reason_code == _NUMERIC_REVIEW_REQUIRED for v in structural.verdicts)
+            and any(v.reason_code in review_reasons for v in structural.verdicts)
             and all(
                 v.verdict == "SUPPORTED"
-                or (v.verdict == "INSUFFICIENT" and v.reason_code == _NUMERIC_REVIEW_REQUIRED)
+                or (v.verdict == "INSUFFICIENT" and v.reason_code in review_reasons)
                 for v in structural.verdicts
             )
         )
-        if not structural.supported and not numeric_review:
+        if not structural.supported and not semantic_review:
             return VerificationResult(
                 structural.verdicts,
                 self.revision,
@@ -223,10 +257,11 @@ class CompositeClaimVerifier:
             self.revision,
             citation_ids_valid=structural.citation_ids_valid and semantic.citation_ids_valid,
             answer_claims_covered=(
-                structural.answer_claims_covered and semantic.answer_claims_covered
+                (structural.answer_claims_covered or surface_review)
+                and semantic.answer_claims_covered
             ),
             evidence_support_verified=(
-                (structural.evidence_support_verified or numeric_review)
+                (structural.evidence_support_verified or semantic_review)
                 and semantic.evidence_support_verified
             ),
             conflict_checked=structural.conflict_checked and semantic.conflict_checked,
@@ -286,6 +321,8 @@ class TrustedQAService:
             clarification_fields=(
                 package.clarification_fields if status is AnswerStatus.NEEDS_CLARIFICATION else ()
             ),
+            clarification_question=package.clarification_question,
+            coverage=package.coverage,
         )
         self.repository.save_run(package, result)
         return result
@@ -545,9 +582,10 @@ class TrustedQAService:
                 warnings=tuple(item.reason_code for item in verification.verdicts),
             )
         verified_draft = DraftAnswer(
-            render_verified_claims(draft.claims),
+            draft.text if draft.synthesized else render_verified_claims(draft.claims),
             claim_citation_ids,
             draft.claims,
+            synthesized=draft.synthesized,
         )
         if not verified_draft.text:
             return self._save(

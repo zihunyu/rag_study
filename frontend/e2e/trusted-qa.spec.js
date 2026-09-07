@@ -1,74 +1,90 @@
-import { expect, test } from "@playwright/test";
-import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { expect, test } from '@playwright/test';
+import { execFileSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
 
-test("ask progress releases the verified answer and citation", async ({ page }) => {
-  await page.route("**/api/ask:stream", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "text/event-stream",
-      body:
-        'event: progress\ndata: {"stage":"retrieval_started"}\n\n' +
-        'event: progress\ndata: {"stage":"verified"}\n\n' +
-        'event: result\ndata: {"rag_run_id":"run-1","status":"answered",' +
-        '"answer":"保修期为三年。","citations":[{"evidence_id":"E1",' +
-        '"source_url":"/api/source"}],"verified":true}\n\n',
-    });
+test.setTimeout(120000);
+test.describe.configure({ mode: 'serial' });
+function worker() {
+  const output = execFileSync(process.env.RAGKB_E2E_WORKER, ['--once'], { cwd: process.cwd(), env: process.env, stdio: 'pipe' }).toString();
+  expect(output).toContain('"failed": false');
+}
+async function createSpace(page, name) {
+  await page.goto('/'); await page.getByRole('button', { name: '创建知识库', exact: true }).first().click();
+  await page.getByLabel('知识库名称').fill(name); await page.getByRole('button', { name: '创建知识库', exact: true }).last().click();
+  await expect(page).toHaveURL(/knowledge-bases\/[^/]+\/documents/); return page.url().split('/').at(-2);
+}
+async function publish(page) {
+  await page.getByRole('button', { name: '确认发布', exact: true }).first().click();
+  await page.getByRole('dialog', { name: '确认发布', exact: true }).getByRole('button', { name: '确认发布', exact: true }).click();
+  await expect(page.locator('.document-status-strip')).toContainText('可问答');
+}
+
+test('management upload, quality, publication, multi-turn citations and version rollback', async ({ page }, testInfo) => {
+  const space = await createSpace(page, `Playwright 工作台 ${Date.now()}`);
+  const policy = testInfo.outputPath('policy.md'), second = testInfo.outputPath('notes.md'), invalid = testInfo.outputPath('unsupported.exe');
+  writeFileSync(policy, '# 星云 X1 产品政策\n星云 X1 的保修期为三年。星云 X1 支持上门维修服务。\n');
+  writeFileSync(second, '# 资料维护\n知识库资料由产品团队定期核对更新。\n'); writeFileSync(invalid, 'invalid format');
+  await page.getByRole('button', { name: '上传文档', exact: true }).first().click();
+  await page.getByTestId('upload-files').setInputFiles([policy, second, invalid]);
+  await expect(page.locator('.upload-row').filter({ hasText: 'policy.md' })).toContainText('已提交处理');
+  await expect(page.locator('.upload-row').filter({ hasText: 'notes.md' })).toContainText('已提交处理');
+  await expect(page.locator('.upload-row').filter({ hasText: 'unsupported.exe' })).toContainText('不支持这个文件类型');
+  worker(); worker();
+  await page.locator('.upload-row').filter({ hasText: 'policy.md' }).getByRole('link', { name: '查看已上传文档' }).click();
+  await expect(page.getByRole('heading', { name: '发布前，检查你的知识' })).toBeVisible();
+  await expect(page.locator('.quality-metrics')).toContainText('来源位置覆盖率');
+  await page.getByRole('button', { name: '阅读解析内容' }).click();
+  await expect(page.locator('.content-chunk').first()).toContainText('星云 X1');
+  await page.getByRole('button', { name: '质量检查', exact: true }).click(); await publish(page);
+  const documentUrl = page.url();
+  await page.goto(`/chat?space=${space}`);
+  await page.getByRole('textbox', { name: '向知识库提问' }).fill('星云 X1 保修多久？'); await page.getByRole('button', { name: '发送问题' }).click();
+  await expect(page.locator('.assistant-body .markdown-content').first()).toContainText('三年');
+  await page.getByRole('textbox', { name: '向知识库提问' }).fill('它支持上门维修吗？'); await page.getByRole('button', { name: '发送问题' }).click();
+  await expect(page.locator('.assistant-label')).toHaveCount(2); await expect(page.locator('.answer-processing')).toHaveCount(0);
+  await expect(page.locator('.resolved-question')).toContainText('星云 X1');
+  await page.locator('.citation-button').first().click(); await expect(page.locator('.source-text')).toContainText('三年');
+  await page.screenshot({path:testInfo.outputPath('conversation-with-source.png'),fullPage:true});
+  await page.getByRole('button', { name: '关闭来源' }).click();
+  const conversationUrl = page.url(); await page.reload(); await expect(page.locator('.conversation-turn')).toHaveCount(2);
+  await page.goto(documentUrl);
+  const newPolicy = testInfo.outputPath('policy-v2.md'); writeFileSync(newPolicy, '# 星云 X1 更新政策\n星云 X1 的保修期为五年。星云 X1 支持上门维修服务。\n');
+  await page.getByRole('button', { name: '文档操作' }).click(); await page.getByRole('button', { name: '上传新版本', exact: true }).click();
+  await page.getByTestId('upload-files').setInputFiles(newPolicy);
+  await expect(page.locator('.upload-row').filter({ hasText: 'policy-v2.md' })).toContainText('已提交处理'); worker();
+  await page.getByRole('button', { name: '完成', exact: true }).click(); await page.reload();
+  await expect(page.getByRole('combobox', { name: '文档版本' })).toContainText('版本 2'); await publish(page);
+  await page.getByRole('button', { name: '版本历史', exact: true }).click();
+  await page.locator('.version-row').filter({ hasText: '版本 1' }).getByRole('button', { name: '回滚', exact: true }).click();
+  await page.getByRole('dialog', { name: '回滚到此版本' }).getByRole('button', { name: '回滚到此版本', exact: true }).click();
+  await expect(page.locator('.document-status-strip')).toContainText('可问答');
+  await page.getByRole('button', { name: '文档操作' }).click(); await page.getByRole('button', { name: '撤回文档', exact: true }).click();
+  await page.getByRole('dialog', { name: '撤回文档' }).getByRole('button', { name: '撤回文档', exact: true }).click();
+  await expect(page.locator('.document-status-strip')).toContainText('已撤回');
+  await page.goto(conversationUrl); await expect(page.locator('.assistant-body .markdown-content')).toHaveCount(0);
+  await expect(page.locator('.answer-notice').first()).toContainText('来源已撤回');
+});
+
+test('server task survives reload and can be cancelled and retried', async ({ page }, testInfo) => {
+  await createSpace(page, `Playwright 任务 ${Date.now()}`);
+  const document = testInfo.outputPath('queue-test.md'); writeFileSync(document, '# 任务中心测试\n这份文档用于验证任务取消与重试。\n');
+  await page.getByRole('button', { name: '上传文档', exact: true }).first().click(); await page.getByTestId('upload-files').setInputFiles(document);
+  await expect(page.locator('.upload-row').filter({ hasText: 'queue-test.md' })).toContainText('已提交处理');
+  await page.goto('/tasks'); await page.reload();
+  const task = page.locator('.task-card').filter({ hasText: 'queue-test.md' }); await expect(task).toContainText('等待处理');
+  await task.getByRole('button', { name: '取消', exact: true }).click(); await expect(task).toContainText('已取消');
+  await task.getByRole('button', { name: '重试', exact: true }).click(); await expect(task).toContainText('等待处理');
+});
+
+for (const width of [390, 1024, 1440]) {
+  test(`responsive workspace stays usable at ${width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 }); await page.goto('/');
+    await expect(page.getByRole('heading', { name: '你的知识，从这里连接。' })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({path:testInfo.outputPath(`workspace-${width}.png`),fullPage:true});
+    await page.getByRole('button', { name: '创建知识库', exact: true }).first().click(); await expect(page.getByRole('dialog', { name: '创建知识库', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '取消', exact: true }).click(); await page.goto('/chat');
+    await expect(page.getByRole('textbox', { name: '向知识库提问' })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   });
-  await page.goto("/");
-  await page.locator("textarea").fill("保修期多久？");
-  await page.getByRole("button", { name: "从此知识库回答" }).click();
-
-  await expect(page.getByText("保修期为三年。")).toBeVisible();
-  await expect(page.getByRole("link", { name: /E1/ })).toBeVisible();
-});
-
-test("upload, worker indexing, publish, ask, and citation use the real local backend", async ({
-  page,
-}, testInfo) => {
-  const runtimeConfig = await page.request.get(`http://127.0.0.1:${process.env.RAGKB_E2E_WEB_PORT || "4173"}/runtime-config.js`);
-  expect(runtimeConfig.ok()).toBeTruthy();
-  expect(await runtimeConfig.text()).toContain(`http://127.0.0.1:${process.env.RAGKB_E2E_API_PORT || "8000"}/api`);
-  const policy = testInfo.outputPath("policy.md");
-  const content = Buffer.from("# 产品政策\nThinkPad P16 Gen 3 21FA 的保修期为三年。\n", "utf8");
-  writeFileSync(policy, content);
-  await page.goto("/");
-  await page.getByRole("button", { name: "知识库", exact: true }).click();
-  await page.getByTestId("new-space-name").fill(`Playwright 产品库 ${Date.now()}`);
-  await page.getByTestId("create-space-submit").click();
-  await page.getByTestId("initial-upload-file").setInputFiles(policy);
-  await expect(page.getByTestId("initial-upload-hash")).toHaveText(
-    createHash("sha256").update(content).digest("hex"),
-  );
-  await page.getByTestId("initial-upload-submit").click();
-  await expect(page.getByTestId("initial-upload-result")).toContainText(/Job ID.*01a/);
-
-  const workerOutput = execFileSync(
-    process.env.RAGKB_E2E_WORKER,
-    ["--once"],
-    {
-      cwd: process.cwd(),
-      env: process.env,
-      stdio: "pipe",
-    },
-  ).toString();
-  expect(workerOutput).toContain('"failed": false');
-  await expect(page.getByText("解析入库完成", { exact: false })).toBeVisible();
-  await expect(page.getByTestId("document-list")).toContainText("policy.md");
-  await page.getByTestId("view-chunks").click();
-  await expect(page.getByTestId("chunk-panel")).toContainText("ThinkPad P16 Gen 3 21FA 的保修期为三年。");
-  await page.getByPlaceholder("复核说明").fill("browser e2e");
-  await page.getByRole("button", { name: "提交复核", exact: true }).click();
-  await page.getByRole("button", { name: "发布文档", exact: true }).click();
-  await expect(page.getByTestId("document-list")).toContainText("SERVING");
-
-  await page.getByRole("button", { name: "知识问答" }).click();
-  await page.locator("textarea").fill("ThinkPad 21FA 保修期多久？");
-  await page.getByRole("button", { name: "从此知识库回答" }).click();
-  await expect(page.getByText("设备保修期为三年。", { exact: false })).toBeVisible();
-  const citation = page.getByRole("link", { name: /E1/ }).first();
-  await expect(citation).toBeVisible();
-  await citation.click();
-  await expect(page.locator(".source-content")).toContainText("保修期为三年");
-});
+}

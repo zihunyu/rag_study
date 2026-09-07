@@ -77,6 +77,15 @@ class KnowledgeDocumentResponse(StrictModel):
     parser_revision: str | None
     chunk_count: int
     job_id: str | None
+    availability: str = "unknown"
+    is_answerable: bool = False
+    unavailability_reasons: list[str] = Field(default_factory=list)
+    available_actions: list[str] = Field(default_factory=list)
+    updated_at: float | None = None
+    size_bytes: int = 0
+    mime_type: str | None = None
+    current_version_id: str | None = None
+    error_code: str | None = None
 
 
 class DocumentChunkResponse(StrictModel):
@@ -246,6 +255,8 @@ class AskResponse(StrictModel):
     degraded: bool = False
     retryable: bool = False
     clarification_fields: list[str] = Field(default_factory=list)
+    clarification_question: str | None = None
+    coverage: str = "unchecked"
 
 
 class EvidenceSourceResponse(StrictModel):

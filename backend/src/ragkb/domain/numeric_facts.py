@@ -448,7 +448,14 @@ def check_numeric_facts(claim: str, sources: tuple[str, ...]) -> NumericCheck:
     for fact in expected.facts:
         if not fact.certain:
             continue
-        bound = tuple(candidate for candidate in facts if candidate.subject == fact.subject)
+        # Anonymous values in lists/coordinates have no object binding. Treating
+        # every such value as the same subject falsely contradicts valid tuples.
+        # They still require semantic checking of order, labels and conditions.
+        bound = tuple(
+            candidate
+            for candidate in facts
+            if fact.subject != ("", "") and candidate.subject == fact.subject
+        )
         if not bound and fact.subject[0]:
             qualified = tuple(
                 candidate

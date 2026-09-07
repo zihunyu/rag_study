@@ -28,10 +28,12 @@ class RedisVerifiedAnswerCache:
         answer = value.get("answer")
         citation_ids = value.get("citation_ids")
         claims = value.get("claims")
+        synthesized = value.get("synthesized", False)
         if (
             not isinstance(answer, str)
             or not isinstance(citation_ids, list)
             or not isinstance(claims, list)
+            or not isinstance(synthesized, bool)
         ):
             return None
         try:
@@ -44,7 +46,9 @@ class RedisVerifiedAnswerCache:
             return None
         if len(parsed_claims) != len(claims):
             return None
-        return DraftAnswer(answer, tuple(map(str, citation_ids)), parsed_claims)
+        return DraftAnswer(
+            answer, tuple(map(str, citation_ids)), parsed_claims, synthesized=synthesized
+        )
 
     def put(self, package: EvidencePackage, draft: DraftAnswer) -> None:
         if draft.status is not DraftAnswerStatus.ANSWERED:
@@ -56,6 +60,7 @@ class RedisVerifiedAnswerCache:
                 {
                     "status": draft.status.value,
                     "answer": draft.text,
+                    "synthesized": draft.synthesized,
                     "citation_ids": list(draft.citation_ids),
                     "claims": [
                         {"text": claim.text, "evidence_ids": list(claim.evidence_ids)}

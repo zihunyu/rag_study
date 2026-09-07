@@ -77,6 +77,16 @@ def test_publication_outbox_primary_key_fits_mysql_utf8mb4_index_limit() -> None
     assert "idempotency_key VARCHAR(191)" in statement
 
 
+def test_event_ordering_migration_preserves_microsecond_timestamps():
+    # The adapter's event timestamp must fit on fresh installs AND existing databases.
+    migrations = dict(MYSQL_MIGRATIONS)
+    statement = migrations["widen_governance_event_ordinal"]
+    assert "MODIFY COLUMN ordinal BIGINT UNSIGNED NOT NULL DEFAULT 0" in statement
+    assert MYSQL_MIGRATIONS[-1][0] == "widen_governance_event_ordinal"
+    assert "ordinal INT UNSIGNED" in migrations["create_governance_entities"]
+    assert 2**32 < int(1788739200.123456 * 1_000_000) < 2**64
+
+
 def test_existing_incompatible_database_is_rejected_before_business_ddl() -> None:
     connection = _MigrationConnection()
     connection.applied.add("historical-schema")

@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from ragkb.infrastructure.ingestion_fencing import check_sqlite_fence
+from ragkb.infrastructure.workspace_schema import sqlite_workspace_schema
 
 SCHEMA_REVISION = "ragkb-current-schema"
 
@@ -507,6 +508,9 @@ CREATE INDEX IF NOT EXISTS idx_reference_subject
 CREATE INDEX IF NOT EXISTS idx_reference_document
     ON reference_tokens(document_id, revoked);
 """
+
+
+SCHEMA_SQL += sqlite_workspace_schema()
 
 
 class SQLiteDatabase:

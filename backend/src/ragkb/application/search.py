@@ -187,7 +187,7 @@ def _dedupe_context(chunk: AuthorizedChunk) -> tuple[object, ...]:
 
 
 class HybridSearchService:
-    revision = "hybrid-search-service:fact-preserving-dedup"
+    revision = "hybrid-search-service:context-selection-v2"
 
     def __init__(
         self,
@@ -478,3 +478,28 @@ class HybridSearchService:
                 for item in (chunk, *duplicates[chunk.chunk_id])
             ),
         )
+
+    def expand_parents(
+        self, sources: Sequence[SearchSource], context: SearchContext
+    ) -> tuple[SearchSource, ...]:
+        """Expand only currently readable, fully located parents of this result pool."""
+        children = self.control_plane.authorize_chunks([item.chunk_id for item in sources], context)
+        parent_ids = list(
+            dict.fromkeys(
+                item.parent_chunk_id for item in children.values() if item.parent_chunk_id
+            )
+        )
+        parents = self.control_plane.authorize_chunks(parent_ids, context)
+        accepted: dict[str, SearchSource] = {}
+        for child in children.values():
+            parent = parents.get(child.parent_chunk_id or "")
+            if (
+                parent is not None
+                and parent.locator.get("source_spans")
+                and parent.document_id == child.document_id
+                and parent.document_version_id == child.document_version_id
+                and self._currently_authorized(child, context)
+                and self._currently_authorized(parent, context)
+            ):
+                accepted[parent.chunk_id] = _source(parent)
+        return tuple(accepted.values())

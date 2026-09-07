@@ -1,592 +1,217 @@
-import { flushPromises, mount } from "@vue/test-utils";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { webcrypto } from "node:crypto";
-
-import App from "./App.vue";
-
-vi.mock("./auth.js", () => ({
-  initializeAuth: async () => ({ profile: { sub: "synthetic-reader" } }),
-  accessToken: async () => "synthetic-browser-token",
-  oidcEnabled: true, signIn: vi.fn(), signOut: vi.fn(),
-}));
-
-function sseResponse(payload) {
-  const encoder = new TextEncoder();
-  return new Response(
-    new ReadableStream({
-      start(controller) {
-        controller.enqueue(encoder.encode(payload));
-        controller.close();
-      },
-    }),
-    { status: 200, headers: { "Content-Type": "text/event-stream" } },
-  );
-}
-
-function button(wrapper, label) {
-  return wrapper.findAll("button").find((item) => item.text().includes(label));
-}
-
-function jsonResponse(payload, status = 200, headers = {}) {
-  return new Response(JSON.stringify(payload), {
-    status,
-    headers: { "Content-Type": "application/json", ...headers },
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mount, flushPromises } from '@vue/test-utils';
+import { createPinia, setActivePinia } from 'pinia';
+import { createRouter, createMemoryHistory } from 'vue-router';
+import App from './App.vue';
+import LibrariesPage from './pages/LibrariesPage.vue';
+import LibraryPage from './pages/LibraryPage.vue';
+import TasksPage from './pages/TasksPage.vue';
+import ChatPage from './pages/ChatPage.vue';
+import DocumentPage from './pages/DocumentPage.vue';
+import SystemPage from './pages/SystemPage.vue';
+import { confirmPublication } from './api.js';
+import MarkdownContent from './components/MarkdownContent.vue';
+import { useWorkspace } from './stores/workspace.js';
+import { useUploads } from './stores/uploads.js';
+import { useConversations } from './stores/conversations.js';
+vi.mock('./fileHash.js', () => ({ sha256File: vi.fn(async () => 'a'.repeat(64)) }));
+const spaces = [{ id: 'a', name: '产品手册', description: '产品知识', document_count: 3, answerable_count: 1, pending_count: 2, processing_count: 0, chunk_count: 8, updated_ms: 0 }, { id: 'b', name: '团队制度', description: '', document_count: 0, answerable_count: 0, pending_count: 0, processing_count: 0, chunk_count: 0, updated_ms: 0 }];
+const capabilities = { accepted_extensions: ['.md'], file_mime_types: { '.md': 'text/markdown' }, max_file_size_bytes: 10000 };
+const json = (body, status = 200, headers = {}) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', ...headers } });
+const documentRow = (name, state = 'pending_review') => ({ document_id: name, space_id: 'a', filename: name, version_id: `v-${name}`, version_no: 1, processing_state: 'VALIDATED', availability: state, is_answerable: state === 'available', chunk_count: 2, size_bytes: 100, available_actions: ['view', 'review_publish'], updated_at: 0 });
+let wrapper, fetchMock, routes, requests;
+beforeEach(() => {
+  localStorage.clear(); sessionStorage.clear(); requests = [];
+  HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  HTMLDialogElement.prototype.close = function () { this.open = false; };
+  Element.prototype.scrollIntoView = vi.fn();
+  routes = new Map();
+  fetchMock = vi.fn(async (url, options = {}) => {
+    const target = new URL(url, 'http://localhost'); requests.push({ path: target.pathname, query: target.searchParams, options });
+    const handler = routes.get(target.pathname); if (handler) return handler(target, options);
+    if (target.pathname === '/api/spaces/overview') return json({ items: spaces, totals: { document_count: 3, answerable_count: 1, pending_count: 2 } });
+    if (target.pathname === '/api/capabilities') return json(capabilities);
+    if (target.pathname === '/api/conversations') return json([]);
+    if (target.pathname === '/api/ingestion-jobs/summary') return json({ counts: { QUEUED: 1 } });
+    if (target.pathname === '/api/ingestion-jobs') return json([]);
+    return json([]);
   });
-}
-
-function deferred() {
-  let resolve, reject;
-  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
-  return { promise, resolve, reject };
-}
-
-function uploadFile(name, content, read) {
-  const bytes = new TextEncoder().encode(content);
-  const file = new File([content], name, { type: "text/plain" });
-  Object.defineProperty(file, "slice", { value: (start, end) => ({
-    arrayBuffer: read ?? (async () => bytes.slice(start, end).buffer),
-  }) });
-  return file;
-}
-
-async function chooseFile(input, file) {
-  Object.defineProperty(input.element, "files", { value: file ? [file] : [], configurable: true });
-  await input.trigger("change");
-  await flushPromises();
-}
-
-describe("question disposition results", () => {
-  it.each([
-    ["needs_clarification", ["subject", "region"], "请补充具体对象或制度名称、适用地区后重新提问。"],
-    ["out_of_scope", [], "暂不支持代办、交易或执行外部操作"],
-  ])("shows an actionable %s message without treating it as missing evidence", async (status, fields, message) => {
-    vi.stubGlobal("fetch", vi.fn(async (url) => {
-      if (String(url).endsWith("/spaces")) return jsonResponse([{ id: "a", name: "知识库" }]);
-      if (String(url).includes("/ask")) return sseResponse('event: result\ndata: '+JSON.stringify({
-        rag_run_id: "question-assessment", status, answer: null, verified: true,
-        clarification_fields: fields, citations: [], warnings: [], retryable: false,
-      })+'\n\n');
-      return jsonResponse([]);
-    }));
-    const wrapper = mount(App);
-    await flushPromises();
-    await wrapper.find("textarea").setValue("它的保修期多久？");
-    await button(wrapper, "从此知识库回答").trigger("click");
-    await flushPromises();
-    expect(wrapper.text()).toContain(message);
-    expect(wrapper.text()).not.toContain("知识库未提供足够证据");
-    expect(wrapper.findAll('a[href*="/sources/"]')).toHaveLength(0);
-    wrapper.unmount();
-  });
+  vi.stubGlobal('fetch', fetchMock);
 });
-
-describe("selection identity regressions", () => {
-  it.each([false, true])("keeps the latest citation within one answer (old failure: %s)", async (oldFails) => {
-    const old = deferred(), latest = deferred();
-    vi.stubGlobal("fetch", vi.fn(async (url) => {
-      const path = String(url);
-      if (path.endsWith("/spaces")) return jsonResponse([{ id: "a", name: "库 A" }]);
-      if (path.endsWith("/sources/E1")) return old.promise;
-      if (path.endsWith("/sources/E2")) return latest.promise;
-      if (path.includes("/ask")) return sseResponse('event: progress\ndata: {"stage":"verified"}\n\nevent: result\ndata: '+JSON.stringify({
-        rag_run_id: "same-answer", status: "answered", answer: "回答", verified: true,
-        citations: ["E1", "E2"].map((id) => ({ evidence_id: id, source_url: `/api/sources/${id}`, locator: {} })),
-      })+'\n\n');
-      return jsonResponse([]);
-    }));
-    const wrapper = mount(App);
-    await flushPromises();
-    await wrapper.find("textarea").setValue("问题");
-    await button(wrapper, "从此知识库回答").trigger("click");
-    await flushPromises();
-    await wrapper.get('a[href$="/sources/E1"]').trigger("click");
-    await wrapper.get('a[href$="/sources/E2"]').trigger("click");
-    latest.resolve(jsonResponse({ text: "latest citation E2" }));
-    await flushPromises();
-    old.resolve(jsonResponse({ text: "stale citation E1" }, oldFails ? 503 : 200));
-    await flushPromises();
-    expect(wrapper.get(".source-content").text()).toContain("latest citation E2");
-    expect(wrapper.text()).not.toContain("stale citation E1");
-    expect(wrapper.text()).not.toContain("SOURCE_UNAVAILABLE");
-    wrapper.unmount();
+afterEach(() => { wrapper?.unmount(); wrapper = null; vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+async function app(path = '/knowledge-bases') {
+  const pinia = createPinia(); setActivePinia(pinia);
+  const router = createRouter({ history: createMemoryHistory(), routes: [
+    { path: '/knowledge-bases', component: LibrariesPage, meta: { section: '知识库' } },
+    { path: '/knowledge-bases/:spaceId/documents/:documentId', component: DocumentPage, meta: { section: '知识库' } },
+    { path: '/knowledge-bases/:spaceId/:view?', component: LibraryPage, meta: { section: '知识库' } },
+    { path: '/tasks', component: TasksPage, meta: { section: '任务中心' } },
+    { path: '/chat/:conversationId?', component: ChatPage, meta: { section: '知识问答' } },
+    { path: '/system', component: SystemPage },
+  ] });
+  await router.push(path); await router.isReady();
+  wrapper = mount(App, { global: { plugins: [pinia, router] } }); await flushPromises();
+  return { router, pinia };
+}
+describe('knowledge workspace', () => {
+  it('shows real counts, management navigation and no login initialization', async () => {
+    await app(); expect(wrapper.text()).toContain('产品手册'); expect(wrapper.findAll('.metric-number').map(el => el.text())).toEqual(['2', '3', '1READY', '2']);
+    expect(wrapper.text()).not.toMatch(/登录|退出|OIDC/); expect(wrapper.findAll('.nav-item')).toHaveLength(4);
+    await wrapper.get('input[aria-label="搜索知识库"]').setValue('制度'); expect(wrapper.findAll('.library-card')).toHaveLength(1);
+  });
+  it('creates a knowledge base and persists its description before navigation', async () => {
+    routes.set('/api/spaces', (_, options) => { expect(JSON.parse(options.body).name).toBe('新品资料'); return json({ id: 'new', name: '新品资料' }, 201); });
+    routes.set('/api/spaces/new', (_, options) => { expect(options.method).toBe('PATCH'); expect(JSON.parse(options.body).description).toBe('最新产品'); return json({ id: 'new' }); });
+    const { router } = await app(); await wrapper.get('.page-heading .primary').trigger('click');
+    await wrapper.get('#space-name').setValue('新品资料'); await wrapper.get('#space-description').setValue('最新产品'); await wrapper.get('form').trigger('submit'); await flushPromises();
+    expect(router.currentRoute.value.path).toBe('/knowledge-bases/new/documents');
+  });
+  it('defaults to management scope and filters before cursor pagination', async () => {
+    routes.set('/api/spaces/a/documents/preview', target => json(target.searchParams.has('cursor') ? [documentRow('草稿二.md')] : [documentRow('草稿一.md')], 200, target.searchParams.has('cursor') ? {} : { 'X-Next-Cursor': 'page2' }));
+    await app('/knowledge-bases/a/documents'); expect(wrapper.text()).toContain('草稿一.md'); expect(wrapper.text()).toContain('待复核');
+    expect(requests.find(row => row.path.endsWith('/preview')).query.get('limit')).toBe('30');
+    await wrapper.get('.table-footer button').trigger('click'); await flushPromises(); expect(wrapper.findAll('tbody tr')).toHaveLength(2);
+    expect(requests.find(row => row.query.get('cursor') === 'page2')).toBeTruthy();
+  });
+  it('ignores late document results after quickly switching knowledge bases', async () => {
+    let finishA;
+    routes.set('/api/spaces/a/documents/preview', () => new Promise(resolve => { finishA = resolve; }));
+    routes.set('/api/spaces/b/documents/preview', () => json([documentRow('正确的文档.md')]));
+    const { router } = await app('/knowledge-bases/a/documents'); await router.push('/knowledge-bases/b/documents'); await flushPromises();
+    finishA(json([documentRow('过期的文档.md')])); await flushPromises();
+    expect(wrapper.text()).toContain('正确的文档.md'); expect(wrapper.text()).not.toContain('过期的文档.md');
+  });
+  it('restores processing jobs from the server on page load', async () => {
+    routes.set('/api/ingestion-jobs', () => json([{ id: 'j1', filename: '处理中.md', space_id: 'a', document_id: 'd', state: 'QUEUED', attempt: 0, max_attempts: 4, available_actions: ['cancel'] }]));
+    await app('/tasks'); expect(wrapper.text()).toContain('处理中.md'); expect(wrapper.text()).toContain('等待处理');
+    expect(requests.some(row => row.path === '/api/ingestion-jobs')).toBe(true);
+  });
+  it('does not render HTML from document contents', () => {
+    wrapper = mount(MarkdownContent, { props: { text: '<img src=x onerror=alert(1)>\n[bad](javascript:alert(1))\n\n| A | B |\n|---|---|\n| one | two |' } });
+    expect(wrapper.find('img').exists()).toBe(false); expect(wrapper.find('a').exists()).toBe(false); expect(wrapper.find('table').exists()).toBe(true);
   });
 
-  it("accepts the same file's pending digest after switching knowledge bases", async () => {
-    const read = deferred();
-    vi.stubGlobal("fetch", vi.fn(async (url) => String(url).endsWith("/spaces")
-      ? jsonResponse([{ id: "a", name: "库 A" }, { id: "b", name: "库 B" }]) : jsonResponse([])));
-    const wrapper = mount(App);
+  it('waits for actual quality summaries before enabling batch publication', async () => {
+    let finish;
+    routes.set('/api/spaces/a/documents/preview', () => json([documentRow('policy.md')]));
+    routes.set('/api/document-versions/v-policy.md/quality-report', () => new Promise(resolve => { finish = resolve; }));
+    await app('/knowledge-bases/a/documents');
+    await wrapper.get('input[aria-label="选择 policy.md"]').setValue(true);
+    await wrapper.findAll('button').find(b => b.text() === '检查并批量发布').trigger('click');
+    const confirm = () => wrapper.findAll('button').find(b => b.text() === '已检查质量，确认发布');
+    expect(confirm().element.disabled).toBe(true);
+    expect(wrapper.text()).toContain('读取质量报告');
+    finish(json({ node_count: 12, locator_coverage: 0.75, issue_codes: ['LOCATOR_MISSING'], disposition: 'READY_FOR_REVIEW' }));
     await flushPromises();
-    await button(wrapper, "知识库").trigger("click");
-    await chooseFile(wrapper.get('[data-testid="initial-upload-file"]'), uploadFile("policy.txt", "policy", () => read.promise));
-    await wrapper.get('[data-testid="global-space-select"]').setValue("b");
-    await flushPromises();
-    expect(wrapper.text()).toContain("正在分块计算文件哈希");
-    expect(wrapper.text()).not.toContain("文件已就绪");
-    expect(wrapper.get('[data-testid="initial-upload-submit"]').attributes("disabled")).toBeDefined();
-    read.resolve(new TextEncoder().encode("policy").buffer);
-    await vi.waitFor(() => expect(wrapper.get('[data-testid="initial-upload-hash"]').text()).toHaveLength(64));
-    expect(wrapper.get('[data-testid="initial-upload-submit"]').attributes("disabled")).toBeUndefined();
-    expect(wrapper.text()).toContain("文件已就绪");
-    expect(wrapper.get('[data-testid="global-space-select"]').element.value).toBe("b");
-    wrapper.unmount();
+    expect(wrapper.text()).toContain('12 个内容节点'); expect(wrapper.text()).toContain('75%');
+    expect(confirm().element.disabled).toBe(false);
+    expect(requests.some(r => r.path.endsWith(':review-and-publish'))).toBe(false);
   });
 
-  it.each(["cancel", "replace", "replace-error"])("ignores stale hashing after %s", async (action) => {
-    const read = deferred();
-    vi.stubGlobal("fetch", vi.fn(async (url) => String(url).endsWith("/spaces")
-      ? jsonResponse([{ id: "a", name: "库 A" }]) : jsonResponse([])));
-    const wrapper = mount(App);
-    await flushPromises();
-    await button(wrapper, "知识库").trigger("click");
-    const input = wrapper.get('[data-testid="initial-upload-file"]');
-    await chooseFile(input, uploadFile("old.txt", "old", () => read.promise));
-    await chooseFile(input, action === "cancel" ? null : uploadFile("new.txt", "new"));
-    if (action !== "cancel") await vi.waitFor(() => expect(wrapper.get('[data-testid="initial-upload-hash"]').text()).toHaveLength(64));
-    const digest = wrapper.get('[data-testid="initial-upload-hash"]').text();
-    if (action === "replace-error") read.reject(new Error("OLD_HASH_FAILURE"));
-    else read.resolve(new TextEncoder().encode("old").buffer);
-    await flushPromises();
-    expect(wrapper.get('[data-testid="initial-upload-hash"]').text()).toBe(digest);
-    expect(wrapper.text()).not.toContain("OLD_HASH_FAILURE");
-    expect(wrapper.get('[data-testid="initial-upload-submit"]').attributes("disabled") !== undefined).toBe(action === "cancel");
-    wrapper.unmount();
+  it('opens the cited historical version and finds a chunk beyond the first page', async () => {
+    routes.set('/api/spaces/a/documents/policy/workspace', () => json({ ...documentRow('policy'), current_version_id: 'old', version_id: 'new', versions: [{ id: 'old', version_no: 1, original_key: 'version/1/original/policy-v1.md' }, { id: 'new', version_no: 2 }], unavailability_reasons: [] }));
+    routes.set('/api/document-versions/old/chunks/preview', target => target.searchParams.has('cursor') ? json([{ chunk_id: 'target', text: '这是旧版本的来源', locator: { page: 9 } }]) : json(Array.from({ length: 100 }, (_, i) => ({ chunk_id: `c${i}`, text: `段落 ${i}`, locator: {} })), 200, { 'X-Next-Cursor': 'after100' }));
+    routes.set('/api/document-versions/old/quality-report', () => json({ node_count: 101, locator_coverage: 1, issue_codes: [], disposition: 'READY_FOR_REVIEW' }));
+    await app('/knowledge-bases/a/documents/policy?version=old&chunk=target'); await flushPromises();
+    expect(wrapper.get('select[aria-label="文档版本"]').element.value).toBe('old');
+    expect(wrapper.get('#chunk-target').classes()).toContain('focused');
+    expect(wrapper.get('h1').text()).toBe('policy-v1.md');
+    expect(requests.some(r => r.query.get('cursor') === 'after100')).toBe(true);
+    expect(requests.some(r => r.path.includes('/new/chunks'))).toBe(false);
   });
 
-  it("keeps a failed file hash failed on a space switch and recovers on a new file", async () => {
-    vi.stubGlobal("fetch", vi.fn(async (url) => String(url).endsWith("/spaces")
-      ? jsonResponse([{ id: "a", name: "库 A" }, { id: "b", name: "库 B" }]) : jsonResponse([])));
-    const wrapper = mount(App);
-    await flushPromises();
-    await button(wrapper, "知识库").trigger("click");
-    const input = wrapper.get('[data-testid="initial-upload-file"]');
-    await chooseFile(input, uploadFile("broken.txt", "broken", async () => { throw new Error("HASH_READ_FAILED"); }));
-    await vi.waitFor(() => expect(wrapper.get('[data-testid="initial-upload-error"]').text()).toBe("HASH_READ_FAILED"));
-    await wrapper.get('[data-testid="global-space-select"]').setValue("b");
-    await flushPromises();
-    expect(wrapper.get(".workflow-status").attributes("data-phase")).toBe("FAILED");
-    expect(wrapper.get('[data-testid="initial-upload-submit"]').attributes("disabled")).toBeDefined();
-    await chooseFile(input, uploadFile("valid.txt", "valid"));
-    await vi.waitFor(() => expect(wrapper.get('[data-testid="initial-upload-submit"]').attributes("disabled")).toBeUndefined());
-    expect(wrapper.get('[data-testid="initial-upload-error"]').text()).toBe("");
-    wrapper.unmount();
+  it('passes an AbortSignal when the system refresh button supplies a DOM event', async () => {
+    routes.set('/api/system/status', (_, options) => {
+      expect(options.signal).toBeInstanceOf(AbortSignal);
+      return json({ status: 'ready', checked_at: 1, dependencies: { mysql: 'ready' }, worker: { reason: '没有探针' }, parser: { state: 'configured' }, degraded_reasons: [] });
+    });
+    await app('/system');
+    await wrapper.findAll('button').find(b => b.text() === '重新检测').trigger('click'); await flushPromises();
+    expect(requests.filter(r => r.path === '/api/system/status')).toHaveLength(2);
+    expect(wrapper.text()).toContain('核心依赖检查通过');
   });
 
-  it.each(["stay", "switch-space", "switch-document", "stale-job-error"])("switches the displayed version and scopes ingestion completion: %s", async (action) => {
-    vi.stubGlobal("crypto", webcrypto);
-    const job = deferred(), oldMore = deferred();
-    let completed = false;
-    const document = (version) => ({ document_id: "doc", space_id: "a", version_id: version, filename: "policy.txt", processing_state: "VALIDATED" });
-    const otherDocument = { document_id: "other", space_id: "a", version_id: "other-v", filename: "other.txt" };
-    const chunk = (version, text) => ({ chunk_id: `${version}-chunk`, document_version_id: version, text, ordinal: 0, kind: "paragraph", locator: {} });
-    vi.stubGlobal("fetch", vi.fn(async (url) => {
-      const path = String(url);
-      if (path.endsWith("/spaces")) return jsonResponse([{ id: "a", name: "库 A" }, { id: "b", name: "库 B" }]);
-      if (path.includes("/spaces/a/documents")) return jsonResponse([document(completed ? "v2" : "v1"), otherDocument]);
-      if (path.includes("/spaces/b/documents")) return jsonResponse([]);
-      if (path.endsWith("/documents/doc/preview")) return jsonResponse({ row_version: 1 });
-      if (path.includes("/v1/chunks?cursor=")) return oldMore.promise;
-      if (path.endsWith("/v1/chunks")) return jsonResponse([chunk("v1", "version one content")], 200, { "X-Next-Cursor": "v1-cursor" });
-      if (path.endsWith("/v2/chunks/preview")) return jsonResponse([chunk("v2", "version two content")]);
-      if (path.endsWith("/other-v/chunks/preview")) return jsonResponse([chunk("other-v", "other document content")]);
-      if (path.endsWith("/quality-report")) return jsonResponse({ parser_revision: path.includes("/document-versions/v1/") ? "quality-v1" : "quality-v2" });
-      if (path.endsWith("/documents/doc/versions/upload-sessions")) return jsonResponse({ upload_session_id: "u2", upload_path: "/api/upload-sessions/u2/content", row_version: 1 });
-      if (path.endsWith("/upload-sessions/u2/content")) return jsonResponse({ row_version: 2 });
-      if (path.endsWith("/upload-sessions/u2:complete")) { completed = true; return jsonResponse({ document_id: "doc", document_version_id: "v2", job_id: "job-v2" }); }
-      if (path.endsWith("/ingestion-jobs/job-v2")) return job.promise;
-      return jsonResponse([]);
-    }));
-    const wrapper = mount(App);
-    await flushPromises();
-    await button(wrapper, "知识库").trigger("click");
-    await button(wrapper, "查看分块").trigger("click");
-    await flushPromises();
-    expect(wrapper.get('[data-testid="chunk-panel"]').text()).toContain("version one content");
-    await button(wrapper, "加载更多分块").trigger("click");
-    await button(wrapper, "读取 Document row version").trigger("click");
-    await flushPromises();
-    await chooseFile(wrapper.get('[data-testid="version-upload-file"]'), uploadFile("policy-v2.txt", "new version"));
-    await vi.waitFor(() => expect(button(wrapper, "上传不可变新版本").attributes("disabled")).toBeUndefined());
-    await button(wrapper, "上传不可变新版本").trigger("click");
-    await flushPromises();
-    const panel = wrapper.get('[data-testid="chunk-panel"]');
-    expect(panel.get("h3").text()).toContain("v2");
-    expect(panel.text()).not.toContain("version one content");
-    expect(panel.text()).not.toContain("加载更多分块");
-    expect(wrapper.text()).not.toContain("quality-v1");
-    expect(wrapper.get('[data-testid="document-preview"]').element.checked).toBe(true);
-    oldMore.resolve(jsonResponse([chunk("v1", "old extra page")], 200, { "X-Next-Cursor": "old-next" }));
-    await flushPromises();
-    expect(panel.text()).not.toContain("old extra page");
-    if (action === "switch-space" || action === "stale-job-error") {
-      await wrapper.get('[data-testid="global-space-select"]').setValue("b");
-      await flushPromises();
-    } else if (action === "switch-document") {
-      await wrapper.findAll("button").filter((item) => item.text().includes("查看分块"))[1].trigger("click");
-      await flushPromises();
+  it('keeps a confirmed lifecycle command bound to its original document during navigation', async () => {
+    let finishSnapshot;
+    for (const id of ['first', 'second']) {
+      routes.set(`/api/spaces/a/documents/${id}/workspace`, () => json({ ...documentRow(id, 'available'), available_actions: ['view', 'revoke'], version_id: `v-${id}`, versions: [{ id: `v-${id}`, version_no: 1 }], unavailability_reasons: [] }));
+      routes.set(`/api/document-versions/v-${id}/quality-report`, () => json({ node_count: 1, locator_coverage: 1, issue_codes: [], disposition: 'READY_FOR_REVIEW' }));
     }
-    job.resolve(action === "stale-job-error" ? jsonResponse({}, 503) : jsonResponse({ state: "SUCCEEDED", attempt: 1 }));
-    await flushPromises();
-    await flushPromises();
-    expect(wrapper.text()).not.toContain("old extra page");
-    if (action === "stay") {
-      expect(wrapper.get('[data-testid="chunk-panel"]').text()).toContain("version two content");
-      expect(wrapper.text()).toContain("quality-v2");
-      expect(fetch.mock.calls.some(([url]) => String(url).endsWith("/v2/chunks/preview"))).toBe(true);
-    } else {
-      expect(wrapper.text()).not.toContain("version two content");
-      expect(wrapper.text()).not.toContain("quality-v2");
-      expect(wrapper.get('[data-testid="initial-upload-error"]').text()).toBe("");
-      if (action === "switch-document") expect(wrapper.get('[data-testid="chunk-panel"]').text()).toContain("other document content");
+    routes.set('/api/documents/first/lifecycle', () => new Promise(resolve => { finishSnapshot = resolve; }));
+    routes.set('/api/documents/first:revoke', () => json({ lifecycle_state: 'REVOKED' }));
+    const { router } = await app('/knowledge-bases/a/documents/first');
+    await wrapper.get('button[aria-label="文档操作"]').trigger('click');
+    await wrapper.findAll('button').find(b => b.text() === '撤回文档').trigger('click');
+    await wrapper.get('dialog .dialog-actions .primary').trigger('click'); await flushPromises();
+    await router.push('/knowledge-bases/a/documents/second'); await flushPromises();
+    finishSnapshot(json({ row_version: 2 })); await flushPromises();
+    expect(requests.filter(r => r.path.endsWith(':revoke')).map(r => r.path)).toEqual(['/api/documents/first:revoke']);
+    expect(wrapper.get('h1').text()).toBe('second');
+  });
+});
+
+it('resumes a publication attempt across refreshes but uses a new key after a completed publication', async () => {
+  const keys = [], comments = [];
+  routes.set('/api/document-versions/v:review-and-publish', (_, options) => {
+    keys.push(options.headers.get('Idempotency-Key')); comments.push(JSON.parse(options.body).comment);
+    return json({ phase: keys.length === 1 ? 'reviewed' : 'published' });
+  });
+  expect((await confirmPublication('v', '首次检查')).phase).toBe('reviewed');
+  await confirmPublication('v', '刷新后的文案');
+  expect(keys[1]).toBe(keys[0]); expect(comments[1]).toBe('首次检查');
+  expect(sessionStorage.getItem('ragspace-publication:v')).toBeNull();
+  await confirmPublication('v', '撤回后重新发布');
+  expect(keys[2]).not.toBe(keys[1]);
+});
+describe('upload persistence and isolation', () => {
+  it('continues valid files after a rejected file and limits simultaneous uploads to two', async () => {
+    const pinia = createPinia(); setActivePinia(pinia); useWorkspace().capabilities = capabilities;
+    let active = 0, maxActive = 0, serial = 0; const callbacks = [];
+    class XHR {
+      upload = {}; status = 200; responseText = '{"row_version":2}'; open() {} setRequestHeader() {}
+      send() { active++; maxActive = Math.max(maxActive, active); callbacks.push(() => { active--; this.onload(); }); }
     }
-    expect(fetch.mock.calls.some(([url]) => String(url).includes("/v2/chunks") && String(url).includes("cursor="))).toBe(false);
-    wrapper.unmount();
+    vi.stubGlobal('XMLHttpRequest', XHR);
+    routes.set('/api/spaces/a/upload-sessions', () => json({ upload_session_id: `u${++serial}`, upload_path: `/api/upload-sessions/u${serial}/content`, row_version: 1 }));
+    for (let i = 1; i <= 3; i++) { routes.set(`/api/upload-sessions/u${i}`, () => json({ state: 'CREATED' })); routes.set(`/api/upload-sessions/u${i}:complete`, () => json({ document_id: `d${i}`, document_version_id: `v${i}`, job_id: `j${i}` })); }
+    const store = useUploads(); store.enqueue([new File(['x'], 'bad.exe'), ...[1, 2, 3].map(i => new File(['a'], `valid${i}.md`))], 'a'); await flushPromises();
+    expect(active).toBe(2); expect(store.items.find(row => row.filename === 'bad.exe').state).toBe('failed');
+    callbacks.shift()(); await flushPromises(); expect(active).toBe(2);
+    while (callbacks.length) { callbacks.shift()(); await flushPromises(); }
+    expect(maxActive).toBe(2); expect(store.items.filter(row => row.state === 'submitted')).toHaveLength(3);
+  });
+  it('recovers a completed server upload after a lost response without uploading again', async () => {
+    sessionStorage.setItem('ragkb.uploads', JSON.stringify([{ id: 'local', uploadSessionId: 'saved', state: 'completing', filename: 'saved.md', spaceId: 'a' }]));
+    routes.set('/api/upload-sessions/saved', () => json({ state: 'COMPLETED', document_id: 'd', document_version_id: 'v', job_id: 'job' }));
+    setActivePinia(createPinia()); const uploads = useUploads(); await uploads.restore();
+    expect(uploads.items[0]).toMatchObject({ state: 'submitted', jobId: 'job' }); expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
-
-describe("trusted QA UI", () => {
-  it("clears the prior library immediately while the next list is loading", async () => {
-    let release;
-    const pending = new Promise((resolve) => { release = resolve; });
-    vi.stubGlobal("fetch", vi.fn(async (url) => {
-      const path = String(url);
-      if (path.endsWith("/spaces")) return jsonResponse([{ id: "a", name: "库 A" }, { id: "b", name: "库 B" }]);
-      if (path.endsWith("/spaces/a/documents")) return jsonResponse([{ document_id: "a", version_id: "va", filename: "A-only.md" }]);
-      if (path.endsWith("/spaces/b/documents")) return pending;
-      return jsonResponse([]);
-    }));
-    const wrapper = mount(App);
-    await flushPromises();
-    await button(wrapper, "知识库").trigger("click");
-    expect(wrapper.text()).toContain("A-only.md");
-    await wrapper.get('[data-testid="global-space-select"]').setValue("b");
-    expect(wrapper.text()).not.toContain("A-only.md");
-    release(jsonResponse([]));
-    await flushPromises();
+describe('conversation result gating', () => {
+  it('renders a verified summary and table with working inline source links', async () => {
+    const citation = { evidence_id: 'E2', source_url: '/api/test-source', filename: '设备参数.csv', version_no: 2, version_id: 'v2', document_id: 'doc', chunk_id: 'chunk', locator: { row: 2 } };
+    routes.set('/api/conversations/c', () => json({ conversation: { id: 'c', space_id: 'a', title: '设备功率' }, turns: [{ id: 't', conversation_id: 'c', sequence_number: 1, original_question: '总结功率', state: 'completed', result: { verified: true, answer: '功率随环境变化。[E2]\n\n| 环境 | 功率 |\n| --- | --- |\n| 常温 | **420 W** [E2] |\n| 低温 | 390 W [E2] |', citations: [citation] } }], next_before: null }));
+    routes.set('/api/test-source', () => json({ text: '常温 420 W，低温 390 W。' }));
+    await app('/chat/c'); await flushPromises();
+    expect(wrapper.findAll('.assistant-body table tbody tr')).toHaveLength(2);
+    expect(wrapper.get('.assistant-body strong').text()).toBe('420 W');
+    const link = wrapper.findAll('.assistant-body a[href="#citation-E2"]')[1];
+    expect(link.text()).toBe('1');
+    await link.trigger('click'); await flushPromises();
+    expect(wrapper.get('.source-text').text()).toContain('常温 420 W');
+    expect(wrapper.get('.source-file').text()).toContain('设备参数.csv');
   });
-
-  it.each([false, true])("ignores delayed old-document chunks or errors (error=%s)", async (failed) => {
-    let release;
-    const pending = new Promise((resolve) => { release = resolve; });
-    vi.stubGlobal("fetch", vi.fn(async (url) => {
-      const path = String(url);
-      if (path.endsWith("/spaces")) return jsonResponse([{ id: "a", name: "库 A" }]);
-      if (path.endsWith("/documents")) return jsonResponse([
-        { document_id: "a", version_id: "va", filename: "A.md" },
-        { document_id: "b", version_id: "vb", filename: "B.md" },
-      ]);
-      if (path.includes("/va/chunks")) return pending;
-      if (path.includes("/vb/chunks")) return jsonResponse([{ chunk_id: "cb", text: "B body", locator: {} }]);
-      return jsonResponse([]);
-    }));
-    const wrapper = mount(App);
-    await flushPromises();
-    await button(wrapper, "知识库").trigger("click");
-    await wrapper.findAll('[data-testid="view-chunks"]')[0].trigger("click");
-    await flushPromises();
-    await wrapper.findAll('[data-testid="view-chunks"]')[1].trigger("click");
-    await flushPromises();
-    release(failed ? jsonResponse({ code: "OLD_DOCUMENT_FAILED" }, 500)
-      : jsonResponse([{ chunk_id: "ca", text: "A late body", locator: {} }]));
-    await flushPromises();
-    expect(wrapper.get('[data-testid="chunk-panel"]').text()).toContain("B body");
-    expect(wrapper.text()).not.toContain("A late body");
-    expect(wrapper.text()).not.toContain("OLD_DOCUMENT_FAILED");
+  it('retains failed state and never releases an unverified answer from SSE', async () => {
+    setActivePinia(createPinia()); const store = useConversations();
+    routes.set('/api/conversations/c', () => json({ conversation: { id: 'c', space_id: 'a' }, turns: [], next_before: null }));
+    routes.set('/api/conversations/c/turns:stream', () => new Response(`event: result\ndata: ${JSON.stringify({ id: 't', conversation_id: 'c', sequence_number: 1, original_question: 'test', state: 'failed', result: { verified: false, answer: 'NEVER DISPLAY', citations: [{ evidence_id: 'E1' }] } })}\n\n`, { headers: { 'Content-Type': 'text/event-stream' } }));
+    await store.activate('c'); await store.send('test'); expect(store.turns[0].result.answer).toBeNull(); expect(store.turns[0].result.citations).toEqual([]);
   });
-
-  it("ignores old-library answer progress/results and search results", async () => {
-    let releaseAnswer, releaseSearch;
-    const answer = new Promise((resolve) => { releaseAnswer = resolve; });
-    const search = new Promise((resolve) => { releaseSearch = resolve; });
-    vi.stubGlobal("fetch", vi.fn(async (url) => {
-      const path = String(url);
-      if (path.endsWith("/spaces")) return jsonResponse([{ id: "a", name: "库 A" }, { id: "b", name: "库 B" }]);
-      if (path.includes("/ask")) return answer;
-      if (path.endsWith("/search")) return search;
-      return jsonResponse([]);
-    }));
-    const wrapper = mount(App);
-    await flushPromises();
-    await wrapper.find("textarea").setValue("A 的问题");
-    await button(wrapper, "从此知识库回答").trigger("click");
-    await button(wrapper, "检索调试").trigger("click");
-    await button(wrapper, "在当前知识库检索").trigger("click");
-    await flushPromises();
-    await wrapper.get('[data-testid="global-space-select"]').setValue("b");
-    releaseAnswer(sseResponse('event: progress\ndata: {"stage":"verified"}\n\nevent: result\ndata: {"status":"answered","answer":"OLD_ANSWER","citations":[],"verified":true}\n\n'));
-    releaseSearch(jsonResponse({ hits: [{ text: "OLD_SEARCH" }] }));
-    await flushPromises();
-    expect(wrapper.text()).not.toContain("OLD_SEARCH");
-    await button(wrapper, "知识问答").trigger("click");
-    expect(wrapper.text()).not.toContain("OLD_ANSWER");
-    expect(wrapper.text()).not.toContain("已验证");
-    expect(wrapper.text()).toContain("等待输入");
-  });
-
-  it("follows a server cursor even when authorization leaves an empty page", async () => {
-    vi.stubGlobal("fetch", vi.fn(async (url) => {
-      const path = String(url);
-      if (path.endsWith("/spaces")) return jsonResponse([{ id: "a", name: "库 A" }]);
-      if (path.endsWith("/documents")) return jsonResponse([], 200, { "X-Next-Cursor": "position-1" });
-      if (path.includes("cursor=position-1")) return jsonResponse([{ document_id: "b", version_id: "vb", filename: "visible.md" }]);
-      return jsonResponse([]);
-    }));
-    const wrapper = mount(App);
-    await flushPromises();
-    await button(wrapper, "知识库").trigger("click");
-    await button(wrapper, "加载更多文件").trigger("click");
-    await flushPromises();
-    expect(wrapper.text()).toContain("visible.md");
-    expect(button(wrapper, "加载更多文件")).toBeUndefined();
-  });
-
-  it("shows a valid model refusal as insufficient evidence", async () => {
-    vi.stubGlobal("fetch", vi.fn(async (url) => {
-      const path = String(url);
-      if (path.endsWith("/spaces")) return jsonResponse([{ id: "a", name: "库 A" }]);
-      if (path.includes("/ask")) return sseResponse(
-        'event: progress\ndata: {"stage":"verified"}\n\n' +
-        'event: result\ndata: {"status":"insufficient_evidence","answer":null,"citations":[],"verified":true,"warnings":["MODEL_INSUFFICIENT_EVIDENCE"]}\n\n',
-      );
-      return jsonResponse([]);
-    }));
-    const wrapper = mount(App);
-    await flushPromises();
-    await wrapper.find("textarea").setValue("退款政策是什么？");
-    await button(wrapper, "从此知识库回答").trigger("click");
-    await flushPromises();
-    expect(wrapper.find(".answer").text()).toContain("现有资料不足以回答这个问题");
-    expect(wrapper.text()).not.toContain("system_error");
-    expect(wrapper.text()).not.toContain("验证失败");
-  });
-
-  it.each([
-    ["unavailable", "system_error", true, false, "服务暂不可用"],
-    ["degraded", "answered", false, true, "部分检索服务暂不可用"],
-  ])("shows retrieval health %s instead of claiming missing evidence", async (health, status, retryable, verified, message) => {
-    vi.stubGlobal("fetch", vi.fn(async (url) => {
-      const path = String(url);
-      if (path.endsWith("/spaces")) return jsonResponse([{ id: "a", name: "库 A" }]);
-      if (path.includes("/ask")) return sseResponse(
-        `event: progress\ndata: ${JSON.stringify({ stage: verified ? "verified" : "verification_failed" })}\n\n` +
-        `event: result\ndata: ${JSON.stringify({ status, answer: verified ? "证据回答" : null, verified, citations: [], retrieval_health: health, degraded: true, retryable })}\n\n`,
-      );
-      return jsonResponse([]);
-    }));
-    const wrapper = mount(App);
-    await flushPromises();
-    await wrapper.find("textarea").setValue("问题");
-    await button(wrapper, "从此知识库回答").trigger("click");
-    await flushPromises();
-    expect(wrapper.text()).toContain(message);
-    expect(wrapper.text()).not.toContain("insufficient_evidence");
-    if (verified) expect(wrapper.text()).toContain("证据回答");
-    else expect(wrapper.text()).not.toContain("已验证");
-  });
-
-  it("ignores a delayed old-library document response", async () => {
-    let release;
-    const pending = new Promise((resolve) => { release = resolve; });
-    vi.stubGlobal("fetch", vi.fn(async (url) => {
-      const path = String(url);
-      if (path.endsWith("/spaces")) return jsonResponse([{ id: "a", name: "库 A" }, { id: "b", name: "库 B" }]);
-      if (path.endsWith("/spaces/a/documents")) return pending;
-      if (path.endsWith("/spaces/b/documents")) return jsonResponse([{ document_id: "b", version_id: "vb", filename: "B-only.md" }]);
-      return jsonResponse({});
-    }));
-    const wrapper = mount(App);
-    await flushPromises();
-    await wrapper.get('[data-testid="global-space-select"]').setValue("b");
-    await flushPromises();
-    release(jsonResponse([{ document_id: "a", version_id: "va", filename: "A-secret.md" }]));
-    await flushPromises();
-    await button(wrapper, "知识库").trigger("click");
-    expect(wrapper.text()).toContain("B-only.md");
-    expect(wrapper.text()).not.toContain("A-secret.md");
-  });
-
-  it("loads signed citations through the authenticated API, without token in URL", async () => {
-    const calls = [];
-    vi.stubGlobal("fetch", vi.fn(async (url, options = {}) => {
-      calls.push([String(url), options]);
-      if (String(url).endsWith("/spaces")) return jsonResponse([{ id: "a", name: "库 A" }]);
-      if (String(url).includes("/sources/")) return jsonResponse({ text: "authorized source evidence" });
-      if (String(url).includes("/ask")) return sseResponse('event: progress\ndata: {"stage":"verified"}\n\nevent: result\ndata: {"status":"answered","answer":"证据回答","verified":true,"citations":[{"evidence_id":"E1","source_url":"/api/sources/ref?signature=synthetic","locator":{}}]}\n\n');
-      return jsonResponse([]);
-    }));
-    const wrapper = mount(App);
-    await flushPromises();
-    await wrapper.find("textarea").setValue("问题");
-    await button(wrapper, "从此知识库回答").trigger("click");
-    await flushPromises();
-    await wrapper.find('a[href*="/sources/"]').trigger("click");
-    await flushPromises();
-    const [url, options] = calls.find(([path]) => path.includes("/sources/"));
-    expect(new Headers(options.headers).get("Authorization")).toBe("Bearer synthetic-browser-token");
-    expect(url).not.toContain("synthetic-browser-token");
-    expect(wrapper.text()).toContain("authorized source evidence");
-  });
-  it("shows an answer only after verified progress", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url) =>
-        String(url).endsWith("/spaces")
-          ? jsonResponse([{ id: "space-1", name: "产品知识库", status: "ACTIVE" }])
-          : String(url).endsWith("/spaces/space-1/documents")
-            ? jsonResponse([])
-            : sseResponse(
-          'event: progress\ndata: {"stage":"verified"}\n\n' +
-            'event: result\ndata: {"status":"answered","answer":"三年",' +
-            '"citations":[],"verified":true}\n\n',
-        ),
-      ),
-    );
-    const wrapper = mount(App);
-    await flushPromises();
-    await wrapper.find("textarea").setValue("保修期多久？");
-    await button(wrapper, "从此知识库回答").trigger("click");
-    await flushPromises();
-
-    expect(wrapper.text()).toContain("三年");
-    expect(wrapper.text()).toContain("已验证");
-  });
-
-  it("renders a stable error and no answer when streaming fails", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url) =>
-        String(url).endsWith("/spaces")
-          ? jsonResponse([{ id: "space-1", name: "产品知识库", status: "ACTIVE" }])
-          : String(url).endsWith("/spaces/space-1/documents")
-            ? jsonResponse([])
-            : new Response("{}", { status: 503 }),
-      ),
-    );
-    const wrapper = mount(App);
-    await flushPromises();
-    await wrapper.find("textarea").setValue("问题");
-    await button(wrapper, "从此知识库回答").trigger("click");
-    await flushPromises();
-
-    expect(wrapper.text()).toContain("SSE_REQUEST_FAILED");
-    expect(wrapper.text()).toContain("system_error");
-    expect(wrapper.text()).toContain("答案仅在引用与权限复核后显示");
-  });
-
-  it("uploads an initial document and exposes its indexing job", async () => {
-    vi.stubGlobal("crypto", webcrypto);
-    let documentReads = 0;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url, options = {}) => {
-        const path = String(url);
-        if (path.endsWith("/spaces")) {
-          return jsonResponse([{ id: "space-1", name: "制度库", status: "ACTIVE" }]);
-        }
-        if (path.endsWith("/spaces/space-1/documents") || path.endsWith("/spaces/space-1/documents/preview")) {
-          documentReads += 1;
-          return jsonResponse(
-            documentReads === 1
-              ? []
-              : [{
-                  document_id: "document-1",
-                  space_id: "space-1",
-                  filename: "policy.md",
-                  version_id: "version-1",
-                  version_no: 1,
-                  processing_state: "VALIDATED",
-                  publication_state: "STAGED",
-                  parser_revision: "parser",
-                  chunk_count: 1,
-                  job_id: "job-1",
-                }],
-          );
-        }
-        if (path.endsWith("/spaces/space-1/upload-sessions")) {
-          return jsonResponse({ upload_session_id: "upload-1", upload_path: "/api/upload-sessions/upload-1/content", row_version: 1 });
-        }
-        if (path.endsWith("/upload-sessions/upload-1/content")) {
-          return jsonResponse({ row_version: 2 });
-        }
-        if (path.endsWith("/upload-sessions/upload-1:complete")) {
-          return jsonResponse({ document_id: "document-1", document_version_id: "version-1", job_id: "job-1" });
-        }
-        if (path.endsWith("/ingestion-jobs/job-1")) {
-          return jsonResponse({ id: "job-1", operation: "process_document", state: "SUCCEEDED", attempt: 1, max_attempts: 3, cancel_requested: false, error_code: null });
-        }
-        if (path.endsWith("/document-versions/version-1/quality-report")) {
-          return jsonResponse({ document_version_id: "version-1", source_format: "md", parser_revision: "parser", node_count: 1, locator_coverage: 1, issue_codes: [], disposition: "PASS", real_acceptance: false });
-        }
-        if (path.endsWith("/document-versions/version-1/chunks/preview")) {
-          return jsonResponse([{ chunk_id: "chunk-1", document_version_id: "version-1", parent_chunk_id: null, ordinal: 0, kind: "paragraph", token_count: 3, status: "STAGED", text: "policy content", locator: { line_start: 1 } }]);
-        }
-        return jsonResponse({ method: options.method }, 404);
-      }),
-    );
-    const wrapper = mount(App);
-    await flushPromises();
-    await button(wrapper, "知识库").trigger("click");
-    const input = wrapper.get('[data-testid="initial-upload-file"]');
-    const file = new File(["policy"], "policy.md", { type: "text/markdown" });
-    Object.defineProperty(file, "arrayBuffer", {
-      value: async () => {
-        throw new Error("whole file read is forbidden");
-      },
-    });
-    Object.defineProperty(file, "slice", {
-      value: (start, end) => ({
-        arrayBuffer: async () => new TextEncoder().encode("policy").slice(start, end).buffer,
-      }),
-    });
-    Object.defineProperty(input.element, "files", { value: [file] });
-    await input.trigger("change");
-    await vi.waitFor(() => {
-      expect(wrapper.get('[data-testid="initial-upload-hash"]').text()).toHaveLength(64);
-    });
-    expect(wrapper.get('[data-testid="initial-upload-submit"]').attributes("disabled")).toBeUndefined();
-    await wrapper.get('[data-testid="initial-upload-submit"]').trigger("click");
-    await flushPromises();
-    await flushPromises();
-
-    expect(wrapper.get('[data-testid="initial-upload-error"]').text()).toBe("");
-    expect(wrapper.get('[data-testid="initial-upload-result"]').text()).toContain("version-1");
-    expect(wrapper.text()).toContain("解析入库完成");
-    expect(wrapper.get('[data-testid="document-list"]').text()).toContain("policy.md");
-    expect(wrapper.get('[data-testid="chunk-panel"]').text()).toContain("policy content");
-    expect(wrapper.get('[data-testid="document-preview"]').element.checked).toBe(true);
-    expect(fetch.mock.calls.some(([url]) => String(url).endsWith("/document-versions/version-1/chunks/preview"))).toBe(true);
-  });
-
-  it("creates and selects a knowledge base", async () => {
-    vi.stubGlobal("crypto", webcrypto);
-    let created = false;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url, options = {}) => {
-        const path = String(url);
-        if (path.endsWith("/spaces") && options.method === "POST") {
-          created = true;
-          return jsonResponse({ id: "space-new", tenant_id: "local", name: "产品手册", status: "ACTIVE" }, 201);
-        }
-        if (path.endsWith("/spaces")) {
-          return jsonResponse(created ? [{ id: "space-new", name: "产品手册", status: "ACTIVE" }] : []);
-        }
-        if (path.endsWith("/spaces/space-new/documents")) return jsonResponse([]);
-        return jsonResponse({}, 404);
-      }),
-    );
-    const wrapper = mount(App);
-    await flushPromises();
-    await button(wrapper, "知识库").trigger("click");
-    await wrapper.get('[data-testid="new-space-name"]').setValue("产品手册");
-    await wrapper.get('[data-testid="create-space-submit"]').trigger("click");
-    await flushPromises();
-
-    expect(wrapper.get('[data-testid="space-list"]').text()).toContain("产品手册");
-    expect(wrapper.get('[data-testid="global-space-select"]').element.value).toBe("space-new");
+  it('does not mix responses after changing conversations', async () => {
+    setActivePinia(createPinia()); const store = useConversations(); let finish;
+    routes.set('/api/conversations/a', () => new Promise(resolve => { finish = resolve; }));
+    routes.set('/api/conversations/b', () => json({ conversation: { id: 'b', space_id: 'b' }, turns: [], next_before: null }));
+    const slow = store.activate('a'); await store.activate('b'); finish(json({ conversation: { id: 'a', space_id: 'a' }, turns: [{ id: 'bad', sequence_number: 1 }], next_before: null })); await slow;
+    expect(store.current.id).toBe('b'); expect(store.turns).toEqual([]);
   });
 });

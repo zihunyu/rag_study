@@ -9,8 +9,10 @@ from contextlib import AbstractContextManager
 from typing import Any, cast
 
 from ragkb.adapters.redis_cache import RedisCacheRateLimitAdapter
+from ragkb.adapters.redis_queue_browse import browse_jobs, count_jobs, remove_index, update_index
 from ragkb.contracts.jobs import QueueConflictError, QueueJob, QueueLeaseError, QueueStateError
 from ragkb.domain.ids import new_uuid7
+from ragkb.domain.pagination import PageKey, RepositoryPage
 from ragkb.domain.state_machines import JobState
 
 
@@ -90,6 +92,7 @@ class RedisPersistentJobQueue:
         # One Redis transaction: a job cannot exist without its deduplication entry
         # or disappear from the runnable index during a state transition.
         pipe = self.client.pipeline(transaction=True)
+        update_index(pipe, self.jobs_key, record, self._load_record(job_id))
         pipe.hset(self.jobs_key, job_id, encoded)
         if identity is not None:
             pipe.hset(self.idempotency_key, identity, job_id)
@@ -130,6 +133,7 @@ class RedisPersistentJobQueue:
             record = self._load_record(str(job_id))
             pipe = self.client.pipeline(transaction=True)
             if record:
+                remove_index(pipe, self.jobs_key, record)
                 identity = f"{record['operation']}:{record['idempotency_key']}"
                 if self.client.hget(self.idempotency_key, identity) == job_id:
                     pipe.hdel(self.idempotency_key, identity)
@@ -139,6 +143,20 @@ class RedisPersistentJobQueue:
             pipe.zrem(self.terminal_index, job_id)
             pipe.execute()
         return len(expired)
+
+    def list_jobs_page(
+        self,
+        tenant: str,
+        space: str = "",
+        state: str = "",
+        *,
+        limit: int = 30,
+        after: PageKey | None = None,
+    ) -> RepositoryPage:
+        return browse_jobs(self, tenant, space, state, limit=limit, after=after)
+
+    def job_counts(self, tenant: str, space: str = "") -> dict[str, int]:
+        return count_jobs(self, tenant, space)
 
     def _save_dead_letter(self, record: Mapping[str, Any]) -> None:
         payload = {

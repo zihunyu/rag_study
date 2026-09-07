@@ -294,86 +294,7 @@ def build_documents_router(runtime: RuntimeComponents) -> APIRouter:
         request: Request,
         idempotency_key: str = Header(alias="Idempotency-Key", min_length=1),
     ) -> DocumentReviewResponse:
-        with runtime.lifecycle_store.lock:
-            principal = _principal(request)
-            _require_role(principal, "knowledge_maintainer", "admin")
-            _require_local_tenant(runtime, principal)
-            version = runtime.repository.get_version(version_id)
-            require_document_manager(runtime, principal, str(version["document_id"]))
-            ensure_document_previewable(runtime, str(version["document_id"]), principal)
-            quality = runtime.repository.get_quality_report(version_id)
-            now = int(time.time())
-            security = None
-            security_body = body.security_projection
-            if body.decision == "APPROVED" and security_body is not None:
-                record = runtime.lifecycle_store.documents.get(str(version["document_id"]))
-                if record is None:
-                    raise LifecycleStateConflict("DOCUMENT_NOT_REGISTERED")
-                security = SecurityProjection(
-                    visibility=security_body.visibility,
-                    classification_level=security_body.classification_level,
-                    acl_scope_tokens=tuple(security_body.acl_scope_tokens),
-                    lifecycle_projection="STAGED",
-                    permission_revision=record.acl_revision,
-                    valid_from_epoch=now,
-                    valid_to_epoch=security_body.valid_to_epoch,
-                )
-            payload = {**body.model_dump(mode="json"), "reviewer_id": principal.user_id}
-            command_hash = runtime.uploads.request_hash(payload)
-            replay = runtime.repository.idempotency_response(
-                f"review-document-version:{version_id}", idempotency_key, command_hash
-            )
-            if (
-                replay is None
-                and runtime.lifecycle_store.is_accessible(str(version["document_id"]))
-                and runtime.lifecycle_store.documents[str(version["document_id"])].active_version_id
-                == version_id
-            ):
-                raise LifecycleStateConflict("PUBLISHED_SECURITY_REQUIRES_PERMISSION_TRANSITION")
-            result = runtime.repository.save_document_review(
-                version_id=version_id,
-                reviewer_id=principal.user_id,
-                decision=body.decision,
-                comment=body.comment,
-                quality_revision=str(quality["parser_revision"]),
-                security_revision="reviewed-security" if security is not None else None,
-                security_projection=(
-                    {
-                        "visibility": security.visibility,
-                        "classification_level": security.classification_level,
-                        "acl_scope_tokens": list(security.acl_scope_tokens),
-                        "lifecycle_projection": security.lifecycle_projection,
-                        "permission_revision": security.permission_revision,
-                        "valid_from_epoch": security.valid_from_epoch,
-                        "valid_to_epoch": security.valid_to_epoch,
-                    }
-                    if security is not None
-                    else None
-                ),
-                idempotency_key=idempotency_key,
-                request_hash=command_hash,
-            )
-            latest = runtime.repository.get_latest_review(version_id)
-            if latest is None or latest["review_id"] != result["review_id"]:
-                return DocumentReviewResponse.model_validate(result)
-            if latest.get("projection_applied"):
-                return DocumentReviewResponse.model_validate(result)
-            saved_security = result.get("security_projection")
-            if saved_security is not None:
-                security = SecurityProjection(
-                    **{
-                        **saved_security,
-                        "acl_scope_tokens": tuple(saved_security["acl_scope_tokens"]),
-                    }
-                )
-                runtime.lifecycle_service.set_reviewed_security_projection(
-                    str(version["document_id"]),
-                    version_id,
-                    security,
-                    trace_id=_request_id(request),
-                )
-                runtime.repository.mark_review_applied(version_id, str(result["review_id"]))
-            return DocumentReviewResponse.model_validate(result)
+        return apply_document_review(runtime, version_id, body, request, idempotency_key)
 
     @router.get(
         "/api/ingestion-jobs/{job_id}",
@@ -479,3 +400,92 @@ def build_documents_router(runtime: RuntimeComponents) -> APIRouter:
         return result
 
     return router
+
+
+def apply_document_review(
+    runtime: RuntimeComponents,
+    version_id: str,
+    body: DocumentReviewRequest,
+    request: Request,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1),
+) -> DocumentReviewResponse:
+    with runtime.lifecycle_store.lock:
+        principal = _principal(request)
+        _require_role(principal, "knowledge_maintainer", "admin")
+        _require_local_tenant(runtime, principal)
+        version = runtime.repository.get_version(version_id)
+        require_document_manager(runtime, principal, str(version["document_id"]))
+        ensure_document_previewable(runtime, str(version["document_id"]), principal)
+        quality = runtime.repository.get_quality_report(version_id)
+        now = int(time.time())
+        security = None
+        security_body = body.security_projection
+        if body.decision == "APPROVED" and security_body is not None:
+            record = runtime.lifecycle_store.documents.get(str(version["document_id"]))
+            if record is None:
+                raise LifecycleStateConflict("DOCUMENT_NOT_REGISTERED")
+            security = SecurityProjection(
+                visibility=security_body.visibility,
+                classification_level=security_body.classification_level,
+                acl_scope_tokens=tuple(security_body.acl_scope_tokens),
+                lifecycle_projection="STAGED",
+                permission_revision=record.acl_revision,
+                valid_from_epoch=now,
+                valid_to_epoch=security_body.valid_to_epoch,
+            )
+        payload = {**body.model_dump(mode="json"), "reviewer_id": principal.user_id}
+        command_hash = runtime.uploads.request_hash(payload)
+        replay = runtime.repository.idempotency_response(
+            f"review-document-version:{version_id}", idempotency_key, command_hash
+        )
+        if (
+            replay is None
+            and runtime.lifecycle_store.is_accessible(str(version["document_id"]))
+            and runtime.lifecycle_store.documents[str(version["document_id"])].active_version_id
+            == version_id
+        ):
+            raise LifecycleStateConflict("PUBLISHED_SECURITY_REQUIRES_PERMISSION_TRANSITION")
+        result = runtime.repository.save_document_review(
+            version_id=version_id,
+            reviewer_id=principal.user_id,
+            decision=body.decision,
+            comment=body.comment,
+            quality_revision=str(quality["parser_revision"]),
+            security_revision="reviewed-security" if security is not None else None,
+            security_projection=(
+                {
+                    "visibility": security.visibility,
+                    "classification_level": security.classification_level,
+                    "acl_scope_tokens": list(security.acl_scope_tokens),
+                    "lifecycle_projection": security.lifecycle_projection,
+                    "permission_revision": security.permission_revision,
+                    "valid_from_epoch": security.valid_from_epoch,
+                    "valid_to_epoch": security.valid_to_epoch,
+                }
+                if security is not None
+                else None
+            ),
+            idempotency_key=idempotency_key,
+            request_hash=command_hash,
+        )
+        latest = runtime.repository.get_latest_review(version_id)
+        if latest is None or latest["review_id"] != result["review_id"]:
+            return DocumentReviewResponse.model_validate(result)
+        if latest.get("projection_applied"):
+            return DocumentReviewResponse.model_validate(result)
+        saved_security = result.get("security_projection")
+        if saved_security is not None:
+            security = SecurityProjection(
+                **{
+                    **saved_security,
+                    "acl_scope_tokens": tuple(saved_security["acl_scope_tokens"]),
+                }
+            )
+            runtime.lifecycle_service.set_reviewed_security_projection(
+                str(version["document_id"]),
+                version_id,
+                security,
+                trace_id=_request_id(request),
+            )
+            runtime.repository.mark_review_applied(version_id, str(result["review_id"]))
+        return DocumentReviewResponse.model_validate(result)

@@ -99,9 +99,16 @@ class SQLiteUploadRepository:
                 tenant_id = str(tenant["id"])
                 if tenant_id_override is not None and tenant_id != tenant_id_override:
                     raise ValueError("TENANT_ID_OVERRIDE_MISMATCH")
+            bootstrap_key = f"workspace.default.{tenant_id}.{space_name}"
+            saved_space = connection.execute(
+                "SELECT value FROM schema_metadata WHERE key=?", (bootstrap_key,)
+            ).fetchone()
+            stable_space_id = space_id_override or (saved_space["value"] if saved_space else None)
             space = connection.execute(
-                "SELECT id FROM knowledge_spaces WHERE tenant_id = ? AND name = ?",
-                (tenant_id, space_name),
+                "SELECT id FROM knowledge_spaces WHERE tenant_id=? AND id=?"
+                if stable_space_id
+                else "SELECT id FROM knowledge_spaces WHERE tenant_id=? AND name=?",
+                (tenant_id, stable_space_id or space_name),
             ).fetchone()
             if space is None:
                 space_id = space_id_override or new_uuid7()
@@ -116,6 +123,10 @@ class SQLiteUploadRepository:
                 space_id = str(space["id"])
                 if space_id_override is not None and space_id != space_id_override:
                     raise ValueError("SPACE_ID_OVERRIDE_MISMATCH")
+            connection.execute(
+                "INSERT OR IGNORE INTO schema_metadata(key,value) VALUES (?,?)",
+                (bootstrap_key, space_id),
+            )
             corpus = connection.execute(
                 "SELECT id FROM corpora WHERE space_id = ? AND name = 'uploads'", (space_id,)
             ).fetchone()
@@ -150,6 +161,22 @@ class SQLiteUploadRepository:
                 "SELECT id, tenant_id, name, status FROM knowledge_spaces ORDER BY created_at"
             ).fetchall()
             return [dict(row) for row in rows]
+
+    def rename_space(self, space_id: str, name: str) -> None:
+        with self.database.transaction(immediate=True) as connection:
+            space = connection.execute(
+                "SELECT tenant_id FROM knowledge_spaces WHERE id=?", (space_id,)
+            ).fetchone()
+            if space is None:
+                raise ResourceNotFoundError(space_id)
+            duplicate = connection.execute(
+                "SELECT id FROM knowledge_spaces WHERE tenant_id=? AND lower(name)=lower(?)"
+                " AND id!=?",
+                (space["tenant_id"], name, space_id),
+            ).fetchone()
+            if duplicate:
+                raise IdempotencyConflictError("SPACE_NAME_EXISTS")
+            connection.execute("UPDATE knowledge_spaces SET name=? WHERE id=?", (name, space_id))
 
     def create_space(self, tenant_id: str, name: str) -> dict[str, str]:
         normalized = " ".join(name.split())

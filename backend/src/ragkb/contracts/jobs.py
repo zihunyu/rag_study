@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from ragkb.domain.pagination import PageKey, RepositoryPage
 from ragkb.domain.state_machines import JobState
 
 
@@ -42,6 +43,18 @@ class QueueStateError(RuntimeError):
 
 class PersistentJobQueuePort(Protocol):
     revision: str
+
+    def list_jobs_page(
+        self,
+        tenant: str,
+        space: str = "",
+        state: str = "",
+        *,
+        limit: int = 30,
+        after: PageKey | None = None,
+    ) -> RepositoryPage: ...
+
+    def job_counts(self, tenant: str, space: str = "") -> dict[str, int]: ...
 
     def enqueue(
         self,

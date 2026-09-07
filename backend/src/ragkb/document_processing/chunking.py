@@ -161,6 +161,35 @@ def _windows(
     return tuple(windows)
 
 
+def _table_windows(
+    text: str, config: ChunkingConfig, tokenizer: TokenizerPort
+) -> tuple[tuple[str, int, int], ...]:
+    """Keep complete rows together; header context is attached separately."""
+    rows = text.splitlines(keepends=True)
+    result: list[tuple[str, int, int]] = []
+    start = end = tokens = 0
+    for row in rows:
+        size = count_tokens(row, tokenizer)
+        if tokens and tokens + size > config.target_tokens:
+            value = text[start:end].strip()
+            if value:
+                result.append((value, start, end))
+            start, tokens = end, 0
+        if size > config.max_tokens:
+            result.extend(
+                (piece, end + left, end + right)
+                for piece, left, right in _windows(row, config, tokenizer)
+            )
+            end += len(row)
+            start = end
+            continue
+        end += len(row)
+        tokens += size
+    if text[start:end].strip():
+        result.append((text[start:end].strip(), start, end))
+    return tuple(result)
+
+
 class TokenAwareChunker:
     """Create searchable children and larger parent context chunks with stable IDs."""
 
@@ -174,7 +203,7 @@ class TokenAwareChunker:
         self.tokenizer = tokenizer or _DEFAULT_TOKENIZER
         self.tokenizer_id = self.tokenizer.revision
         self.revision = (
-            f"token-aware:{self.config.strategy}:"
+            f"token-aware:v3:{self.config.strategy}:"
             f"{self.config.target_tokens}:{self.config.overlap_tokens}"
         )
 
@@ -188,15 +217,29 @@ class TokenAwareChunker:
     def chunk(self, document: CanonicalDocument, *, tenant_id: str) -> ChunkingResult:
         children: list[Chunk] = []
         heading = ""
+        headings: list[tuple[int, str]] = []
+        document_title = next(
+            (
+                node.display_text.strip()
+                for node in document.nodes
+                if node.node_type is NodeType.HEADING
+            ),
+            str(document.nodes[0].metadata.get("document_title", "")),
+        )
         for node in document.nodes:
             check_cancelled()
             if node.node_type is NodeType.HEADING:
-                heading = node.display_text.strip()
+                level = int(node.metadata.get("heading_level", 1))
+                headings = [(depth, title) for depth, title in headings if depth < level]
+                headings.append((level, node.display_text.strip()))
+                heading = " / ".join(title for _, title in headings)
                 if self.config.strategy == "structure":
                     continue
             section_id, section_path = self._section(node, heading, document.document_version_id)
             for piece_index, (text, start, end) in enumerate(
-                _windows(node.original_text, self.config, self.tokenizer)
+                (_table_windows if node.node_type is NodeType.TABLE else _windows)(
+                    node.original_text, self.config, self.tokenizer
+                )
             ):
                 chunk_id = _stable_id(
                     "chunk", document.document_version_id, node.node_id, str(piece_index), text
@@ -211,7 +254,7 @@ class TokenAwareChunker:
                         ordinal=len(children),
                         original_text=text,
                         display_text=text,
-                        retrieval_text=self._retrieval_text(node, heading, text),
+                        retrieval_text=self._retrieval_text(node, heading, text, document_title),
                         locator=_locator_for_slice(node, start, end),
                         content_sha256=checksum,
                         token_count=count_tokens(text, self.tokenizer),
@@ -224,6 +267,20 @@ class TokenAwareChunker:
                             "node_id": node.node_id,
                             "section_path": section_path,
                             "heading": heading,
+                            "document_title": document_title,
+                            **(
+                                {
+                                    "source_spans": [
+                                        {
+                                            "locator": node.locator.to_dict(),
+                                            "role": "table_context",
+                                        },
+                                    ]
+                                }
+                                if node.node_type is NodeType.TABLE
+                                and "source_spans" not in node.metadata
+                                else {}
+                            ),
                         },
                     )
                 )
@@ -248,7 +305,12 @@ class TokenAwareChunker:
                 ordinal=len(parents),
                 original_text=text,
                 display_text=text,
-                retrieval_text=text,
+                retrieval_text="\n".join(
+                    filter(
+                        None,
+                        (document_title, str(grouped[0].metadata.get("section_path", "")), text),
+                    )
+                ),
                 locator=grouped[0].locator,
                 content_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
                 token_count=count_tokens(text, self.tokenizer),
@@ -272,6 +334,7 @@ class TokenAwareChunker:
                         for item in grouped
                     ],
                     "section_path": grouped[0].metadata.get("section_path", "root"),
+                    "document_title": document_title,
                 },
             )
             parents.append(parent)
@@ -295,11 +358,17 @@ class TokenAwareChunker:
         return ChunkingResult(tuple(children), tuple(parents), self.revision)
 
     @staticmethod
-    def _retrieval_text(node: CanonicalNode, heading: str, text: str) -> str:
+    def _retrieval_text(
+        node: CanonicalNode, heading: str, text: str, document_title: str = ""
+    ) -> str:
         context: list[str] = []
+        if document_title and document_title not in heading:
+            context.append(f"DOCUMENT_TITLE: {document_title}")
         if heading:
             context.append(heading)
         table_header = str(node.metadata.get("table_header", "")).strip()
+        if node.node_type is NodeType.TABLE and not table_header and "|" in node.original_text:
+            table_header = node.original_text.splitlines()[0].strip()
         if node.node_type is NodeType.TABLE and table_header and table_header != text:
             context.append(f"TABLE_HEADER: {table_header}")
         context.append(text)

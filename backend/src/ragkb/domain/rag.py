@@ -109,6 +109,9 @@ class EvidencePackage:
     disposition_reason: str = ""
     clarification_fields: tuple[str, ...] = ()
     question_assessor_revision: str = ""
+    coverage: str = "unchecked"
+    retrieval_queries: tuple[str, ...] = ()
+    clarification_question: str | None = None
 
     def __post_init__(self) -> None:
         expected = [f"E{index}" for index in range(1, len(self.evidence) + 1)]
@@ -141,6 +144,7 @@ class DraftAnswer:
     citation_ids: tuple[str, ...]
     claims: tuple[AtomicClaim, ...] = ()
     status: DraftAnswerStatus = DraftAnswerStatus.ANSWERED
+    synthesized: bool = False
 
 
 @dataclass(frozen=True)
@@ -197,6 +201,8 @@ class AskResult:
     degraded: bool = False
     retryable: bool = False
     clarification_fields: tuple[str, ...] = ()
+    clarification_question: str | None = None
+    coverage: str = "unchecked"
 
 
 @dataclass(frozen=True)

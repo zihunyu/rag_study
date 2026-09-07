@@ -11,6 +11,7 @@ from ragkb.api.models import (
     SpaceResponse,
 )
 from ragkb.api.pagination import read_cursor, write_cursor
+from ragkb.api.routers.workspace import workspace_queries
 from ragkb.api.support import (
     document_manager,
     ensure_document_previewable,
@@ -110,11 +111,38 @@ def build_spaces_router(runtime: RuntimeComponents) -> APIRouter:
         space_id: str,
         request: Request,
         response: Response,
-        limit: int = Query(default=100, ge=1, le=100),
+        limit: int = Query(default=30, ge=1, le=100),
         offset: int = Query(default=0, ge=0),
         cursor: str | None = Query(default=None, max_length=2048),
+        q: str = Query(default="", max_length=255),
+        processing: str = Query(default="", max_length=32),
+        availability: str = Query(default="", max_length=32),
+        sort: str = Query(default="updated_desc", pattern="^updated_(asc|desc)$"),
     ) -> list[KnowledgeDocumentResponse]:
-        return list_documents(space_id, request, response, limit, offset, cursor, preview=True)
+        subject = _principal(request)
+        _require_local_tenant(runtime, subject)
+        require_space(subject.tenant_id, space_id)
+        if not document_manager(subject, space_id):
+            raise AuthorizationError("DOCUMENT_MANAGE_SCOPE_REQUIRED")
+        scope = (f'workspace-documents:{subject.tenant_id}:{space_id}:'
+                 f'{q}:{processing}:{availability}:{sort}')
+        page = workspace_queries(runtime).documents(
+            space_id,
+            q=q,
+            processing=processing,
+            availability=availability,
+            sort=sort,
+            limit=limit,
+            offset=offset,
+            after=read_cursor(cursor, scope, offset),
+        )
+        write_cursor(response, scope, page.next_key)
+        return [
+            KnowledgeDocumentResponse.model_validate(
+                {k: v for k, v in item.items() if k in KnowledgeDocumentResponse.model_fields}
+            )
+            for item in page.items
+        ]
 
     def list_documents(
         space_id: str,

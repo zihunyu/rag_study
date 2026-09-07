@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable
+from dataclasses import replace
 
+from ragkb.application.provider_budget import ConservativeTokenCounter
 from ragkb.application.question_assessment import ConservativeQuestionAssessor
 from ragkb.application.search import HybridSearchService
 from ragkb.contracts.ports import RetrievalReleasePort
-from ragkb.contracts.rag import QuestionAssessmentPort
+from ragkb.contracts.rag import EvidenceSelectorPort, QuestionAssessmentPort
 from ragkb.domain.errors import (
     InvalidProviderResponse,
     QuestionAssessmentFailed,
@@ -16,11 +19,17 @@ from ragkb.domain.errors import (
 )
 from ragkb.domain.ids import new_uuid7
 from ragkb.domain.rag import Evidence, EvidencePackage, QuestionAssessment, QuestionDisposition
-from ragkb.domain.retrieval import SearchContext, SearchHit, SearchSource
+from ragkb.domain.retrieval import (
+    RetrievalHealth,
+    SearchContext,
+    SearchHit,
+    SearchResult,
+    SearchSource,
+)
 
 
 class SearchBackedEvidenceProvider:
-    revision = "search-backed-evidence:question-assessment"
+    revision = "search-backed-evidence:coverage-selection-v2"
 
     def __init__(
         self,
@@ -37,6 +46,7 @@ class SearchBackedEvidenceProvider:
         release_provider: RetrievalReleasePort | None = None,
         clock: Callable[[], float] = time.time,
         question_assessor: QuestionAssessmentPort | None = None,
+        evidence_selector: EvidenceSelectorPort | None = None,
     ) -> None:
         self.search_service = search_service
         self.space_id = space_id
@@ -50,6 +60,7 @@ class SearchBackedEvidenceProvider:
         self.release_provider = release_provider
         self.clock = clock
         self.question_assessor = question_assessor or ConservativeQuestionAssessor()
+        self.evidence_selector = evidence_selector
 
     def build_package(
         self,
@@ -74,6 +85,18 @@ class SearchBackedEvidenceProvider:
                 "QUESTION_ASSESSOR_PROTOCOL_INVALID", retryable=False
             ) from error
         query_time = int(self.clock())
+        # A standalone name/topic can be resolved against the selected knowledge
+        # base. Unresolved pronouns and external-operation refusals remain early exits.
+        if (
+            assessment.disposition is QuestionDisposition.NEEDS_CLARIFICATION
+            and assessment.clarification_fields == ("subject",)
+            and re.fullmatch(r"[\w\s\-·“”\"《》]{1,80}", question.strip())
+            and not re.search(
+                r"它|这个|那个|该产品|\b(it|its|that|this|they|their)\b", question, re.I
+            )
+            and self.evidence_selector is not None
+        ):
+            assessment = QuestionAssessment()
         if assessment.disposition is not QuestionDisposition.ANSWERABLE:
             return EvidencePackage(
                 rag_run_id=new_uuid7(),
@@ -129,6 +152,7 @@ class SearchBackedEvidenceProvider:
         )
         evidence: list[Evidence] = []
         seen_sources: set[tuple[str, str, str]] = set()
+        parent_ids: set[str] = set()
 
         def append_source(source: SearchHit | SearchSource, *, review_only: bool = False) -> None:
             key = (source.document_id, source.document_version_id, source.chunk_id)
@@ -170,28 +194,81 @@ class SearchBackedEvidenceProvider:
                 )
             )
 
-        # Preserve hit ordering/IDs, then add each parent once with its own location.
-        # A parent that is also a hit already has a citable evidence ID.
-        for hit in result.hits:
-            append_source(hit)
-        hit_texts = {
-            (hit.document_id, hit.document_version_id, hit.retrieval_text or hit.display_text)
-            for hit in result.hits
-        }
-        for hit in result.hits:
-            parent = hit.parent_source
-            if (
-                parent is not None
-                and (
-                    parent.document_id,
-                    parent.document_version_id,
-                    parent.retrieval_text or parent.display_text,
-                )
-                not in hit_texts
-            ):
-                append_source(parent)
-        for source in result.review_sources:
-            append_source(source, review_only=True)
+        def collect(found: SearchResult) -> None:
+            for hit in found.hits:
+                append_source(hit)
+            for hit in found.hits:
+                parent = hit.parent_source
+                if parent is not None:
+                    parent_ids.add(parent.chunk_id)
+                    if parent.retrieval_text not in {entry.retrieval_text for entry in found.hits}:
+                        append_source(parent)
+            for source in found.review_sources:
+                append_source(source, review_only=True)
+            if self.evidence_selector is not None:
+                for parent in self.search_service.expand_parents(found.review_sources, context):
+                    parent_ids.add(parent.chunk_id)
+                    append_source(parent, review_only=True)
+
+        collect(result)
+        queries = [question]
+        coverage, clarification = "unchecked", None
+        health = result.retrieval_health
+        warnings = list(result.warnings)
+        if self.evidence_selector is not None and health is not RetrievalHealth.UNAVAILABLE:
+            try:
+                choice = self.evidence_selector.select(question, tuple(evidence))
+                # One supplemental round, at most two queries; same tenant, space,
+                # release and permission context. No bypass of retrieval fences.
+                if choice.coverage in {"partial", "missing"}:
+                    for query in choice.queries[:2]:
+                        if query.strip().casefold() in {q.casefold() for q in queries}:
+                            continue
+                        queries.append(query.strip())
+                        extra = self.search_service.search(
+                            query, context, limit=self.final_evidence_count
+                        )
+                        collect(extra)
+                        warnings.extend(extra.warnings)
+                        if extra.retrieval_health is RetrievalHealth.UNAVAILABLE:
+                            health = RetrievalHealth.UNAVAILABLE
+                        elif (
+                            extra.retrieval_health is RetrievalHealth.DEGRADED
+                            and health is RetrievalHealth.HEALTHY
+                        ):
+                            health = RetrievalHealth.DEGRADED
+                    if len(queries) > 1 and health is not RetrievalHealth.UNAVAILABLE:
+                        choice = self.evidence_selector.select(question, tuple(evidence))
+                coverage, clarification = choice.coverage, choice.clarification
+                selected: set[str] = set()
+                used = 0
+                counter = ConservativeTokenCounter()
+                by_id = {item.evidence_id: item for item in evidence}
+                for identity in choice.source_ids[: self.final_evidence_count]:
+                    item = by_id[identity]
+                    size = counter.count(item.text)
+                    if used + size <= 8000:
+                        selected.add(identity)
+                        used += size
+                evidence = [
+                    replace(
+                        item,
+                        source_role=(
+                            ("parent_context" if item.chunk_id in parent_ids else "hit")
+                            if item.evidence_id in selected
+                            else "conflict_context"
+                        ),
+                    )
+                    for item in evidence
+                ]
+            except TransientProviderError as error:
+                raise QuestionAssessmentFailed(
+                    "EVIDENCE_SELECTION_UNAVAILABLE", retryable=True
+                ) from error
+            except (InvalidProviderResponse, KeyError) as error:
+                raise QuestionAssessmentFailed(
+                    "EVIDENCE_SELECTION_PROTOCOL_INVALID", retryable=False
+                ) from error
         return EvidencePackage(
             rag_run_id=new_uuid7(),
             tenant_id=tenant_id,
@@ -206,8 +283,19 @@ class SearchBackedEvidenceProvider:
             evidence=tuple(evidence),
             verifier_revision=self.verifier_revision,
             real_acceptance=result.real_acceptance,
-            retrieval_health=result.retrieval_health,
-            retrieval_warnings=result.warnings,
-            disposition_reason=assessment.reason_code,
+            retrieval_health=health,
+            retrieval_warnings=tuple(dict.fromkeys(warnings)),
+            disposition_reason="missing_context"
+            if coverage == "ambiguous"
+            else assessment.reason_code,
             question_assessor_revision=self.question_assessor.revision,
+            coverage=coverage,
+            retrieval_queries=tuple(queries),
+            clarification_question=clarification,
+            disposition=(
+                QuestionDisposition.NEEDS_CLARIFICATION
+                if coverage == "ambiguous"
+                else QuestionDisposition.ANSWERABLE
+            ),
+            clarification_fields=("subject",) if coverage == "ambiguous" else (),
         )

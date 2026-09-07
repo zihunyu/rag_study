@@ -12,6 +12,8 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from ragkb.adapters.auth import AuthenticationError, AuthorizationError
+from ragkb.adapters.conversation_context import LocalContextResolver, ModelContextResolver
+from ragkb.api.routers.conversations import build_conversations_router
 from ragkb.api.routers.documents import build_documents_router
 from ragkb.api.routers.governance import build_governance_router
 from ragkb.api.routers.health import build_health_router
@@ -19,6 +21,7 @@ from ragkb.api.routers.lifecycle import build_lifecycle_router
 from ragkb.api.routers.rag import build_rag_router
 from ragkb.api.routers.spaces import build_spaces_router
 from ragkb.api.routers.uploads import build_uploads_router
+from ragkb.api.routers.workspace import build_workspace_router, workspace_queries
 from ragkb.api.support import error_response as _error
 from ragkb.application.access_telemetry import AccessTelemetry
 from ragkb.application.lifecycle import (
@@ -36,6 +39,8 @@ from ragkb.domain.uploads import (
 )
 from ragkb.engineering_security.file_validation import FileValidationError
 from ragkb.engineering_security.references import ReferenceTokenError
+from ragkb.infrastructure.conversation_service import ConversationService
+from ragkb.infrastructure.conversations import ConversationRepository
 from ragkb.runtime_components import RuntimeComponents, build_runtime_components
 
 OPENAPI_VERSION = "1.0.0"
@@ -52,6 +57,22 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
     )
     access_metrics = AccessTelemetry()
     app.state.access_metrics = access_metrics
+    queries = workspace_queries(runtime)
+    conversation_service = ConversationService(
+        runtime,
+        ConversationRepository(queries.db),
+        ModelContextResolver(
+            runtime.settings,
+            runtime.provider_transports[2]
+            if len(runtime.provider_transports) > 2
+            else runtime.model_transport,
+        )
+        if runtime.settings.rag_runtime_profile == "production"
+        else LocalContextResolver(),
+        queries,
+    )
+    app.state.conversation_service = conversation_service
+    app.router.add_event_handler("shutdown", conversation_service.close)
     app.router.add_event_handler("shutdown", access_metrics.close)
     for provider_transport in runtime.provider_transports:
         app.router.add_event_handler("shutdown", provider_transport.close)
@@ -174,6 +195,8 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
         return _error(request, error.reason_code, "file was rejected by malware policy", 422)
 
     app.include_router(build_health_router(runtime))
+    app.include_router(build_workspace_router(runtime))
+    app.include_router(build_conversations_router(runtime, conversation_service))
     app.include_router(build_spaces_router(runtime))
     app.include_router(build_uploads_router(runtime))
     app.include_router(build_documents_router(runtime))

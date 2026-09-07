@@ -13,35 +13,7 @@ if (apiUrl.protocol !== "https:" && !["127.0.0.1", "localhost", "::1"].includes(
   throw new Error("FRONTEND_API_BASE_URL_HTTPS_REQUIRED");
 }
 
-const oidcEnabled = process.env.FRONTEND_OIDC_ENABLED === "true";
-const publicOrigin = process.env.FRONTEND_PUBLIC_ORIGIN?.trim() || "";
-const oidc = {
-  enabled: oidcEnabled,
-  authority: process.env.FRONTEND_OIDC_AUTHORITY?.trim() || "",
-  clientId: process.env.FRONTEND_OIDC_CLIENT_ID?.trim() || "",
-  redirectUri:
-    process.env.FRONTEND_OIDC_REDIRECT_URI?.trim() ||
-    (publicOrigin ? `${publicOrigin.replace(/\/$/, "")}/auth/callback` : ""),
-  postLogoutRedirectUri:
-    process.env.FRONTEND_OIDC_POST_LOGOUT_REDIRECT_URI?.trim() || publicOrigin,
-  scope: process.env.FRONTEND_OIDC_SCOPE?.trim() || "openid profile email",
-};
-if (oidcEnabled && (!oidc.authority || !oidc.clientId || !oidc.redirectUri)) {
-  throw new Error("FRONTEND_OIDC_CONFIGURATION_INCOMPLETE");
-}
-if (oidcEnabled) {
-  const authority = new URL(oidc.authority);
-  const redirect = new URL(oidc.redirectUri);
-  const allowedLocalHosts = ["127.0.0.1", "localhost", "::1"];
-  if (authority.protocol !== "https:" && !allowedLocalHosts.includes(authority.hostname)) {
-    throw new Error("FRONTEND_OIDC_AUTHORITY_HTTPS_REQUIRED");
-  }
-  if (publicOrigin && redirect.origin !== new URL(publicOrigin).origin) {
-    throw new Error("FRONTEND_OIDC_REDIRECT_ORIGIN_MISMATCH");
-  }
-}
-
-const runtimeConfig = JSON.stringify({ apiBaseUrl, oidc })
+const runtimeConfig = JSON.stringify({ apiBaseUrl })
   .replaceAll("<", "\\u003c")
   .replaceAll("\u2028", "\\u2028")
   .replaceAll("\u2029", "\\u2029");

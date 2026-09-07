@@ -16,34 +16,81 @@ from ragkb.domain.ids import new_uuid7
 
 
 class PlainTextParser:
-    revision = "plain-text-parser"
+    revision = "plain-text-parser:structure-v3"
 
     def __init__(self, source_format: str) -> None:
         self.source_format = source_format
 
     def parse(self, source: Path, document_version_id: str) -> CanonicalDocument:
-        blocks = source.read_text(encoding="utf-8").splitlines()
-        node_types: list[NodeType] = []
-        rendered: list[str] = []
-        metadata: list[dict[str, Any]] = []
-        for block in blocks:
+        text = source.read_text(encoding="utf-8")
+        blocks = text.splitlines(keepends=True)
+        nodes: list[CanonicalNode] = []
+        offsets = [0]
+        for line in blocks:
+            offsets.append(offsets[-1] + len(line))
+        index = 0
+        while index < len(blocks):
+            block = blocks[index]
+            if not block.strip():
+                index += 1
+                continue
+            start = offsets[index] + len(block) - len(block.lstrip())
             heading = re.match(r"^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$", block)
+            kind = NodeType.PARAGRAPH
+            metadata: dict[str, Any] = {"document_title": source.stem}
             if self.source_format == "markdown" and heading:
-                rendered.append(heading.group(2))
-                node_types.append(NodeType.HEADING)
-                metadata.append({"heading_level": len(heading.group(1))})
+                value = heading.group(2)
+                start = offsets[index] + heading.start(2)
+                kind = NodeType.HEADING
+                metadata["heading_level"] = len(heading.group(1))
+                index += 1
+            elif (
+                self.source_format == "markdown"
+                and index + 1 < len(blocks)
+                and (
+                    "|" in block
+                    and re.fullmatch(
+                        r"\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*",
+                        blocks[index + 1],
+                    )
+                )
+            ):
+                end_index = index + 2
+                while (
+                    end_index < len(blocks)
+                    and "|" in blocks[end_index]
+                    and blocks[end_index].strip()
+                ):
+                    end_index += 1
+                value = "".join(blocks[index:end_index]).strip()
+                kind = NodeType.TABLE
+                metadata["table_header"] = block.strip()
+                index = end_index
             else:
-                rendered.append(block)
-                node_types.append(NodeType.PARAGRAPH)
-                metadata.append({})
-        nodes = text_nodes(
-            rendered,
-            locator_factory=lambda _index, offset, length: SourceLocator(
-                char_range=(offset, offset + length)
-            ),
-            node_types=node_types,
-            metadata=metadata,
-        )
+                # Keep contiguous prose/list steps together. Tables and headings
+                # remain separate structures; source offsets address the real file.
+                end_index = index + 1
+                while end_index < len(blocks) and blocks[end_index].strip():
+                    if self.source_format == "markdown" and (
+                        re.match(r"\s{0,3}#{1,6}\s", blocks[end_index]) or "|" in blocks[end_index]
+                    ):
+                        break
+                    end_index += 1
+                value = "".join(blocks[index:end_index]).strip()
+                if re.match(r"(?:[-*+] |\d+[.)] )", value):
+                    kind = NodeType.LIST
+                index = end_index
+            nodes.append(
+                CanonicalNode(
+                    new_uuid7(),
+                    None,
+                    kind,
+                    value,
+                    value,
+                    SourceLocator(char_range=(start, start + len(value))),
+                    metadata,
+                )
+            )
         if not nodes:
             raise ParsingDeferred("PARSE_EMPTY", "text document has no usable content")
         return canonical_document(
@@ -57,6 +104,8 @@ class _HTMLExtractor(HTMLParser):
         self.blocks: list[tuple[str, NodeType, dict[str, Any]]] = []
         self._ignored_depth = 0
         self._heading_level: int | None = None
+        self._table_rows: list[list[str]] | None = None
+        self._cell: list[str] | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         del attrs
@@ -65,14 +114,35 @@ class _HTMLExtractor(HTMLParser):
         heading = re.fullmatch(r"h([1-6])", tag.casefold())
         if heading:
             self._heading_level = int(heading.group(1))
+        if tag.casefold() == "table":
+            self._table_rows = []
+        elif tag.casefold() == "tr" and self._table_rows is not None:
+            self._table_rows.append([])
+        elif tag.casefold() in {"td", "th"} and self._table_rows is not None:
+            self._cell = []
 
     def handle_endtag(self, tag: str) -> None:
         if tag.casefold() in {"script", "style", "noscript"} and self._ignored_depth:
             self._ignored_depth -= 1
         if re.fullmatch(r"h[1-6]", tag.casefold()):
             self._heading_level = None
+        if tag.casefold() in {"td", "th"} and self._cell is not None:
+            if self._table_rows is not None:
+                if not self._table_rows:
+                    self._table_rows.append([])
+                self._table_rows[-1].append(" ".join(self._cell))
+            self._cell = None
+        if tag.casefold() == "table" and self._table_rows is not None:
+            rows = [" | ".join(row) for row in self._table_rows if row]
+            if rows:
+                self.blocks.append(("\n".join(rows), NodeType.TABLE, {"table_header": rows[0]}))
+            self._table_rows = None
 
     def handle_data(self, data: str) -> None:
+        if self._table_rows is not None:
+            if self._cell is not None and not self._ignored_depth and data.strip():
+                self._cell.append(data.strip())
+            return
         if not self._ignored_depth and data.strip():
             self.blocks.append(
                 (
