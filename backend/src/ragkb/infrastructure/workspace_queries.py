@@ -234,7 +234,9 @@ class WorkspaceQueries:
         )
         return RepositoryPage([self.decorate(row) for row in rows[:limit]], key)
 
-    def summaries(self) -> dict[str, dict[str, Any]]:
+    def summaries(self, space_ids: tuple[str, ...] | None = None) -> dict[str, dict[str, Any]]:
+        if space_ids == ():
+            return {}
         sql, args = self._facts()
         sql += """SELECT space_id,COUNT(*) document_count,
           SUM(CASE WHEN availability='available' THEN 1 ELSE 0 END) answerable_count,
@@ -243,7 +245,11 @@ class WorkspaceQueries:
             THEN 1 ELSE 0 END) pending_count,
           SUM(CASE WHEN availability='processing' THEN 1 ELSE 0 END) processing_count,
           COALESCE(SUM(chunk_count),0) chunk_count,MAX(updated_ms) updated_ms
-          FROM classified WHERE availability!='deleted' GROUP BY space_id"""
+          FROM classified WHERE availability!='deleted' """
+        if space_ids is not None:
+            sql += "AND space_id IN (" + ",".join("?" for _ in space_ids) + ") "
+            args = (*args, *space_ids)
+        sql += "GROUP BY space_id"
         with self.db.connection() as connection:
             rows = self.db.rows(connection, sql, args)
         return {
@@ -251,13 +257,16 @@ class WorkspaceQueries:
             for row in rows
         }
 
-    def metadata(self) -> dict[str, str]:
+    def metadata(self, space_ids: tuple[str, ...] | None = None) -> dict[str, str]:
+        if space_ids == ():
+            return {}
+        sql = "SELECT resource_id,description FROM workspace_metadata WHERE tenant_id=?"
+        args: tuple[str, ...] = (self.tenant_id,)
+        if space_ids is not None:
+            sql += " AND resource_id IN (" + ",".join("?" for _ in space_ids) + ")"
+            args = (*args, *space_ids)
         with self.db.connection() as connection:
-            rows = self.db.rows(
-                connection,
-                "SELECT resource_id,description FROM workspace_metadata WHERE tenant_id=?",
-                (self.tenant_id,),
-            )
+            rows = self.db.rows(connection, sql, args)
         return {row["resource_id"]: row["description"] for row in rows}
 
     def set_description(self, space_id: str, description: str) -> None:

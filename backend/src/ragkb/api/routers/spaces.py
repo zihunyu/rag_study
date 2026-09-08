@@ -53,7 +53,9 @@ def build_spaces_router(runtime: RuntimeComponents) -> APIRouter:
                 name=str(item["name"]),
                 status=str(item["status"]),
             )
-            for item in runtime.repository.list_spaces()
+            for item in (runtime.accounts.allowed_spaces(principal)
+                         if runtime.accounts and runtime.accounts.enabled
+                         else runtime.repository.list_spaces())
         ]
 
     @router.post(
@@ -64,7 +66,7 @@ def build_spaces_router(runtime: RuntimeComponents) -> APIRouter:
     )
     def create_space(body: CreateSpaceRequest, request: Request) -> SpaceResponse:
         principal = _principal(request)
-        _require_role(principal, "knowledge_maintainer", "admin")
+        _require_role(principal, "admin")
         _require_local_tenant(runtime, principal)
         item = runtime.repository.create_space(principal.tenant_id, body.name)
         created_space_id = str(item["id"])

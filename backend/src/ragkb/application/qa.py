@@ -465,6 +465,8 @@ class TrustedQAService:
                         clearance_level=clearance_level,
                         space_id=space_id,
                     )
+            package = replace(package, subject_authorization_revision="|".join(
+                t for t in subject_scope_tokens if t.startswith("auth-revision:")))
         except (RetrievalFailClosed, TransientProviderError, QuestionAssessmentFailed) as error:
             package = EvidencePackage(
                 rag_run_id=new_uuid7(),
@@ -887,7 +889,8 @@ class InMemoryVerifiedAnswerCache:
 def verified_answer_cache_key(package: EvidencePackage) -> str:
     payload = {
         "verifier_revision": package.verifier_revision,
-        "permission_policy_revision": "guarded-final-release+full-pool-conflicts",
+        "permission_policy_revision": "account-scoped-final-release-v1",
+        "subject_authorization_revision": package.subject_authorization_revision,
         "tenant_id": package.tenant_id,
         "user_id": package.user_id,
         "permission_revision": package.permission_revision,

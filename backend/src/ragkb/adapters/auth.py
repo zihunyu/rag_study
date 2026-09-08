@@ -184,3 +184,9 @@ class OIDCDiscoveryJWTDecoder:
         if not isinstance(claims, Mapping):
             raise AuthenticationError("OIDC_TOKEN_CLAIMS_INVALID")
         return claims
+
+
+class PasswordCookieAuthenticator:
+    """Password mode has no bearer or anonymous fallback; HTTP middleware verifies cookies."""
+    def authenticate(self, authorization_header: str | None) -> RequestPrincipal:
+        raise AuthenticationError("PASSWORD_SESSION_REQUIRED")

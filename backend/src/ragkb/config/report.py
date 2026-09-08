@@ -39,6 +39,19 @@ def conditional_issues(result: EnvLoadResult) -> tuple[EnvIssue, ...]:
         if not _configured(result, key):
             issues.append(EnvIssue(key, "ENV_REQUIRED", gate))
 
+    if (
+        settings.auth_mode == "password"
+        and not settings.auth_cookie_secure
+        and (
+            settings.app_host not in {"localhost", "127.0.0.1", "::1"}
+            or any(
+                urlparse(origin).hostname not in {"localhost", "127.0.0.1", "::1"}
+                for origin in settings.cors_origins
+            )
+        )
+    ):
+        issues.append(EnvIssue("AUTH_COOKIE_SECURE", "PASSWORD_AUTH_REQUIRES_SECURE_COOKIE", "G0"))
+
     if settings.app_env == "production":
         if settings.auth_mode == "local_single_user" and settings.app_host not in {
             "127.0.0.1",
@@ -280,7 +293,7 @@ def conditional_issues(result: EnvLoadResult) -> tuple[EnvIssue, ...]:
         issues.append(EnvIssue("APP_SECRET_KEY", "SECRET_TOO_SHORT_MIN_16", "G3"))
     if settings.auth_mode == "local_single_user":
         issues.append(EnvIssue("AUTH_MODE", "ENTERPRISE_IDP_DEFERRED", "G5"))
-    else:
+    elif settings.auth_mode == "oidc":
         for key in ("OIDC_ISSUER_URL", "OIDC_AUDIENCE", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET"):
             require(key, "G3")
         if settings.app_env == "production":

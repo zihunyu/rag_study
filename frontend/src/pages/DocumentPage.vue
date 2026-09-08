@@ -3,6 +3,7 @@ import { computed, ref, watch, onUnmounted, nextTick } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ArrowLeft, FileText, Download, Upload, MoreHorizontal, Check, ChevronRight, BookOpen, Layers, History, ShieldCheck, RotateCcw, Ban, Trash2, ExternalLink } from '@lucide/vue';
 import { useResource } from '../composables/useResource.js';
+import { authEpoch, sessionFetch } from '../authTransport.js';
 import { request, requestPage, apiUrl, queryString, confirmPublication, jobCommand } from '../api.js';
 import { useWorkspace } from '../stores/workspace.js';
 import { dateTime, fileSize, locationLabel } from '../format.js';
@@ -22,6 +23,20 @@ const chunks = ref([]), cursor = ref(null), chunkLoading = ref(false), chunkErro
 let revision = 0, timer;
 const version = computed(() => doc.value?.versions.find(v => v.id === versionId.value));
 const canPublish = computed(() => doc.value?.available_actions.includes('review_publish') && versionId.value === doc.value.version_id && quality.value && quality.value.disposition !== 'BLOCKED_REAL_VALIDATION');
+const downloading = ref(false);
+async function downloadOriginal() {
+  const account = authEpoch(), current = versionId.value, filename = doc.value?.filename || 'document';
+  downloading.value = true; actionError.value = null;
+  try {
+    const response = await sessionFetch(apiUrl(`/document-versions/${current}/original/preview`));
+    if (!response.ok) throw new Error(response.status === 404 ? 'NOT_FOUND' : 'DOWNLOAD_FAILED');
+    const blob = await response.blob();
+    if (account !== authEpoch() || current !== versionId.value) return;
+    const url = URL.createObjectURL(blob), link = document.createElement('a');
+    link.href = url; link.download = filename; link.click(); URL.revokeObjectURL(url);
+  } catch (error) { if (account === authEpoch() && error.name !== 'AbortError') actionError.value = error; }
+  finally { downloading.value = false; }
+}
 async function readVersion() {
   const own = ++revision, id = versionId.value;
   chunks.value = []; cursor.value = null; chunkError.value = null; quality.value = null;
@@ -86,7 +101,7 @@ const issueLabels = { LOCATOR_MISSING: '部分内容缺少来源位置', EMPTY_D
   <RouterLink class="back-link" :to="`/knowledge-bases/${spaceId}/documents`"><ArrowLeft :size="16"/>返回文档列表</RouterLink>
   <ErrorNotice :error="resource.error.value" retry @retry="load"/>
   <div v-if="resource.loading.value && !doc" class="skeleton-card"/>
-  <template v-if="doc"><div class="page-heading compact"><div class="document-heading"><span class="library-symbol"><FileText :size="25"/></span><div><h1>{{ version?.original_key?.split('/').pop() || doc.filename }}</h1><p class="page-description">{{ fileSize(doc.size_bytes) }}<span class="separator">·</span>版本 {{ version?.version_no || doc.version_no }}<span class="separator">·</span>{{ dateTime(doc.updated_at) }}</p></div></div><div class="toolbar-actions"><a class="btn" :href="apiUrl(`/document-versions/${versionId}/original/preview`)" download><Download :size="16"/>原文件</a><div class="dropdown"><button class="icon-button" aria-label="文档操作" :aria-expanded="menuOpen" @click="menuOpen = !menuOpen"><MoreHorizontal :size="21"/></button><div v-if="menuOpen" class="dropdown-menu"><button :disabled="!doc.available_actions.includes('upload_version')" @click="uploading = true; menuOpen = false"><Upload :size="16"/>上传新版本</button><button :disabled="!doc.available_actions.includes('revoke')" @click="action = 'revoke'; menuOpen = false"><Ban :size="16"/>撤回文档</button><button class="danger-text" :disabled="!doc.available_actions.includes('delete')" @click="action = 'delete'; menuOpen = false"><Trash2 :size="16"/>删除文档</button></div></div></div></div>
+  <template v-if="doc"><div class="page-heading compact"><div class="document-heading"><span class="library-symbol"><FileText :size="25"/></span><div><h1>{{ version?.original_key?.split('/').pop() || doc.filename }}</h1><p class="page-description">{{ fileSize(doc.size_bytes) }}<span class="separator">·</span>版本 {{ version?.version_no || doc.version_no }}<span class="separator">·</span>{{ dateTime(doc.updated_at) }}</p></div></div><div class="toolbar-actions"><button class="btn" :disabled="downloading" @click="downloadOriginal"><Download :size="16"/>{{ downloading ? '正在下载…' : '原文件' }}</button><div class="dropdown"><button class="icon-button" aria-label="文档操作" :aria-expanded="menuOpen" @click="menuOpen = !menuOpen"><MoreHorizontal :size="21"/></button><div v-if="menuOpen" class="dropdown-menu"><button :disabled="!doc.available_actions.includes('upload_version')" @click="uploading = true; menuOpen = false"><Upload :size="16"/>上传新版本</button><button :disabled="!doc.available_actions.includes('revoke')" @click="action = 'revoke'; menuOpen = false"><Ban :size="16"/>撤回文档</button><button class="danger-text" :disabled="!doc.available_actions.includes('delete')" @click="action = 'delete'; menuOpen = false"><Trash2 :size="16"/>删除文档</button></div></div></div></div>
   <RouterLink v-if="doc.available_actions.includes('ask')" class="btn" :to="{ path:'/chat', query:{ space:spaceId, document:documentId, mode:'overview' } }">逐章总结本篇</RouterLink><div class="document-status-strip"><StatusBadge :status="doc.availability"/><StatusBadge :status="doc.processing_state" kind="processing"/><span v-for="reason in doc.unavailability_reasons" :key="reason" class="muted small">{{ reason }}</span><RouterLink v-if="doc.job_id" to="/tasks" class="text-link push-right">查看处理任务<ExternalLink :size="13"/></RouterLink></div>
   <ErrorNotice :error="actionError"/><div v-if="publicationPhase === 'reviewed'" class="notice warning"><ShieldCheck :size="19"/><div><strong>复核已通过，发布尚未完成</strong><p>检查质量页面中点击“继续发布”，将从未完成的发布步骤重试。</p></div></div>
   <div v-if="doc.availability === 'failed' || doc.availability === 'cancelled'" class="notice warning"><div><strong>{{ doc.availability === 'failed' ? '文件处理未完成' : '处理已取消' }}</strong><p>可在任务中心查看处理原因并重试。</p><details v-if="doc.error_code" class="technical"><summary>技术详情</summary><code>{{ doc.error_code }}</code></details></div><button v-if="doc.available_actions.includes('retry')" class="btn" :disabled="busy" @click="retry"><RotateCcw :size="15"/>重新处理</button></div>

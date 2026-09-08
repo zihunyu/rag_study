@@ -1,3 +1,4 @@
+import { onSessionReset, sessionFetch } from '../authTransport.js';
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import { apiUrl, command, request, requestPage, queryString, consumeSSE } from '../api.js';
@@ -40,6 +41,7 @@ export const useConversations = defineStore('conversations', () => {
     catch (cause) { if (own === revision) error.value = cause; }
   }
   async function create(spaceId) { const conversation = await command('/conversations', { space_id: spaceId }); await list(spaceId); return conversation; }
+  onSessionReset(() => { revision++; listRevision++; controller?.abort(); current.value = null; conversations.value = []; turns.value = []; nextBefore.value = null; listCursor.value = null; sending.value = false; loading.value = false; error.value = null; });
   async function send(question, reading = {}) {
     if (!current.value || busy.value || !question.trim()) return;
     const own = revision, id = current.value.id;
@@ -50,11 +52,12 @@ export const useConversations = defineStore('conversations', () => {
     if (pending?.question !== question.trim() || JSON.stringify(pending?.reading || {}) !== JSON.stringify(reading)) pending = { question: question.trim(), reading, client_request_id: crypto.randomUUID() };
     sessionStorage.setItem(key, JSON.stringify(pending));
     try {
-      const response = await fetch(apiUrl(`/conversations/${id}/turns:stream`), { method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' }, body: JSON.stringify(pending) });
+      const response = await sessionFetch(apiUrl(`/conversations/${id}/turns:stream`), { method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' }, body: JSON.stringify(pending) });
       if (!response.ok) { const body = await response.json(); const cause = new Error(body.detail || body.code || 'CONVERSATION_SEND_FAILED'); cause.status = response.status; throw cause; }
       let received = false;
       await consumeSSE(response, (event, payload) => {
         if (own !== revision) return;
+        if (event === 'access_revoked') { controller?.abort(); current.value = null; turns.value = []; throw new Error('KNOWLEDGE_BASE_ACCESS_REVOKED'); }
         if (event === 'turn' || event === 'result') { merge(payload); sessionStorage.removeItem(key); }
         if (event === 'result') received = true;
       });

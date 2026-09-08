@@ -83,7 +83,7 @@ class ProductionRuntimeFactory:
     def _tenant_id(settings: EnvSettings) -> str:
         return (
             settings.auth_local_tenant
-            if settings.auth_mode == "local_single_user"
+            if settings.auth_mode in {"local_single_user", "password"}
             else settings.oidc_tenant_id
         )
 
@@ -314,6 +314,9 @@ class ProductionRuntimeFactory:
 
     def build_authenticator(self, settings: EnvSettings, tenant_id: str):  # type: ignore[no-untyped-def]
         self._guard(settings)
+        if settings.auth_mode == "password":
+            from ragkb.adapters.auth import PasswordCookieAuthenticator
+            return PasswordCookieAuthenticator()
         if settings.auth_mode == "local_single_user":
             return LocalSingleUserAuthenticator(settings, tenant_id=tenant_id)
         return OIDCJWTAuthenticator(settings, verified_decoder=OIDCDiscoveryJWTDecoder(settings))

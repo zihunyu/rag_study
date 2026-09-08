@@ -150,6 +150,19 @@ def build_conversations_router(
             previous = None
             ticks = 0
             while True:
+                if runtime.accounts and runtime.accounts.enabled:
+                    allowed = await run_in_threadpool(
+                        runtime.accounts.recheck,
+                        subject.user_id,
+                        subject.scope_tokens,
+                        (conversation["space_id"],),
+                    )
+                    if not allowed:
+                        yield (
+                            "event: access_revoked\ndata: "
+                            '{"code":"KNOWLEDGE_BASE_ACCESS_REVOKED"}\n\n'
+                        )
+                        return
                 current = await run_in_threadpool(repository.turn, turn["id"])
                 if previous != current["state"] or ticks % 6 == 0:
                     progress_item = await run_in_threadpool(

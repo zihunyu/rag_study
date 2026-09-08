@@ -85,6 +85,18 @@ class ConversationRepository:
         if space:
             filters.append("space_id=?")
             params.append(space)
+        if subject.auth_mode == "password":
+            filters.append(
+                "NOT EXISTS (SELECT 1 FROM space_access_state a WHERE "
+                "a.tenant_id=conversations.tenant_id AND a.space_id=conversations.space_id "
+                "AND a.deleted=1)"
+            )
+            if not subject.has_role("admin"):
+                filters.append(
+                    "EXISTS (SELECT 1 FROM space_memberships m WHERE "
+                    "m.tenant_id=conversations.tenant_id AND m.space_id=conversations.space_id "
+                    "AND m.user_id=conversations.user_id)"
+                )
         # Fixed integer millisecond ordering makes cursors portable across both databases.
         stamp = "FLOOR(updated_at*1000)" if self.db.mysql else "CAST(updated_at*1000 AS INTEGER)"
         if after:

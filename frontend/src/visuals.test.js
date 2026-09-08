@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from 'vitest';
+import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import DocumentVisuals from './components/DocumentVisuals.vue';
 import MermaidDiagram from './components/MermaidDiagram.vue';
@@ -11,6 +11,11 @@ import ReadingImageCoverage from './components/ReadingImageCoverage.vue';
 const render = vi.hoisted(() => vi.fn());
 vi.mock('./mermaid.js', () => ({ renderDiagram: render }));
 let wrapper;
+beforeEach(() => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(new Blob(['fixture-image']))));
+  URL.createObjectURL = vi.fn(() => 'blob:private-fixture');
+  URL.revokeObjectURL = vi.fn();
+});
 afterEach(() => { wrapper?.unmount(); vi.unstubAllGlobals(); vi.clearAllMocks(); sessionStorage.clear(); });
 const json = data => new Response(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } });
 
@@ -106,7 +111,9 @@ it('shows only measured OCR boxes and leaves ambiguous cells unlocated', async (
   wrapper = mount(VisualAsset, { props:{ asset:record } });
   await wrapper.get('td').trigger('click');
   expect(wrapper.get('.visual-region').attributes('style')).toContain('left: 10%');
-  expect(wrapper.get('img').attributes('src')).toContain('normalized=true');
+  await flushPromises();
+  expect(fetch).toHaveBeenCalledWith(expect.stringContaining('normalized=true'), expect.objectContaining({ credentials: 'include' }));
+  expect(wrapper.get('img').attributes('src')).toBe('blob:private-fixture');
   await wrapper.setProps({asset:{...record, local_check:{targets:[]}}});
   await wrapper.get('td').trigger('click');
   expect(wrapper.find('.visual-region').exists()).toBe(false);

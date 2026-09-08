@@ -1,7 +1,9 @@
 <script setup>
 import { computed, ref } from 'vue';
 import { sourceUrl } from '../api.js';
+import { usePrivateImage } from '../composables/usePrivateImage.js';
 const props=defineProps({asset:Object, target:Object});
+const { image, failed } = usePrivateImage(computed(() => sourceUrl(props.asset.image_url+'?normalized=true')));
 const emit=defineEmits(['select']);
 const start=ref(null), end=ref(null), host=ref(null);
 const bbox=computed(()=>start.value&&end.value ? [Math.min(start.value[0],end.value[0]),Math.min(start.value[1],end.value[1]),Math.max(start.value[0],end.value[0]),Math.max(start.value[1],end.value[1])] : props.target?.bbox);
@@ -12,5 +14,5 @@ function move(event) { if(start.value) end.value=point(event); }
 function up(event) { if(!start.value) return; end.value=point(event); const selected=bbox.value; if(selected[2]-selected[0]>.003 && selected[3]-selected[1]>.003) emit('select',selected); start.value=null; end.value=null; }
 </script>
 <template>
-<section class="visual-region-picker"><p class="small muted">选择一个节点、分组或连线后，在原图上拖动框选其真实位置。坐标仅标记原图，连接线的框应覆盖箭头及端点。</p><div ref="host" class="visual-image-canvas" :class="{ selecting:target }" @pointerdown.prevent="down" @pointermove="move" @pointerup="up" @pointercancel="start=null;end=null"><img :src="sourceUrl(asset.image_url+'?normalized=true')" :alt="asset.extraction?.title || '复核原图'" draggable="false"/><span v-if="bbox" class="visual-region" :style="style"/></div><p v-if="target" class="small">{{ target.bbox ? (target.bbox_basis==='human'?'已人工标记原图区域':'已有候选区域，请对照原图确认') : '此对象还没有原图区域' }}<button v-if="target.bbox" type="button" class="btn small-button" @click="emit('select',null)">清除区域</button></p></section>
+<section class="visual-region-picker"><p class="small muted">选择一个节点、分组或连线后，在原图上拖动框选其真实位置。坐标仅标记原图，连接线的框应覆盖箭头及端点。</p><p v-if="failed" class="notice warning">原图不可用，请刷新当前文档。</p><div ref="host" class="visual-image-canvas" :class="{ selecting:target }" @pointerdown.prevent="down" @pointermove="move" @pointerup="up" @pointercancel="start=null;end=null"><img :src="image || undefined" :alt="asset.extraction?.title || '复核原图'" draggable="false"/><span v-if="bbox" class="visual-region" :style="style"/></div><p v-if="target" class="small">{{ target.bbox ? (target.bbox_basis==='human'?'已人工标记原图区域':'已有候选区域，请对照原图确认') : '此对象还没有原图区域' }}<button v-if="target.bbox" type="button" class="btn small-button" @click="emit('select',null)">清除区域</button></p></section>
 </template>

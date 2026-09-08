@@ -1,11 +1,13 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
+import { onSessionReset } from '../authTransport.js';
 import { request } from '../api.js';
 export const useWorkspace = defineStore('workspace', () => {
   const spaces = ref([]), totals = ref({}), loading = ref(false), error = ref(null), capabilities = ref(null);
   const selectedId = ref(localStorage.getItem('ragkb.selected-space') || '');
   const selected = computed(() => spaces.value.find(s => s.id === selectedId.value));
   let revision = 0;
+  onSessionReset(() => { revision++; spaces.value = []; totals.value = {}; selectedId.value = ''; capabilities.value = null; loading.value = false; error.value = null; });
   function select(id) { selectedId.value = id; localStorage.setItem('ragkb.selected-space', id); }
   async function refresh() {
     const own = ++revision; loading.value = true; error.value = null;

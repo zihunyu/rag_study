@@ -7,3 +7,5 @@ import { router } from './router.js';
 createApp(App).use(createPinia()).use(router).mount("#app");
 
 import "./styles/visuals.css";
+
+import "./styles/accounts.css";

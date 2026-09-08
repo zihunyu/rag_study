@@ -33,7 +33,8 @@ def build_operations_router(runtime: RuntimeComponents) -> APIRouter:
     router = APIRouter()
 
     @router.get(
-        "/api/admin/audit-events",
+        "/api/admin/lifecycle-audit-events" if runtime.settings.auth_mode == "password"
+        else "/api/admin/audit-events",
         response_model=list[AuditEventResponse],
         tags=["admin"],
     )

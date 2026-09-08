@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import StreamingResponse
 
+from ragkb.api.citation_projection import citation_locator, cited_asset_ids, reader_report
 from ragkb.api.models import (
     AskRequest,
     AskResponse,
@@ -25,6 +26,7 @@ from ragkb.api.models import (
 from ragkb.api.support import (
     ask_response as _ask_response,
 )
+from ragkb.api.support import document_manager
 from ragkb.api.support import (
     principal as _principal,
 )
@@ -43,6 +45,7 @@ from ragkb.domain.retrieval import SearchContext
 from ragkb.domain.uploads import (
     ResourceNotFoundError,
 )
+from ragkb.infrastructure.model_account import provider_operation
 from ragkb.runtime_components import RuntimeComponents
 
 OPENAPI_VERSION = "1.0.0"
@@ -145,6 +148,7 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
         runtime.lifecycle_store.reload()
         with (
             reading_scope(body.reading),
+            provider_operation("space:" + space_id, "", "qa"),
             request_deadline(
                 runtime.settings.overview_timeout_seconds if body.reading.mode != "fact" else 120
             ),
@@ -157,7 +161,13 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
                 clearance_level=principal.clearance_level,
                 space_id=space_id,
             )
-        return _ask_response(result)
+        response = _ask_response(result)
+        if runtime.settings.auth_mode == "password":
+            for citation in response.citations:
+                citation.locator = citation_locator(citation.locator)
+            if not document_manager(principal, space_id):
+                response.coverage_report = reader_report(response.coverage_report)
+        return response
 
     @router.post(
         "/api/ask:stream",
@@ -176,6 +186,7 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
                 yield f"event: progress\ndata: {json.dumps({'stage': stage})}\n\n"
             with (
                 reading_scope(body.reading),
+                provider_operation("space:" + space_id, "", "qa"),
                 request_deadline(
                     runtime.settings.overview_timeout_seconds
                     if body.reading.mode != "fact"
@@ -193,6 +204,11 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
             verification = "verified" if result.verified else "verification_failed"
             yield f"event: progress\ndata: {json.dumps({'stage': verification})}\n\n"
             payload = _ask_response(result).model_dump(mode="json")
+            if runtime.settings.auth_mode == "password":
+                for citation in payload["citations"]:
+                    citation["locator"] = citation_locator(citation["locator"])
+                if not document_manager(principal, space_id):
+                    payload["coverage_report"] = reader_report(payload["coverage_report"])
             yield f"event: result\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
         return StreamingResponse(stream(), media_type="text/event-stream")
@@ -236,11 +252,16 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
             )
         ):
             raise ResourceNotFoundError(evidence_id)
+        visuals = source_visuals(evidence, run_token, evidence_token, run_id)
+        locator = dict(evidence.locator)
+        if runtime.settings.auth_mode == "password":
+            locator = citation_locator(locator)
+            locator["visual_asset_ids"] = [v["id"] for v in visuals]
         return EvidenceSourceResponse(
             evidence_id=evidence.evidence_id,
             text=evidence.display_text or evidence.text,
-            locator=evidence.locator,
-            visuals=source_visuals(evidence, run_token, evidence_token, run_id),
+            locator=locator,
+            visuals=visuals,
         )
 
     def source_visuals(
@@ -250,7 +271,12 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
 
         store = VisualAssetStore(runtime.storage)
         visuals = []
-        for identity in evidence.locator.get("visual_asset_ids", []):
+        identities = (
+            cited_asset_ids(evidence.locator)
+            if runtime.settings.auth_mode == "password"
+            else evidence.locator.get("visual_asset_ids", [])
+        )
+        for identity in identities:
             try:
                 asset = store.get(evidence.document_version_id, identity)
                 if asset.get("status") != "verified":
@@ -282,6 +308,31 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
                         and sum(compact(other["text"]) == compact(r["text"]) for other in regions)
                         == 1
                     ][:24]
+                if runtime.settings.auth_mode == "password":
+                    # Original image and precise evidence highlights are sufficient for
+                    # a reader. No review history, unused extracted facts or parser data.
+                    public = {
+                        k: v
+                        for k, v in public.items()
+                        if k
+                        in {
+                            "id",
+                            "width",
+                            "height",
+                            "caption",
+                            "section_path",
+                            "status",
+                            "coordinate_space",
+                            "image_url",
+                            "focus_targets",
+                            "focus_region_ids",
+                        }
+                    }
+                    public["regions"] = [
+                        r
+                        for r in asset.get("regions", [])
+                        if r.get("id") in public.get("focus_region_ids", [])
+                    ]
                 visuals.append(public)
             except (FileNotFoundError, ValueError) as error:
                 raise ResourceNotFoundError(identity) from error
@@ -299,7 +350,7 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
         from ragkb.infrastructure.visual_assets import VisualAssetStore
 
         source = evidence_source(run_token, evidence_token, request)
-        if asset_id not in source.locator.get("visual_asset_ids", []):
+        if asset_id not in {v["id"] for v in source.visuals}:
             raise ResourceNotFoundError(asset_id)
         subject = _principal(request)
         run_id, identity = runtime.reference_signer.resolve(

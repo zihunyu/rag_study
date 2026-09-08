@@ -1,4 +1,5 @@
 import { onUnmounted, ref, shallowRef } from 'vue';
+import { onSessionReset } from '../authTransport.js';
 export function useResource(loader) {
   const data = shallowRef(null), loading = ref(false), error = shallowRef(null);
   let revision = 0, controller;
@@ -10,6 +11,7 @@ export function useResource(loader) {
     finally { if (own === revision) loading.value = false; }
   }
   function clear() { ++revision; controller?.abort(); data.value = null; error.value = null; loading.value = false; }
-  onUnmounted(() => { ++revision; controller?.abort(); });
+  const unsubscribe = onSessionReset(clear);
+  onUnmounted(() => { unsubscribe(); clear(); });
   return { data, loading, error, load, clear };
 }

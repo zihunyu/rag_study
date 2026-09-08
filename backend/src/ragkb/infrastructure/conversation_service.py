@@ -18,6 +18,7 @@ from ragkb.domain.auth import RequestPrincipal
 from ragkb.domain.errors import IngestionCancelled
 from ragkb.domain.ids import new_uuid7
 from ragkb.infrastructure.conversations import ACTIVE_STATES, ConversationRepository
+from ragkb.infrastructure.model_account import provider_operation
 from ragkb.infrastructure.visual_assets import VisualAssetStore
 from ragkb.infrastructure.workspace_queries import WorkspaceQueries
 from ragkb.runtime_components import RuntimeComponents
@@ -63,6 +64,13 @@ class ConversationService:
         *,
         references: bool = True,
     ) -> dict[str, Any]:
+        if self.runtime.accounts and self.runtime.accounts.enabled:
+            if not self.runtime.accounts.recheck(
+                subject.user_id, subject.scope_tokens, (conversation["space_id"],)
+            ):
+                from ragkb.domain.uploads import ResourceNotFoundError
+
+                raise ResourceNotFoundError(conversation["id"])
         item = {
             key: turn[key]
             for key in (
@@ -84,6 +92,14 @@ class ConversationService:
             "reading", turn["id"]
         )
         result = json.loads(turn["result_json"]) if turn.get("result_json") else None
+        if self.runtime.settings.auth_mode == "password":
+            from ragkb.api.citation_projection import reader_report
+            from ragkb.api.support import document_manager
+
+            if not document_manager(subject, conversation["space_id"]):
+                item["reading_progress"] = reader_report(item["reading_progress"] or {})
+                if result:
+                    result["coverage_report"] = reader_report(result.get("coverage_report") or {})
         item["result"] = result
         if not result:
             return item
@@ -160,6 +176,10 @@ class ConversationService:
                     chunk_id=entry.chunk_id,
                     locator=entry.locator,
                 )
+                if runtime.settings.auth_mode == "password":
+                    from ragkb.api.citation_projection import citation_locator
+
+                    citation["locator"] = citation_locator(entry.locator)
         return item
 
     def _execute(
@@ -194,6 +214,10 @@ class ConversationService:
                     or state["execution_token"] != token
                     or state["state"] not in ACTIVE_STATES
                 )
+                if self.runtime.accounts and self.runtime.accounts.enabled:
+                    cancelled = cancelled or not self.runtime.accounts.recheck(
+                        subject.user_id, subject.scope_tokens, (conversation["space_id"],)
+                    )
                 last_check = time.monotonic()
             return cancelled
 
@@ -202,6 +226,8 @@ class ConversationService:
                 return
             heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
             heartbeat_thread.start()
+            if cancellation():
+                raise IngestionCancelled("KNOWLEDGE_BASE_ACCESS_REVOKED")
             reading = ReadingOptions.model_validate(turn.get("reading") or {})
             ledger = VisualAssetStore(self.runtime.storage).ledger
 
@@ -210,6 +236,7 @@ class ConversationService:
 
             with (
                 cancellation_scope(cancellation),
+                provider_operation("space:" + conversation["space_id"], "", "qa"),
                 reading_scope(reading, save_reading),
                 request_deadline(
                     self.runtime.settings.overview_timeout_seconds

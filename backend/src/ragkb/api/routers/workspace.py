@@ -74,9 +74,31 @@ def build_workspace_router(runtime: RuntimeComponents) -> APIRouter:
         if space_id and not document_manager(subject, space_id):
             raise ResourceNotFoundError(space_id)
         scope = f"jobs:{subject.tenant_id}:{space_id}:{state}"
-        page = runtime.queue.list_jobs_page(
-            subject.tenant_id, space_id, state, limit=limit, after=read_cursor(cursor, scope, 0)
-        )
+        after = read_cursor(cursor, scope, 0)
+        if runtime.accounts and runtime.accounts.enabled and not space_id:
+            from ragkb.domain.pagination import RepositoryPage
+
+            allowed = runtime.accounts.allowed_spaces(subject, manage=True)
+            pages = [
+                runtime.queue.list_jobs_page(
+                    subject.tenant_id, s["id"], state, limit=limit + 1, after=after
+                )
+                for s in allowed
+            ]
+            merged = sorted(
+                (r for p in pages for r in p.items),
+                key=lambda r: (int(r["updated_at"] * 1000), r["id"]),
+                reverse=True,
+            )
+            last = merged[limit - 1] if len(merged) > limit else None
+            page = RepositoryPage(
+                merged[:limit], (int(last["updated_at"] * 1000), last["id"]) if last else None
+            )
+        else:
+            page = runtime.queue.list_jobs_page(
+                subject.tenant_id, space_id, state, limit=limit, after=after
+            )
+
         write_cursor(response, scope, page.next_key)
         items = []
         for row in page.items:
@@ -138,21 +160,37 @@ def build_workspace_router(runtime: RuntimeComponents) -> APIRouter:
                 raise ResourceNotFoundError(space_id)
             return {"counts": runtime.queue.job_counts(subject.tenant_id, space_id)}
         counts: dict[str, int] = {}
-        for space in runtime.repository.list_spaces():
+        for space in (
+            runtime.accounts.allowed_spaces(subject, manage=True)
+            if runtime.accounts and runtime.accounts.enabled
+            else runtime.repository.list_spaces()
+        ):
             if document_manager(subject, space["id"]):
                 for key, value in runtime.queue.job_counts(subject.tenant_id, space["id"]).items():
                     counts[key] = counts.get(key, 0) + value
         return {"counts": counts}
 
     @router.get("/api/spaces/overview")
-    def overview(request: Request) -> dict[str, Any]:
+    def overview(request: Request, include_deleted: bool = False) -> dict[str, Any]:
         subject = principal(request)
         require_local_tenant(runtime, subject)
-        require_role(subject, "knowledge_maintainer", "admin")
-        summaries, descriptions = queries.summaries(), queries.metadata()
+        require_role(subject, "reader", "knowledge_maintainer", "admin")
         spaces = []
-        for item in runtime.repository.list_spaces():
-            if not document_manager(subject, item["id"]):
+        source_spaces = (
+            runtime.accounts.allowed_spaces(subject, include_deleted=include_deleted)
+            if runtime.accounts and runtime.accounts.enabled
+            else runtime.repository.list_spaces()
+        )
+        scope_ids = (
+            tuple(s["id"] for s in source_spaces)
+            if runtime.accounts and runtime.accounts.enabled
+            else None
+        )
+        summaries, descriptions = queries.summaries(scope_ids), queries.metadata(scope_ids)
+        for item in source_spaces:
+            if not (runtime.accounts and runtime.accounts.enabled) and not document_manager(
+                subject, item["id"]
+            ):
                 continue
             counts = summaries.get(item["id"], {})
             spaces.append(
@@ -172,10 +210,14 @@ def build_workspace_router(runtime: RuntimeComponents) -> APIRouter:
                     },
                 }
             )
+        for item in spaces:
+            if item.get("my_role") == "qa":
+                for field in ("document_count", "pending_count", "processing_count", "chunk_count"):
+                    item.pop(field, None)
         return {
             "items": spaces,
             "totals": {
-                key: sum(item[key] for item in spaces)
+                key: sum(item.get(key, 0) for item in spaces)
                 for key in (
                     "document_count",
                     "answerable_count",

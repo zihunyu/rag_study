@@ -51,11 +51,13 @@ from ragkb.document_processing.parsers import ParserRouter
 from ragkb.engineering_security.file_validation import UploadFileValidator
 from ragkb.engineering_security.malware import SignatureMalwareScanner, SystemMalwareScanner
 from ragkb.engineering_security.references import HMACReferenceSigner, ReferenceStorePort
+from ragkb.infrastructure.accounts import AccountService
 from ragkb.infrastructure.governance_repository import SQLiteGovernanceRepository
 from ragkb.infrastructure.overview import OverviewReader
 from ragkb.infrastructure.sqlite import SQLiteDatabase
 from ragkb.infrastructure.upload_repository import SQLiteUploadRepository
 from ragkb.infrastructure.visual_assets import VisualAssetStore
+from ragkb.infrastructure.workspace_db import WorkspaceDB
 from ragkb.runtime_profiles.factory import select_runtime_factory
 
 
@@ -88,6 +90,7 @@ class RuntimeComponents:
     tenant_id: str
     space_id: str
     settings: EnvSettings
+    accounts: AccountService | None = None
 
 
 def build_runtime_components(
@@ -136,7 +139,7 @@ def build_runtime_components(
         tenant_id_override=(
             (
                 settings.auth_local_tenant
-                if settings.auth_mode == "local_single_user"
+                if settings.auth_mode in {"local_single_user", "password"}
                 else settings.oidc_tenant_id
             )
             if profile_factory.name == "production"
@@ -145,7 +148,7 @@ def build_runtime_components(
         space_id_override=(
             (
                 "general_knowledge"
-                if settings.auth_mode == "local_single_user"
+                if settings.auth_mode in {"local_single_user", "password"}
                 else settings.oidc_default_space_id
             )
             if profile_factory.name == "production"
@@ -333,6 +336,9 @@ def build_runtime_components(
         reference_store,
         active_kid=settings.reference_active_kid,
     )
+    accounts = AccountService(
+        WorkspaceDB(database, getattr(repository, "control", None)), tenant_id, settings, repository
+    )
     authenticator = profile_factory.build_authenticator(settings, tenant_id)
     evidence_provider = SearchBackedEvidenceProvider(
         search_service,
@@ -391,7 +397,22 @@ def build_runtime_components(
         verifier=verifier,
         response_release_guard=lambda: lifecycle_store.lock,
     )
+    if accounts.enabled:
+        from ragkb.infrastructure.account_qa import (
+            AccountEvidenceProvider,
+            AccountFinalPermission,
+            account_release_guard,
+        )
+
+        qa_service.permission = AccountFinalPermission(accounts, qa_service.permission)
+        qa_service.evidence_provider = AccountEvidenceProvider(
+            accounts, evidence_provider, space_id
+        )
+        qa_service.response_release_guard = lambda: account_release_guard(
+            accounts, lifecycle_store.lock
+        )
     return RuntimeComponents(
+        accounts=accounts,
         repository_root=root,
         storage=storage,
         database=database,

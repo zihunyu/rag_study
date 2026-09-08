@@ -4,7 +4,9 @@
 BM25 + Dense 检索、查询类型感知融合、Rerank、基于证据生成、引用校验和最终权限复核。
 
 新版 RAGSPACE 前端提供深色知识管理工作台、文档复核发布、任务中心和持久化多轮问答，
-沿用本地单用户运行方式。使用、接口与增量迁移说明见 [工作台说明](docs/FRONTEND_WORKSPACE.md)。
+支持真实账号登录、总管理员与按知识库分配的管理／问答权限。
+初始化、部署及授权接口见 [登录与权限说明](docs/ACCOUNT_ACCESS.md)。
+工作台使用与增量迁移说明见 [工作台说明](docs/FRONTEND_WORKSPACE.md)。
 
 表格与章节分块、语义证据选择、有限补查及旧资料升级见 [RAG 通用修复说明](docs/RAG_GENERAL_REPAIR.md)。
 自然段落、对比表格与完整正文核验见 [答案整理说明](docs/ANSWER_SYNTHESIS.md)。

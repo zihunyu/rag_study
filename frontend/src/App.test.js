@@ -30,6 +30,8 @@ beforeEach(() => {
     const target = new URL(url, 'http://localhost'); requests.push({ path: target.pathname, query: target.searchParams, options });
     const handler = routes.get(target.pathname); if (handler) return handler(target, options);
     if (target.pathname === '/api/spaces/overview') return json({ items: spaces, totals: { document_count: 3, answerable_count: 1, pending_count: 2 } });
+    if (target.pathname === '/api/auth/csrf') return json({ auth_mode: 'local_single_user', csrf_token: '' });
+    if (target.pathname === '/api/auth/me') return json({ id: 'local-admin', display_name: '测试管理员', global_role: 'super_admin', auth_mode: 'local_single_user', capabilities: ['admin', 'manage', 'ask'], spaces });
     if (target.pathname === '/api/capabilities') return json(capabilities);
     if (target.pathname === '/api/conversations') return json([]);
     if (target.pathname === '/api/ingestion-jobs/summary') return json({ counts: { QUEUED: 1 } });
@@ -48,15 +50,17 @@ async function app(path = '/knowledge-bases') {
     { path: '/tasks', component: TasksPage, meta: { section: '任务中心' } },
     { path: '/chat/:conversationId?', component: ChatPage, meta: { section: '知识问答' } },
     { path: '/system', component: SystemPage },
+    { path: '/admin/users', component: { template: '<div />' } },
+    { path: '/admin/audit', component: { template: '<div />' } },
   ] });
   await router.push(path); await router.isReady();
   wrapper = mount(App, { global: { plugins: [pinia, router] } }); await flushPromises();
   return { router, pinia };
 }
 describe('knowledge workspace', () => {
-  it('shows real counts, management navigation and no login initialization', async () => {
+  it('shows real counts and administrator navigation after identity initialization', async () => {
     await app(); expect(wrapper.text()).toContain('产品手册'); expect(wrapper.findAll('.metric-number').map(el => el.text())).toEqual(['2', '3', '1READY', '2']);
-    expect(wrapper.text()).not.toMatch(/登录|退出|OIDC/); expect(wrapper.findAll('.nav-item')).toHaveLength(4);
+    expect(wrapper.text()).not.toMatch(/登录|退出|OIDC/); expect(wrapper.findAll('.nav-item')).toHaveLength(6);
     await wrapper.get('input[aria-label="搜索知识库"]').setValue('制度'); expect(wrapper.findAll('.library-card')).toHaveLength(1);
   });
   it('creates a knowledge base and persists its description before navigation', async () => {

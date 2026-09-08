@@ -8,6 +8,8 @@ version = "0.0.0"
 description = "Enterprise RAG knowledge base (G3 trusted QA and lifecycle baseline)"
 requires-python = ">=3.12"
 dependencies = [
+  "argon2-cffi>=25,<26",
+  "filelock>=3.18,<4",
   "fastapi>=0.116,<1",
   "httpx>=0.28,<1",
   "jsonschema>=4.23,<5",

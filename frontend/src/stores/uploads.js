@@ -1,3 +1,4 @@
+import { authEpoch, authMode, csrfToken, onSessionReset } from '../authTransport.js';
 import { defineStore } from 'pinia';
 import { computed, markRaw, ref, watch } from 'vue';
 import { apiUrl, request, sourceUrl } from '../api.js';
@@ -12,6 +13,8 @@ export const useUploads = defineStore('uploads', () => {
   const items = ref(saved.map(item => ({ ...item, state: pending.has(item.state) ? 'interrupted' : item.state })));
   const activeCount = computed(() => items.value.filter(item => pending.has(item.state)).length);
   let running = 0;
+  const activeXHR = new Set();
+  onSessionReset(() => { for (const xhr of activeXHR) xhr.abort(); activeXHR.clear(); items.value = []; });
   watch(items, () => sessionStorage.setItem('ragkb.uploads', JSON.stringify(items.value.map(({ file, ...item }) => item))), { deep: true });
   function enqueue(files, spaceId, documentId = null) {
     const config = useWorkspace().capabilities;
@@ -38,9 +41,11 @@ export const useUploads = defineStore('uploads', () => {
     }
   }
   async function run(item) {
+    const own = authEpoch();
     try {
       const digest = await sha256File(item.file, { onProgress: value => { item.progress = value; } });
       if (item.digest && item.digest !== digest) throw new Error('重新选择的文件内容已变化，请使用原文件恢复上传。');
+      if (own !== authEpoch()) return;
       item.digest = digest;
       const headers = { 'Idempotency-Key': `create-${item.id}` };
       let path = `/spaces/${item.spaceId}/upload-sessions`;
@@ -59,8 +64,11 @@ export const useUploads = defineStore('uploads', () => {
       const uploadTarget = new URL(sourceUrl(created.upload_path), location.href);
       const base = new URL(apiUrl('/'), location.href);
       if (uploadTarget.origin !== base.origin || !uploadTarget.pathname.startsWith(base.pathname)) throw new Error('UNTRUSTED_UPLOAD_URL');
+      if (own !== authEpoch()) return;
       const uploaded = await new Promise((resolve, reject) => {
-        const xhr = new XMLHttpRequest(); xhr.open('PUT', uploadTarget); xhr.timeout = 300000;
+        const xhr = new XMLHttpRequest(); xhr.open('PUT', uploadTarget); xhr.timeout = 300000; xhr.withCredentials = true; activeXHR.add(xhr);
+        if (authMode() === 'password') xhr.setRequestHeader('X-CSRF-Token', csrfToken());
+        xhr.onloadend = () => activeXHR.delete(xhr); xhr.onabort = () => reject(new DOMException('Upload cancelled', 'AbortError'));
         xhr.setRequestHeader('If-Match', `"${created.row_version}"`);
         xhr.upload.onprogress = event => { if (event.lengthComputable) item.progress = event.loaded / event.total; };
         xhr.onerror = () => reject(new Error('UPLOAD_NETWORK_FAILED'));
@@ -71,6 +79,7 @@ export const useUploads = defineStore('uploads', () => {
         };
         xhr.send(item.file);
       });
+      if (own !== authEpoch()) return;
       await complete(item, uploaded.row_version);
     } catch (error) { item.state = 'failed'; item.error = error.message; }
   }

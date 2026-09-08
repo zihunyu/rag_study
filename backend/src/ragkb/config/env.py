@@ -357,7 +357,11 @@ class EnvSettings(BaseModel):
     ai_trusted_private_transport_services: tuple[str, ...] = ()
     ai_trusted_private_transport_evidence: str = ""
 
-    auth_mode: Literal["local_single_user", "oidc"] = "local_single_user"
+    auth_mode: Literal["local_single_user", "oidc", "password"] = "local_single_user"
+    auth_cookie_secure: bool = False
+    auth_session_idle_seconds: int = Field(default=1800, ge=60)
+    auth_session_absolute_seconds: int = Field(default=43200, ge=300)
+    auth_temporary_password_seconds: int = Field(default=86400, ge=300)
     auth_local_tenant: str = "local"
     auth_local_user_id: str = "local-admin"
     oidc_issuer_url: str = ""

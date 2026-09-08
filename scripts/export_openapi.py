@@ -19,14 +19,21 @@ from ragkb.runtime_components import build_runtime_components  # noqa: E402
 def main() -> int:
     parser = argparse.ArgumentParser(description="Export or verify the G1 OpenAPI snapshot")
     parser.add_argument("--check", action="store_true")
+    parser.add_argument(
+        "--auth-mode", choices=["local_single_user", "password"], default="local_single_user"
+    )
     args = parser.parse_args()
-    output = ROOT / "docs/openapi/openapi.json"
+    output = (
+        ROOT
+        / "docs/openapi"
+        / ("password-openapi.json" if args.auth_mode == "password" else "openapi.json")
+    )
     # Schema export must never initialize the configured business database.
     os.environ.update(
         APP_ENV="testing",
         RAG_RUNTIME_PROFILE="local",
         VECTOR_BACKEND="local",
-        AUTH_MODE="local_single_user",
+        AUTH_MODE=args.auth_mode,
         REAL_PROVIDER_CALLS_ENABLED="false",
         EXTERNAL_LIFECYCLE_MUTATIONS_ENABLED="false",
         OTEL_ENABLED="false",

@@ -159,6 +159,9 @@ class LocalRuntimeFactory:
 
     def build_authenticator(self, settings: EnvSettings, tenant_id: str):  # type: ignore[no-untyped-def]
         self._guard(settings)
+        if settings.auth_mode == "password":
+            from ragkb.adapters.auth import PasswordCookieAuthenticator
+            return PasswordCookieAuthenticator()
         return LocalSingleUserAuthenticator(settings, tenant_id=tenant_id)
 
     def build_answer_cache(

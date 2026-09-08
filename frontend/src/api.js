@@ -1,3 +1,4 @@
+import { authEpoch, sessionFetch } from './authTransport.js';
 const runtimeBase = globalThis.__RAGKB_CONFIG__?.apiBaseUrl?.trim();
 const configuredBase = runtimeBase || import.meta.env?.VITE_API_BASE_URL?.trim();
 
@@ -22,7 +23,7 @@ export async function authorizedFetch(
   const token = await tokenProvider();
   const headers = new Headers(options.headers ?? {});
   if (token) headers.set("Authorization", `Bearer ${token}`);
-  return fetchImpl(url, { ...options, headers });
+  return sessionFetch(url, { ...options, headers }, fetchImpl);
 }
 
 export async function request(path, options = {}, fetchImpl = fetch) {
@@ -35,6 +36,7 @@ export async function requestPage(path, options = {}, fetchImpl = fetch) {
 }
 
 export async function requestResponse(path, options = {}, fetchImpl = fetch) {
+  const account = authEpoch();
   const { headers: optionHeaders, ...requestOptions } = options;
   const response = await authorizedFetch(apiUrl(path), {
     ...requestOptions,
@@ -54,9 +56,11 @@ export async function requestResponse(path, options = {}, fetchImpl = fetch) {
       body.code ?? validationCode ?? detailCode ?? `REQUEST_FAILED_HTTP_${response.status}`,
     );
     error.status = response.status;
+    error.retryAfter = Number(response.headers.get('Retry-After') || 0);
     error.requestId = response.headers.get('X-Request-ID');
     throw error;
   }
+  if (account !== authEpoch()) throw new DOMException('Account changed', 'AbortError');
   return { body, response };
 }
 
@@ -74,12 +78,14 @@ export async function jobCommand(jobId, action) {
 }
 
 export async function consumeSSE(response, onEvent) {
+  const account = authEpoch();
   if (!response.ok || !response.body) throw new Error("SSE_REQUEST_FAILED");
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   while (true) {
     const { done, value } = await reader.read();
+    if (account !== authEpoch()) { await reader.cancel(); throw new DOMException('Account changed', 'AbortError'); }
     buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
     buffer = buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
     const frames = buffer.split("\n\n");

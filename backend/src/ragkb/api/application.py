@@ -58,6 +58,19 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
     access_metrics = AccessTelemetry()
     app.state.access_metrics = access_metrics
     queries = workspace_queries(runtime)
+    from ragkb.api.account_policy import (
+        AUTH_PUBLIC,
+        authorize_route,
+        check_csrf,
+        validate_transport,
+    )
+    from ragkb.api.routers.accounts import build_accounts_router
+    from ragkb.infrastructure.accounts import AccountRuleError, AccountService
+
+    accounts = runtime.accounts or AccountService(
+        queries.db, runtime.tenant_id, runtime.settings, runtime.repository
+    )
+    app.state.accounts = accounts
     conversation_service = ConversationService(
         runtime,
         ConversationRepository(queries.db),
@@ -91,7 +104,38 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
         request.state.request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
-        if request.url.path not in {"/health/live", "/health/ready", "/docs", "/openapi.json"}:
+        request_space = ""
+        if accounts.enabled and request.url.path not in {"/health/live", "/health/ready"}:
+            try:
+                validate_transport(accounts, request)
+                await run_in_threadpool(check_csrf, accounts, request)
+                if request.url.path not in AUTH_PUBLIC:
+                    request.state.principal = await run_in_threadpool(
+                        accounts.authenticate,
+                        request.cookies.get("ragkb_session", ""),
+                        touch=request.url.path not in {"/api/auth/me", "/api/auth/csrf"},
+                    )
+                    request_space = await authorize_route(
+                        accounts, runtime, request, request.state.principal
+                    )
+                    request.state.account_space = request_space
+            except AuthenticationError:
+                return _error(request, "AUTHENTICATION_REQUIRED", "登录信息无效或已过期", 401)
+            except AuthorizationError as error:
+                return _error(request, str(error), "当前账号不能执行此操作", 403)
+            except ResourceNotFoundError:
+                return _error(request, "NOT_FOUND", "没有找到可访问的资源", 404)
+            except ReferenceTokenError:
+                return _error(request, "SOURCE_REFERENCE_NOT_FOUND", "没有找到可访问的引用", 404)
+            except (ValueError, TypeError):
+                return _error(request, "REQUEST_INVALID", "请求内容格式不正确", 422)
+        elif request.url.path not in {
+            "/health/live",
+            "/health/ready",
+            "/docs",
+            "/openapi.json",
+            *AUTH_PUBLIC,
+        }:
             try:
                 request.state.principal = await run_in_threadpool(
                     runtime.authenticator.authenticate, request.headers.get("Authorization")
@@ -104,6 +148,28 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
                     401,
                 )
         response = await call_next(request)
+        if accounts.enabled:
+            response.headers["Cache-Control"] = "no-store"
+            if (
+                request_space
+                and request.method not in {"GET", "HEAD", "OPTIONS"}
+                and response.status_code < 400
+                and not request.url.path.startswith(
+                    ("/api/conversations", "/api/ask", "/api/search", "/api/rag-runs")
+                )
+            ):
+
+                def audit_operation() -> None:
+                    with accounts.db.transaction() as connection:
+                        accounts.audit(
+                            connection,
+                            request.state.principal.user_id,
+                            "resource." + request.method.lower(),
+                            request.url.path,
+                            request_space,
+                        )
+
+                await run_in_threadpool(audit_operation)
         if not request.url.path.startswith("/health/"):
             access_metrics.submit(
                 runtime.observability.request_completed,
@@ -116,13 +182,21 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
         return response
 
     # Outermost middleware handles unauthenticated browser preflight and error responses.
+    from ragkb.api.account_release import AccountReleaseMiddleware
+
+    app.add_middleware(AccountReleaseMiddleware, service=accounts)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(runtime.settings.cors_origins),
         allow_methods=["*"],
         allow_headers=["*"],
-        expose_headers=["ETag", "X-Request-ID", "X-Next-Cursor"],
+        allow_credentials=True,
+        expose_headers=["ETag", "X-Request-ID", "X-Next-Cursor", "Retry-After"],
     )
+
+    @app.exception_handler(AccountRuleError)
+    async def account_rule(request: Request, error: AccountRuleError) -> JSONResponse:
+        return _error(request, str(error), "请检查输入或刷新当前状态", 409)
 
     @app.exception_handler(ResourceNotFoundError)
     async def not_found(request: Request, error: ResourceNotFoundError) -> JSONResponse:
@@ -194,6 +268,7 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
     async def malware(request: Request, error: MalwareRejectedError) -> JSONResponse:
         return _error(request, error.reason_code, "file was rejected by malware policy", 422)
 
+    app.include_router(build_accounts_router(runtime, accounts))
     app.include_router(build_health_router(runtime))
     app.include_router(build_workspace_router(runtime))
     app.include_router(build_conversations_router(runtime, conversation_service))
@@ -220,12 +295,35 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
             "scheme": "bearer",
             "bearerFormat": "JWT",
         }
+        security_schemes["SessionCookie"] = {
+            "type": "apiKey",
+            "in": "cookie",
+            "name": "ragkb_session",
+            "description": "HttpOnly server session; obtain a CSRF token before login or writes.",
+        }
         for path, methods in schema.get("paths", {}).items():
             if path.startswith("/health/"):
                 continue
-            for operation in methods.values():
+            for method, operation in methods.items():
                 if isinstance(operation, dict) and "responses" in operation:
-                    operation["security"] = [{"BearerAuth": []}]
+                    operation["security"] = (
+                        []
+                        if path in AUTH_PUBLIC
+                        else [{"SessionCookie": []}]
+                        if accounts.enabled
+                        else [{"BearerAuth": []}]
+                    )
+                    if accounts.enabled and method not in {"get", "head", "options"}:
+                        operation.setdefault("parameters", []).append(
+                            {
+                                "name": "X-CSRF-Token",
+                                "in": "header",
+                                "required": True,
+                                "schema": {"type": "string"},
+                                "description": "Token from /api/auth/csrf or successful login; "
+                                "Origin is also checked.",
+                            }
+                        )
         app.openapi_schema = schema
         return schema
 

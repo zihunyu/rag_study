@@ -1,4 +1,5 @@
 <script setup>
+import { sessionFetch } from '../authTransport.js';
 import { ref, watch, nextTick, onUnmounted } from 'vue';
 import DOMPurify from 'dompurify';
 import { apiUrl } from '../api.js';
@@ -14,7 +15,7 @@ watch(() => [props.versionId, props.filename], async () => {
   if (!['pdf','docx'].includes(extension)) { error.value = '此格式请下载原文件阅读，图片可在下方逐张对照。'; return; }
   loading.value = true;
   try {
-    const response = await fetch(apiUrl(`/document-versions/${props.versionId}/original/preview`), { signal: controller.signal });
+    const response = await sessionFetch(apiUrl(`/document-versions/${props.versionId}/original/preview`), { signal: controller.signal });
     if (!response.ok) throw new Error();
     const buffer = await response.arrayBuffer();
     if (own !== revision) return;
