@@ -45,21 +45,31 @@ export function mergeCells(table, row, column, rowspan, colspan) {
   table.cells.push({row,column,rowspan,colspan,text:overlapping.sort((a,b)=>a.row-b.row||a.column-b.column).map(c=>c.text).filter(Boolean).join('\n')});
   return true;
 }
-export function validateDraft(draft) {
-  if(!draft) return '';
-  if(draft.kind==='unknown') return '图片类型尚未明确，请先选择原图实际内容类型。';
-  for(const graph of draft.graphs || []) {
-    if(!graph.nodes.length) return '关系图至少需要一个原图可见节点；空图请删除整个关系图。';
-    const ids=[...graph.nodes,...graph.groups].map(n=>n.id), groups=new Map(graph.groups.map(g=>[g.id,g]));
-    if(ids.some(id=>!id.trim()) || new Set(ids).size!==ids.length) return '节点与分组标识重复。';
-    for(const group of graph.groups) { let id=group.id; const seen=new Set(); while(id!==null) { if(!groups.has(id) || seen.has(id)) return '分组层级不能循环，父分组必须存在。'; seen.add(id); id=groups.get(id).parent; } }
-    if(graph.nodes.some(n=>n.group!==null&&!groups.has(n.group)) || graph.edges.some(e=>!ids.includes(e.source)||!ids.includes(e.target))) return '节点归属或连线端点不存在。';
-    if([...graph.nodes,...graph.groups,...graph.edges].some(x=>x.review_status==='pending')) return '仍有待核对的关系对象，请核实或明确排除。';
-    const excluded=new Set([...graph.nodes,...graph.groups].filter(x=>x.review_status==='excluded').map(x=>x.id));
-    if(graph.edges.some(e=>(excluded.has(e.source)||excluded.has(e.target))&&e.review_status!=='excluded')) return '已排除对象的关联连线必须一并排除。';
+export function draftProblems(draft) {
+  if (!draft) return [];
+  const problems = [];
+  const add = (target, message) => problems.push({ target, message, invalid: true });
+  if (draft.kind === 'unknown') add('kind', '图片类型尚未明确，请先选择原图实际内容类型。');
+  for (const [gi, graph] of (draft.graphs || []).entries()) {
+    const target = `graphs/${gi}`;
+    if (!graph.nodes.length) add(target, '关系图至少需要一个原图可见节点；空图请删除整个关系图。');
+    const ids = [...graph.nodes, ...graph.groups].map(n => n.id), groups = new Map(graph.groups.map(g => [g.id, g]));
+    if (ids.some(id => !id.trim()) || new Set(ids).size !== ids.length) add(target, '节点与分组标识重复。');
+    for (const group of graph.groups) {
+      let id = group.id; const seen = new Set();
+      while (id !== null) {
+        if (!groups.has(id) || seen.has(id)) { add(target, '分组层级不能循环，父分组必须存在。'); break; }
+        seen.add(id); id = groups.get(id).parent;
+      }
+    }
+    if (graph.nodes.some(n => n.group !== null && !groups.has(n.group)) || graph.edges.some(e => !ids.includes(e.source) || !ids.includes(e.target))) add(target, '节点归属或连线端点不存在。');
+    if ([...graph.nodes, ...graph.groups, ...graph.edges].some(x => x.review_status === 'pending')) add(target, '仍有待核对的关系对象，请核实或明确排除。');
+    const excluded = new Set([...graph.nodes, ...graph.groups].filter(x => x.review_status === 'excluded').map(x => x.id));
+    if (graph.edges.some(e => (excluded.has(e.source) || excluded.has(e.target)) && e.review_status !== 'excluded')) add(target, '已排除对象的关联连线必须一并排除。');
   }
-  if(draft.kind==='diagram' && !draft.graphs.length) return '请选择与内容一致的图片类型，关系图不能为空。';
-  if(draft.kind==='table' && !draft.tables.length) return '表格类型至少需要一个完整表格。';
-  if(draft.graphs.length && !['diagram','mixed'].includes(draft.kind)) return '包含关系图时请选择关系图或混合内容。';
-  return '';
+  if (draft.kind === 'diagram' && !draft.graphs.length) add('kind', '当前选择了“关系图 / 流程图”，但没有关系图结构。请核对图片类型或补充原图中实际存在的结构。');
+  if (draft.kind === 'table' && !draft.tables.length) add('kind', '当前选择了“表格”，但没有完整表格。纯文字页面请选择“文字图片”；原图确有表格时请补充表格结构。');
+  if (draft.graphs.length && !['diagram', 'mixed'].includes(draft.kind)) add('kind', '包含关系图时请选择关系图或混合内容。');
+  return problems;
 }
+export const validateDraft = draft => draftProblems(draft)[0]?.message || '';

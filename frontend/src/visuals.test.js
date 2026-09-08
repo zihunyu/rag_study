@@ -31,6 +31,16 @@ it('shows condition omissions without presenting a false complete badge or sourc
 });
 const asset = (id, title) => ({ id, status: 'verified', image_url: `/api/document-versions/${id}/visuals/image/image`, locator: { part: 'word/media/image1.png', paragraph: 3 }, extraction: { kind: 'table', title, description: '', transcription: '420 W' }, table_html: ['<table><tr><td rowspan="2">420 W</td><td><img src="x" onerror="alert(1)"><script>alert(1)</script>功率</td></tr></table>'] });
 
+it('labels inherited unreviewed images as pending without presenting them as freshly recognized', async () => {
+  const pending={...asset('pending','仍需复核'),status:'needs_review',stage:'needs_review',inherited_from_version_id:'base',issues:['原始疑点']};
+  vi.stubGlobal('fetch',vi.fn(async()=>json({items:[pending],processing:{stage:'completed'}})));
+  wrapper=mount(DocumentVisuals,{props:{versionId:'revised',documentId:'doc',filename:'doc.pdf'}});await flushPromises();
+  expect(wrapper.get('.visual-inheritance-note').text()).toContain('沿用 1 张未改动图片');
+  expect(wrapper.get('.visual-gallery').text()).toContain('沿用 · 需要复核');
+  expect(wrapper.get('.visual-gallery').text()).not.toContain('识别中');
+  expect(wrapper.get('.visual-status').text()).toBe('待复核');
+});
+
 it('does not display a late image manifest from the previous document version', async () => {
   let finishFirst;
   vi.stubGlobal('fetch', vi.fn(url => String(url).includes('/v1/')
@@ -131,6 +141,60 @@ it('does not erase a human edit when the same asset is refreshed', async () => {
   await wrapper.get('input[type="checkbox"]').setValue(true);
   await wrapper.get('form').trigger('submit');
   expect(wrapper.emitted('save')[0][0].extraction.description).toBe('已核对的说明');
+});
+
+it('explains short review reasons and a text page incorrectly classified as a table before submission', async () => {
+  const record = {...asset('readiness','文字页'), extraction:{kind:'table',title:'文字页',description:'',transcription:'原文内容',body_text:'',tables:[],graphs:[],uncertainties:[]}};
+  wrapper = mount(VisualEditor, {props:{asset:record,issues:[{id:'1'.repeat(24),message:'原文需要核对',scope:'extraction'}]}});
+  await wrapper.get('[aria-label="问题 1 处理结果"]').setValue('confirmed');
+  await wrapper.get('[aria-label="问题 1 核对说明"]').setValue('1');
+  await wrapper.get('[data-target="review-reason"] textarea').setValue('对照原图确认');
+  await wrapper.get('input[type="checkbox"]').setValue(true);
+  expect(wrapper.get('.review-progress').text()).toContain('0 项已完成');
+  expect(wrapper.get('[aria-label="问题 1 核对说明"]').attributes('aria-invalid')).toBe('true');
+  expect(wrapper.get('.review-issue').classes()).toContain('review-issue-invalid');
+  expect(wrapper.get('.review-blockers').text()).toContain('当前 1 个');
+  expect(wrapper.get('.review-blockers').text()).toContain('当前选择了“表格”');
+  expect(wrapper.find('[aria-label="问题 1 关联对象"]').exists()).toBe(false);
+  await wrapper.get('form').trigger('submit');
+  expect(wrapper.emitted('save')).toBeUndefined();
+  await wrapper.get('[data-target="kind"] select').setValue('text');
+  await wrapper.get('[aria-label="问题 1 核对说明"]').setValue('对照原图第 1 行，转录一致');
+  expect(wrapper.get('.review-progress').text()).toContain('1 项已完成');
+  expect(wrapper.get('.review-issue').classes()).toContain('review-issue-resolved');
+  expect(wrapper.find('.review-blockers').exists()).toBe(false);
+  await wrapper.get('form').trigger('submit');
+  expect(wrapper.emitted('save')[0][0].resolutions[0].disposition).toBe('confirmed');
+  expect(wrapper.emitted('save')[0][0].extraction.transcription).toBe('原文内容');
+});
+
+it('does not mark a correction complete until the linked content actually changes', async () => {
+  const record = {...asset('correction','文字页'), extraction:{kind:'text',title:'标题',description:'',transcription:'型号 Z12',body_text:'',tables:[],graphs:[],uncertainties:[]}};
+  wrapper = mount(VisualEditor, {props:{asset:record,issues:[{id:'1'.repeat(24),message:'型号需要核对',scope:'extraction'}]}});
+  await wrapper.get('[aria-label="问题 1 处理结果"]').setValue('corrected');
+  await wrapper.get('[aria-label="问题 1 关联对象"]').setValue(['transcription']);
+  await wrapper.get('[aria-label="问题 1 核对说明"]').setValue('原图型号为 Z13');
+  expect(wrapper.get('.review-progress').text()).toContain('0 项已完成');
+  expect(wrapper.get('[data-target="transcription"]').classes()).toContain('review-field-invalid');
+  expect(wrapper.get('.review-blockers').text()).toContain('关联字段尚未实际修改');
+  await wrapper.get('[data-target="title"] input').setValue('改了其他字段');
+  expect(wrapper.get('.review-progress').text()).toContain('0 项已完成');
+  await wrapper.get('[data-target="transcription"] textarea').setValue('型号 Z13');
+  expect(wrapper.get('.review-progress').text()).toContain('1 项已完成');
+  expect(wrapper.get('[data-target="transcription"]').classes()).toContain('review-field-resolved');
+});
+
+it('highlights only literal source excerpts and selects the corresponding editable text', async () => {
+  const record = {...asset('excerpt','文字页'), extraction:{kind:'text',title:'型号',description:'',transcription:'设备型号 Z12，额定功率见表。',body_text:'',tables:[],graphs:[],uncertainties:[]}};
+  wrapper = mount(VisualEditor, {attachTo:document.body,props:{asset:record,issues:[{id:'1'.repeat(24),message:'“Z12”需要对照原图确认；“不存在的文字”未出现在转录中。'}]}});
+  expect(wrapper.findAll('.review-evidence mark').map(node=>node.text())).toEqual(['Z12']);
+  await wrapper.get('.review-evidence button').trigger('click'); await flushPromises();
+  const field = wrapper.get('[data-target="transcription"] textarea').element;
+  expect(document.activeElement).toBe(field);
+  expect(field.value.slice(field.selectionStart,field.selectionEnd)).toBe('Z12');
+  const before=field.value;
+  expect(wrapper.emitted('save')).toBeUndefined();
+  expect(field.value).toBe(before);
 });
 
 it('edits graph topology and requires a separate disposition for every issue', async () => {

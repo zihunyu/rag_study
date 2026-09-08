@@ -28,6 +28,22 @@ from ragkb.infrastructure.model_account import provider_operation
 from ragkb.infrastructure.visual_assets import VisualAssetStore
 
 
+def _context_hash(section: str, caption: str, context: str) -> str:
+    return hashlib.sha256((section + "\n" + caption + "\n" + context).encode()).hexdigest()
+
+
+def _same_source(prior: dict[str, Any], asset: dict[str, Any], picture: SourceImage) -> bool:
+    previous_context = prior.get("context_sha256") or _context_hash(
+        prior.get("section_path", "root"), prior.get("caption", ""), prior.get("context", "")
+    )
+    return bool(
+        prior.get("sha256") == asset["sha256"]
+        and prior.get("locator") == asset["locator"]
+        and previous_context
+        == _context_hash(picture.section_path, picture.caption, picture.context)
+    )
+
+
 def _review_history(
     identity: str, prior: dict[str, Any] | None, plan: dict[str, Any]
 ) -> list[dict[str, Any]]:
@@ -71,8 +87,9 @@ class VisualProcessor:
         run = uuid.uuid4().hex
         plan = self.store.ledger.get("version_plan", version)
         old = {a["id"]: a for a in self.store.list_assets(version)}
-        if plan.get("base_version_id"):
-            old = {a["id"]: a for a in self.store.list_assets(plan["base_version_id"])} | old
+        base_version = plan.get("base_version_id")
+        base = {a["id"]: a for a in self.store.list_assets(base_version)} if base_version else {}
+        old = base | old
         self.store.ledger.put(
             "version",
             version,
@@ -92,6 +109,7 @@ class VisualProcessor:
         )
         prepared: list[tuple[SourceImage, dict[str, Any]]] = []
         seen = set()
+        preserved = set()
         for picture in pictures:
             asset = self.store.save_image(version, picture.data, picture.locator.to_dict())
             if asset["id"] in seen:
@@ -106,6 +124,48 @@ class VisualProcessor:
                 stage="queued",
                 updated_at=time.time(),
             )
+            # A revision is a snapshot plus explicit actions, not a new OCR request
+            # for every unresolved image. Never use a shared cache to approve a
+            # pending sibling or repeat its model/local checks during review.
+            targeted = (
+                asset["id"] in plan.get("edits", {})
+                or asset["id"] in plan.get("retry_assets", [])
+                or asset["id"] in plan.get("exclude_assets", [])
+                or any(
+                    picture.section_path == section
+                    or picture.section_path.startswith(section + " / ")
+                    for section in plan.get("exclude_sections", [])
+                )
+            )
+            if base_version and not targeted:
+                prior = base.get(asset["id"])
+                if (
+                    prior
+                    and prior.get("status") in {"verified", "needs_review", "failed", "excluded"}
+                    and _same_source(prior, asset, picture)
+                ):
+                    binding = dict(asset)
+                    asset.update(prior)
+                    asset.update({k: v for k, v in binding.items() if k not in {"status", "stage"}})
+                    asset.update(
+                        stage={"verified": "completed"}.get(prior["status"], prior["status"]),
+                        cache_hit=False,
+                        inherited_from_version_id=base_version,
+                        _source_version_id=version,
+                    )
+                else:
+                    # Changed renderer/context or an incomplete historical snapshot:
+                    # keep it blocked and ask for an explicit retry, never spend
+                    # provider tokens on an image outside the submitted selection.
+                    asset.update(
+                        status="needs_review",
+                        stage="needs_review",
+                        extraction=None,
+                        issues=["原图、所属上下文或识别快照已变化，请主动重试这张图。"],
+                        error_code="VISUAL_REVISION_SOURCE_CHANGED",
+                        cache_hit=False,
+                    )
+                preserved.add(asset["id"])
             self.store.ledger.upsert_asset(version, asset, run=run)
             prepared.append((picture, asset))
 
@@ -120,11 +180,9 @@ class VisualProcessor:
 
             try:
                 check_cancelled()
-                context_hash = hashlib.sha256(
-                    (
-                        picture.section_path + "\n" + picture.caption + "\n" + picture.context
-                    ).encode()
-                ).hexdigest()
+                if identity in preserved:
+                    return picture, asset
+                context_hash = _context_hash(picture.section_path, picture.caption, picture.context)
                 key = hashlib.sha256(
                     (asset["sha256"] + context_hash + self.analyzer.revision).encode()
                 ).hexdigest()
@@ -324,7 +382,13 @@ class VisualProcessor:
         check_cancelled()
         if state.get("run") != run:
             raise ValueError("VISUAL_EXECUTION_SUPERSEDED")
-        state.update(stage="failed" if failures else "completed", finished_at=time.time())
+        state.update(
+            stage="failed" if failures else "completed",
+            finished_at=time.time(),
+            inherited_images=sum(
+                bool(asset.get("inherited_from_version_id")) for _, asset in prepared
+            ),
+        )
         self.store.ledger.put("version", version, state, expected=state["row_version"])
         if failures:
             raise failures[0]

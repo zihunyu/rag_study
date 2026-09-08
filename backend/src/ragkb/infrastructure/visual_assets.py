@@ -111,6 +111,7 @@ class VisualAssetStore:
                 "region_exclusions",
                 "coordinate_space",
                 "source_version_id",
+                "inherited_from_version_id",
             )
         }
         extraction = asset.get("extraction")
