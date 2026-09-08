@@ -20,7 +20,7 @@ from ragkb.infrastructure.visual_assets import VisualAssetStore
 
 
 class VisualDocumentParser:
-    revision = "visual-document-v3:coverage-reviewed-revisions"
+    revision = "visual-document-v4:graph-facts-reviewed-regions"
 
     def __init__(
         self,
@@ -50,6 +50,11 @@ class VisualDocumentParser:
         )
 
     def parse(self, source: Path, document_version_id: str) -> CanonicalDocument:
+        plan = self.store.ledger.get("version_plan", document_version_id)
+        if plan.get("rematerialization"):
+            from ragkb.infrastructure.visual_rematerialization import apply_snapshot
+
+            return apply_snapshot(self.store, source, document_version_id, plan)
         coverage = inventory(source, self.kind)
         source_images = native_images(
             source,

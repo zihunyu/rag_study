@@ -14,6 +14,8 @@ from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any
 
+from ragkb.infrastructure import visual_usage
+
 
 class VisualLedger:
     def __init__(self, path: Path) -> None:
@@ -39,8 +41,18 @@ class VisualLedger:
                     elapsed REAL NOT NULL, outcome TEXT NOT NULL, usage TEXT NOT NULL,
                     cost REAL, cached INTEGER NOT NULL DEFAULT 0);
                 CREATE INDEX IF NOT EXISTS visual_usage_version ON visual_usage(version_id, id);
-                PRAGMA user_version=1;
+                CREATE TABLE IF NOT EXISTS visual_usage_totals (
+                    scope TEXT PRIMARY KEY, call_count INTEGER NOT NULL,
+                    cache_hits INTEGER NOT NULL,
+                    input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,
+                    known_cost_cny REAL NOT NULL, unpriced_calls INTEGER NOT NULL,
+                    total_elapsed_seconds REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS visual_usage_checkpoint (
+                    id INTEGER PRIMARY KEY CHECK(id=1), last_id INTEGER NOT NULL);
+                INSERT OR IGNORE INTO visual_usage_checkpoint VALUES(1,0);
             """)
+            if db.execute("PRAGMA user_version").fetchone()[0] < 2:
+                db.execute("PRAGMA user_version=2")
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
@@ -179,24 +191,9 @@ class VisualLedger:
 
     def usage_report(self, version_id: str = "") -> dict[str, Any]:
         with self.connect() as db:
-            totals = dict(
-                db.execute(
-                    """
-                SELECT SUM(CASE WHEN cached=0 THEN 1 ELSE 0 END) call_count,
-                    SUM(cached) cache_hits,
-                    SUM(CASE WHEN cached=0 THEN COALESCE(json_extract(usage,'$.prompt_tokens'),0)
-                        ELSE 0 END) input_tokens,
-                    SUM(CASE WHEN cached=0 THEN
-                        COALESCE(json_extract(usage,'$.completion_tokens'),0)
-                        ELSE 0 END) output_tokens,
-                    SUM(COALESCE(cost,0)) known_cost_cny,
-                    SUM(CASE WHEN cached=0 AND cost IS NULL THEN 1 ELSE 0 END) unpriced_calls,
-                    SUM(elapsed) total_elapsed_seconds
-                FROM visual_usage WHERE (?='' OR version_id=?)
-            """,
-                    (version_id, version_id),
-                ).fetchone()
-            )
+            db.execute("BEGIN IMMEDIATE")
+            visual_usage.rollup(db)
+            totals = visual_usage.totals(db, version_id)
             rows = db.execute(
                 "SELECT * FROM visual_usage WHERE (?='' OR version_id=?) "
                 "ORDER BY id DESC LIMIT 2000",
@@ -208,6 +205,13 @@ class VisualLedger:
             "record_limit": 2000,
             **{key: value or 0 for key, value in totals.items()},
         }
+
+    def archive_usage(self, *, before: float, limit: int = 500) -> dict[str, Any]:
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            return visual_usage.archive(
+                db, self.path.parent / "visual-usage-archive", before=before, limit=limit
+            )
 
     def purge_artifacts(self, keys: list[str]) -> None:
         """Remove derived content tied to deleted original-image lineage, plus reuse entries."""

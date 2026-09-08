@@ -63,10 +63,14 @@ def build_visual_router(runtime: RuntimeComponents) -> APIRouter:
 
     @router.get("/api/document-versions/{version_id}/visuals")
     def list_visuals(version_id: str, request: Request) -> dict[str, Any]:
+        from ragkb.domain.visual_review import review_issues
+
         management_version(version_id, request)
         assets = store.list_assets(version_id)
         return {
-            "items": [store.public(a, version_id) for a in assets],
+            "items": [
+                {**store.public(a, version_id), "review_issues": review_issues(a)} for a in assets
+            ],
             "verified_count": sum(a.get("status") == "verified" for a in assets),
             "review_count": sum(a.get("status") not in {"verified", "excluded"} for a in assets),
             "excluded_count": sum(a.get("status") == "excluded" for a in assets),
@@ -103,6 +107,9 @@ def build_visual_router(runtime: RuntimeComponents) -> APIRouter:
             replay = runtime.repository.idempotency_response(operation, key, command_hash)
             if replay is not None:
                 return replay
+            from ragkb.api.routers.visual_revisions import require_latest_source
+
+            require_latest_source(runtime, version)
             try:
                 condition = int(if_match.strip('"'))
             except ValueError as error:
@@ -139,4 +146,7 @@ def build_visual_router(runtime: RuntimeComponents) -> APIRouter:
     from ragkb.api.routers.visual_revisions import build_visual_revision_router
 
     router.include_router(build_visual_revision_router(runtime, store, management_version))
+    from ragkb.api.routers.visual_rematerialization import build_rematerialization_router
+
+    router.include_router(build_rematerialization_router(runtime, store, management_version))
     return router

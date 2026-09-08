@@ -14,6 +14,9 @@ import uvicorn
 
 from ragkb.api.app import create_app
 from ragkb.application.worker import LocalIngestionWorker, WorkerFailure
+from ragkb.infrastructure.model_account import background_requests
+from ragkb.infrastructure.visual_assets import VisualAssetStore
+from ragkb.infrastructure.worker_heartbeat import WorkerHeartbeat
 from ragkb.runtime_components import RuntimeComponents, build_runtime_components
 
 
@@ -61,7 +64,8 @@ def run_worker_iteration(
     worker: LocalIngestionWorker, *, error_stream: TextIO | None = None
 ) -> WorkerIteration:
     try:
-        processed = worker.run_once()
+        with background_requests():
+            processed = worker.run_once()
         failure = getattr(worker, "last_failure", None)
         if failure is not None:
             _write_worker_failure(failure, error_stream or sys.stderr)
@@ -153,6 +157,11 @@ def run_worker(argv: Sequence[str] | None = None) -> int:
         )
         return 0
     recovered = components.queue.recover_expired()
+    heartbeat = WorkerHeartbeat(
+        VisualAssetStore(components.storage).ledger,
+        args.worker_id,
+        interval=components.settings.worker_heartbeat_interval_seconds,
+    )
     worker = LocalIngestionWorker(
         components.queue,
         components.repository,
@@ -170,10 +179,15 @@ def run_worker(argv: Sequence[str] | None = None) -> int:
         dependency_failure_threshold=components.settings.worker_dependency_failure_threshold,
         dependency_cooldown_seconds=components.settings.worker_dependency_cooldown_seconds,
         failure_pause_seconds=components.settings.worker_failure_pause_seconds,
+        activity=heartbeat.activity,
     )
+    heartbeat.start()
     if args.once:
-        _reconcile_upload_intents(components)
-        iteration = run_worker_iteration(worker)
+        try:
+            _reconcile_upload_intents(components)
+            iteration = run_worker_iteration(worker)
+        finally:
+            heartbeat.stop()
         print(
             json.dumps(
                 {
@@ -190,8 +204,18 @@ def run_worker(argv: Sequence[str] | None = None) -> int:
         return 1 if iteration.failed else 0
     print("G3 native Python Worker started")
     next_reconciliation = 0.0
+    next_usage_archive = 0.0
     try:
         while True:
+            if time.monotonic() >= next_usage_archive:
+                next_usage_archive = time.monotonic() + 600
+                try:
+                    heartbeat.ledger.archive_usage(
+                        before=time.time()
+                        - components.settings.model_usage_raw_retention_days * 86400
+                    )
+                except Exception as error:
+                    print(f"usage_archive_failed:{type(error).__name__}", file=sys.stderr)
             if time.monotonic() >= next_reconciliation:
                 next_reconciliation = time.monotonic() + 60
                 try:
@@ -208,3 +232,5 @@ def run_worker(argv: Sequence[str] | None = None) -> int:
                 time.sleep(args.poll_seconds or components.settings.queue_poll_interval_seconds)
     except KeyboardInterrupt:
         return 0
+    finally:
+        heartbeat.stop()

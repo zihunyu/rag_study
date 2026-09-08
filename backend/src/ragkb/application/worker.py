@@ -79,6 +79,7 @@ class LocalIngestionWorker:
         failure_pause_seconds: float = 1.0,
         clock: Callable[[], float] = time.monotonic,
         jitter: Callable[[float, float], float] = random.uniform,
+        activity: Callable[[str, QueueJob | None], None] | None = None,
     ) -> None:
         if (
             retry_base_seconds <= 0
@@ -108,6 +109,7 @@ class LocalIngestionWorker:
         self.failure_pause_seconds = failure_pause_seconds
         self.clock = clock
         self.jitter = jitter
+        self.activity = activity or (lambda phase, job: None)
         self.last_failure: WorkerFailure | None = None
         self.last_idle_delay_seconds = 0.0
         self._consecutive_dependency_failures = 0
@@ -159,11 +161,13 @@ class LocalIngestionWorker:
         return delay
 
     def run_once(self) -> bool:
+        self.activity("leasing", None)
         owner = f"{self.worker_id}:{uuid.uuid4().hex}"
         self.last_failure = None
         self.last_idle_delay_seconds = 0.0
         remaining_cooldown = self._dependency_circuit_open_until - self.clock()
         if remaining_cooldown > 0:
+            self.activity("cooldown", None)
             self.last_idle_delay_seconds = remaining_cooldown
             return False
         try:
@@ -183,6 +187,7 @@ class LocalIngestionWorker:
             self.last_idle_delay_seconds = delay
             return False
         if job is None:
+            self.activity("idle", None)
             return False
         if job.operation != "process_document":
             self.queue.fail(job.id, owner, "JOB_OPERATION_UNSUPPORTED", retryable=False)
@@ -212,11 +217,13 @@ class LocalIngestionWorker:
             initialized = True
             source_format = str(job.payload["source_format"])
             source = self.storage.path_for("original", str(version["original_key"]))
+            self.activity("parsing", job)
             with self.tracer.span("document.parse", {"source_format": source_format}):
                 document = self.parser_router.parse(
                     source_format, source, version_id, cancel_check=guard.poll
                 )
             check_cancelled()
+            self.activity("chunking", job)
             chunking = (
                 self._chunk(document, tenant_id=str(job.payload["tenant_id"]))
                 if self.chunker is not None
@@ -250,6 +257,7 @@ class LocalIngestionWorker:
                 if callable(save_chunking):
                     save_chunking(document, chunking)
                 if self.indexing_sink is not None:
+                    self.activity("indexing", job)
                     index_ready = self.indexing_sink.index(
                         chunking,
                         document_id=str(job.payload["document_id"]),
@@ -266,6 +274,7 @@ class LocalIngestionWorker:
                         mark_index_ready(version_id)
             guard.check()
             self.repository.save_quality_report(DocumentQualityReport.from_document(document))
+            self.activity("completing", job)
             completed = self.queue.complete(job.id, owner)
             if completed.state is JobState.CANCELLED:
                 self.storage.delete("artifacts", artifact_key)
@@ -361,6 +370,7 @@ class LocalIngestionWorker:
             finally:
                 guard.stop()
                 scope.close()
+                self.activity("failed" if self.last_failure else "idle", None)
         return True
 
     def _chunk(self, document: Any, *, tenant_id: str) -> Any:

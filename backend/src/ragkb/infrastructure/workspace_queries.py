@@ -55,6 +55,8 @@ class WorkspaceQueries:
                 {j("v", "publication_state")} publication_state,
                 {j("v", "parser_revision")} parser_revision,
                 {j("v", "mime_type")} mime_type,
+                {j("q", "disposition")} quality_disposition,
+                {j("q", "issue_codes")} quality_issues,
                 CAST(COALESCE({j("s", "expected_size")},0) AS UNSIGNED) size_bytes,
                 CAST(UNIX_TIMESTAMP(GREATEST(d.updated_at,v.updated_at,
                   COALESCE(s.updated_at,d.updated_at),
@@ -86,6 +88,7 @@ class WorkspaceQueries:
                   AND {j("av", "publication_state")}='SERVING') serving_version
               FROM e d JOIN versions v ON v.parent_id=d.entity_id AND v.rn=1
               LEFT JOIN sessions s ON {j("s", "document_version_id")}=v.entity_id AND s.rn=1
+              LEFT JOIN e q ON q.entity_type='quality' AND q.entity_id=v.entity_id
               LEFT JOIN lifecycle_entities l ON l.tenant_id=d.tenant_id
                 AND l.entity_type='documents' AND l.entity_id=d.entity_id
               WHERE d.entity_type='documents'
@@ -106,6 +109,7 @@ class WorkspaceQueries:
               SELECT d.id document_id,v.id version_id,c.space_id,
                 COALESCE(s.filename,d.external_key) filename,s.job_id,s.error_code,
                 v.version_no,v.processing_state,v.publication_state,v.parser_revision,v.mime_type,
+                q.disposition quality_disposition,q.issue_codes_json quality_issues,
                 COALESCE(s.expected_size,0) size_bytes,
                 CAST(MAX(d.updated_at,COALESCE(s.updated_at,d.updated_at))*1000
                   AS INTEGER) updated_ms,
@@ -124,6 +128,7 @@ class WorkspaceQueries:
               JOIN corpora c ON c.id=src.corpus_id
               JOIN versions v ON v.document_id=d.id AND v.rn=1
               LEFT JOIN sessions s ON s.document_version_id=v.id AND s.rn=1
+              LEFT JOIN document_quality_reports q ON q.version_id=v.id
               LEFT JOIN lifecycle_records l ON l.document_id=d.id
               WHERE d.tenant_id=?
             )
@@ -148,9 +153,14 @@ class WorkspaceQueries:
     def decorate(row: dict[str, Any]) -> dict[str, Any]:
         availability = row["availability"]
         actions = ["view", "download", "upload_version", "delete"]
-        if row["processing_state"] == "VALIDATED" and (
-            availability in ("pending_review", "withdrawn", "inconsistent")
-            or (availability == "available" and row["version_id"] != row["current_version_id"])
+        quality_blocked = row.get("quality_disposition") == "BLOCKED_REAL_VALIDATION"
+        if (
+            row["processing_state"] == "VALIDATED"
+            and not quality_blocked
+            and (
+                availability in ("pending_review", "withdrawn", "inconsistent")
+                or (availability == "available" and row["version_id"] != row["current_version_id"])
+            )
         ):
             actions.append("review_publish")
         if availability == "available":
@@ -160,6 +170,14 @@ class WorkspaceQueries:
         if row["processing_state"] in ("DRAFT", "PROCESSING") and row["job_id"]:
             actions.append("cancel")
         reasons = [REASONS[availability]] if availability in REASONS else []
+        if quality_blocked:
+            actions.append("review_quality")
+            visual = "VISUAL_" in str(row.get("quality_issues", ""))
+            reasons = [
+                "最新版本图片复核尚未完成，请到原图与识别逐项处理后重新检查质量。"
+                if visual
+                else "最新版本质量检查未通过，请处理质量问题后再发布。"
+            ]
         if availability == "available" and row["current_version_id"] != row["version_id"]:
             reasons.append("当前发布版本可用于问答；最新上传版本尚未发布。")
         return {

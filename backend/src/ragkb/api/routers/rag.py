@@ -260,6 +260,9 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
                     f"/api/rag-runs/{run_token}/evidence/{evidence_token}/visuals/{identity}/image"
                 )
                 result = runtime.rag_repository.get_result(run_id)
+                from ragkb.infrastructure.graph_citations import cited_graph_targets
+
+                public["focus_targets"] = cited_graph_targets(evidence, asset, result)
                 if result and result.answer:
                     from ragkb.document_processing.local_visual_check import (
                         compact,

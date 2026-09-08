@@ -903,6 +903,38 @@
       "Edge": {
         "additionalProperties": false,
         "properties": {
+          "bbox": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 4,
+                "minItems": 4,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bbox"
+          },
+          "bbox_basis": {
+            "default": "unverified",
+            "enum": [
+              "unverified",
+              "ocr",
+              "human"
+            ],
+            "title": "Bbox Basis",
+            "type": "string"
+          },
+          "condition": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Condition",
+            "type": "string"
+          },
           "direction": {
             "enum": [
               "forward",
@@ -914,6 +946,17 @@
           },
           "label": {
             "title": "Label",
+            "type": "string"
+          },
+          "review_status": {
+            "default": "inherited",
+            "enum": [
+              "inherited",
+              "confirmed",
+              "pending",
+              "excluded"
+            ],
+            "title": "Review Status",
             "type": "string"
           },
           "source": {
@@ -1382,6 +1425,32 @@
       "Group": {
         "additionalProperties": false,
         "properties": {
+          "bbox": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 4,
+                "minItems": 4,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bbox"
+          },
+          "bbox_basis": {
+            "default": "unverified",
+            "enum": [
+              "unverified",
+              "ocr",
+              "human"
+            ],
+            "title": "Bbox Basis",
+            "type": "string"
+          },
           "direction": {
             "enum": [
               "TB",
@@ -1410,6 +1479,17 @@
               }
             ],
             "title": "Parent"
+          },
+          "review_status": {
+            "default": "inherited",
+            "enum": [
+              "inherited",
+              "confirmed",
+              "pending",
+              "excluded"
+            ],
+            "title": "Review Status",
+            "type": "string"
           }
         },
         "required": [
@@ -1561,6 +1641,47 @@
           "simulated"
         ],
         "title": "IncidentResponse",
+        "type": "object"
+      },
+      "IssueResolution": {
+        "additionalProperties": false,
+        "properties": {
+          "disposition": {
+            "enum": [
+              "corrected",
+              "confirmed",
+              "excluded"
+            ],
+            "title": "Disposition",
+            "type": "string"
+          },
+          "issue_id": {
+            "pattern": "^[a-f0-9]{24}$",
+            "title": "Issue Id",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 2,
+            "pattern": ".*\\S.*",
+            "title": "Reason",
+            "type": "string"
+          },
+          "targets": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "Targets",
+            "type": "array"
+          }
+        },
+        "required": [
+          "issue_id",
+          "disposition",
+          "reason"
+        ],
+        "title": "IssueResolution",
         "type": "object"
       },
       "JobResponse": {
@@ -1814,6 +1935,32 @@
       "Node": {
         "additionalProperties": false,
         "properties": {
+          "bbox": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 4,
+                "minItems": 4,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bbox"
+          },
+          "bbox_basis": {
+            "default": "unverified",
+            "enum": [
+              "unverified",
+              "ocr",
+              "human"
+            ],
+            "title": "Bbox Basis",
+            "type": "string"
+          },
           "group": {
             "anyOf": [
               {
@@ -1831,6 +1978,17 @@
           },
           "label": {
             "title": "Label",
+            "type": "string"
+          },
+          "review_status": {
+            "default": "inherited",
+            "enum": [
+              "inherited",
+              "confirmed",
+              "pending",
+              "excluded"
+            ],
+            "title": "Review Status",
             "type": "string"
           },
           "shape": {
@@ -2122,6 +2280,26 @@
           }
         },
         "title": "ReadingOptions",
+        "type": "object"
+      },
+      "RematerializationRequest": {
+        "properties": {
+          "backup_receipt_sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Backup Receipt Sha256",
+            "type": "string"
+          },
+          "input_fingerprint": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Input Fingerprint",
+            "type": "string"
+          }
+        },
+        "required": [
+          "input_fingerprint",
+          "backup_receipt_sha256"
+        ],
+        "title": "RematerializationRequest",
         "type": "object"
       },
       "RetrievalHealth": {
@@ -2958,6 +3136,14 @@
           },
           "extraction": {
             "$ref": "#/components/schemas/VisualExtraction"
+          },
+          "resolutions": {
+            "items": {
+              "$ref": "#/components/schemas/IssueResolution"
+            },
+            "maxItems": 500,
+            "title": "Resolutions",
+            "type": "array"
           }
         },
         "required": [
@@ -3043,6 +3229,17 @@
       },
       "VisualRevisionRequest": {
         "properties": {
+          "acknowledged_latest_version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acknowledged Latest Version Id"
+          },
           "confirm_independent_sections": {
             "default": false,
             "title": "Confirm Independent Sections",
@@ -3075,6 +3272,11 @@
             "pattern": ".*\\S.*",
             "title": "Reason",
             "type": "string"
+          },
+          "restore_from_history": {
+            "default": false,
+            "title": "Restore From History",
+            "type": "boolean"
           },
           "retry_assets": {
             "items": {
@@ -4349,6 +4551,108 @@
         ]
       }
     },
+    "/api/document-versions/{version_id}/visual-rematerialization": {
+      "get": {
+        "operationId": "diagnose_api_document_versions__version_id__visual_rematerialization_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "title": "Version Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Diagnose Api Document Versions  Version Id  Visual Rematerialization Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Diagnose",
+        "tags": [
+          "workspace",
+          "visual-evidence",
+          "visual-rematerialization"
+        ]
+      }
+    },
+    "/api/document-versions/{version_id}/visual-review-context": {
+      "get": {
+        "operationId": "review_context_api_document_versions__version_id__visual_review_context_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "title": "Version Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Review Context Api Document Versions  Version Id  Visual Review Context Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Review Context",
+        "tags": [
+          "workspace",
+          "visual-evidence",
+          "visual-revisions"
+        ]
+      }
+    },
     "/api/document-versions/{version_id}/visual-usage": {
       "get": {
         "operationId": "usage_api_document_versions__version_id__visual_usage_get",
@@ -4569,6 +4873,87 @@
         "summary": "Publish Version",
         "tags": [
           "lifecycle"
+        ]
+      }
+    },
+    "/api/document-versions/{version_id}:rematerialize-visuals": {
+      "post": {
+        "operationId": "submit_api_document_versions__version_id__rematerialize_visuals_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "title": "Version Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "title": "If-Match",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 160,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RematerializationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Submit Api Document Versions  Version Id  Rematerialize Visuals Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Submit",
+        "tags": [
+          "workspace",
+          "visual-evidence",
+          "visual-rematerialization"
         ]
       }
     },

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import sqlite3
 import time
 
 from fastapi import APIRouter, Response, status
@@ -12,6 +13,8 @@ from ragkb.api.models import (
 )
 from ragkb.domain.retrieval import SearchContext
 from ragkb.engineering_security.file_validation import FORMAT_BY_EXTENSION
+from ragkb.infrastructure.visual_assets import VisualAssetStore
+from ragkb.infrastructure.worker_heartbeat import worker_status
 from ragkb.runtime_components import RuntimeComponents
 
 OPENAPI_VERSION = "1.0.0"
@@ -64,6 +67,19 @@ def build_health_router(runtime: RuntimeComponents) -> APIRouter:
             if snapshot["circuit_open"]:
                 degraded.append(f"{role.upper()}_CIRCUIT_OPEN")
         dependencies["providers"] = providers or {"state": "local_not_applicable"}
+        try:
+            worker = worker_status(
+                VisualAssetStore(runtime.storage).ledger,
+                stale_seconds=runtime.settings.worker_heartbeat_stale_seconds,
+                stall_seconds=runtime.settings.worker_task_stall_seconds,
+            )
+        except (OSError, sqlite3.Error):
+            worker = {"state": "unavailable", "reason": "无法读取处理进程心跳"}
+        dependencies["worker"] = worker
+        if worker["state"] == "unavailable":
+            degraded.append("WORKER_HEARTBEAT_UNAVAILABLE")
+        elif worker["state"] == "stalled":
+            degraded.append("WORKER_TASK_STALLED")
         return dependencies, degraded
 
     @router.get("/health/live", response_model=HealthResponse, tags=["health"])
@@ -126,8 +142,6 @@ def build_health_router(runtime: RuntimeComponents) -> APIRouter:
     def workspace_status() -> dict[str, object]:
         # Reuse real readiness probes. Failed dependencies remain readable to the dashboard.
         snapshot = ready(Response()).model_dump()
-        from ragkb.infrastructure.visual_assets import VisualAssetStore
-
         usage = VisualAssetStore(runtime.storage).ledger.usage_report()
         return {
             **snapshot,
@@ -146,7 +160,7 @@ def build_health_router(runtime: RuntimeComponents) -> APIRouter:
                 "account_concurrency": runtime.settings.model_account_max_concurrency,
                 "render_fallback_enabled": runtime.settings.ocr_render_fallback_enabled,
             },
-            "worker": {"state": "unprobed", "reason": "没有独立的 Worker 心跳探针"},
+            "worker": snapshot["dependencies"]["worker"],
             "parser": {
                 "state": "configured" if runtime.settings.mineru_tokens else "unconfigured",
                 "reason": "配置状态；实际解析结果请查看文件处理任务",

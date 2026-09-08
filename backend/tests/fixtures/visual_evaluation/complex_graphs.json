@@ -1,0 +1,44 @@
+{
+  "description": "Synthetic structural regression gold; this is not a real-image accuracy benchmark.",
+  "architecture": {
+    "direction": "LR",
+    "groups": [
+      {"id": "production", "label": "生产区", "parent": null, "direction": "TB"},
+      {"id": "test", "label": "测试区", "parent": null, "direction": "TB"},
+      {"id": "p-box", "label": "", "parent": "production", "direction": "TB"},
+      {"id": "t-box", "label": "", "parent": "test", "direction": "TB"}
+    ],
+    "nodes": [
+      {"id": "gateway", "label": "网关", "group": null, "shape": "rectangle"},
+      {"id": "p-nacos", "label": "NACOS", "group": "p-box", "shape": "rectangle"},
+      {"id": "p-db", "label": "数据库", "group": "p-box", "shape": "database"},
+      {"id": "t-nacos", "label": "NACOS", "group": "t-box", "shape": "rectangle"},
+      {"id": "t-db", "label": "数据库", "group": "t-box", "shape": "database"}
+    ],
+    "edges": [
+      {"source": "gateway", "target": "p-box", "label": "服务请求响应", "direction": "both", "style": "solid"},
+      {"source": "p-nacos", "target": "p-db", "label": "配置", "direction": "forward", "style": "dashed"},
+      {"source": "t-nacos", "target": "t-db", "label": "配置", "direction": "forward", "style": "dashed"},
+      {"source": "p-db", "target": "t-db", "label": "仅演练时同步", "condition": "演练已授权", "direction": "forward", "style": "solid"}
+    ],
+    "uncertainties": []
+  },
+  "flow": {
+    "direction": "TB", "groups": [],
+    "nodes": [
+      {"id": "start", "label": "开始检测", "group": null, "shape": "rounded"},
+      {"id": "check", "label": "检测成功？", "group": null, "shape": "diamond"},
+      {"id": "finish", "label": "结束", "group": null, "shape": "rounded"},
+      {"id": "repair", "label": "更换设备", "group": null, "shape": "rectangle"},
+      {"id": "note", "label": "操作说明", "group": null, "shape": "rectangle"}
+    ],
+    "edges": [
+      {"source": "start", "target": "check", "label": "", "direction": "forward", "style": "solid"},
+      {"source": "check", "target": "finish", "label": "是", "direction": "forward", "style": "solid"},
+      {"source": "check", "target": "repair", "label": "否", "direction": "forward", "style": "solid"},
+      {"source": "repair", "target": "check", "label": "重新检测", "direction": "forward", "style": "solid"},
+      {"source": "note", "target": "repair", "label": "说明", "direction": "none", "style": "dashed"}
+    ],
+    "uncertainties": []
+  }
+}

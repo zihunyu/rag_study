@@ -22,7 +22,9 @@ def test_structural_edit_cannot_keep_old_transcript_and_generated_description():
     edited = reviewed_extraction(original, VisualExtraction.model_validate(raw))
     assert "订单服务" not in edited.retrieval_text()
     assert "双向" not in edited.retrieval_text()
-    assert "Gateway 指向 支付服务" in edited.retrieval_text()
+    assert "Gateway 指向" in edited.retrieval_text()
+    assert "支付服务" in edited.retrieval_text()
+    assert edited.graphs[0].groups[0].label in edited.retrieval_text()
     assert original.transcription == EXTRACTION["transcription"]
     assert reviewed_extraction(original, edited) == edited
 

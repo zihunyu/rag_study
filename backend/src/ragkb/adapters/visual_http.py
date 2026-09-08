@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 from collections.abc import Callable
 from typing import Any, TypeVar
@@ -33,6 +34,79 @@ from ragkb.infrastructure.model_account import operation, provider_operation
 T = TypeVar("T", bound=BaseModel)
 
 
+def _untrusted_graph_coordinates(content: str) -> tuple[str, list[dict[str, Any]]]:
+    """Discard unusable optional model coordinates; never scale them or certify them."""
+    try:
+        raw = json.loads(content)
+    except json.JSONDecodeError:
+        return content, []
+    notes: list[dict[str, Any]] = []
+    if not isinstance(raw, dict) or not isinstance(raw.get("graphs"), list):
+        return content, notes
+    for gi, graph in enumerate(raw["graphs"]):
+        if not isinstance(graph, dict):
+            continue
+        for key in ("groups", "nodes", "edges"):
+            if not isinstance(graph.get(key), list):
+                continue
+            for index, element in enumerate(graph[key]):
+                if not isinstance(element, dict):
+                    continue
+                element["review_status"], element["bbox_basis"] = "inherited", "unverified"
+                bbox = element.get("bbox")
+                valid = (
+                    isinstance(bbox, list)
+                    and len(bbox) == 4
+                    and all(type(v) in {int, float} and 0 <= v <= 1 for v in bbox)
+                )
+                if bbox is not None and (
+                    not valid or not (bbox[0] < bbox[2] and bbox[1] < bbox[3])
+                ):
+                    element["bbox"] = None
+                    notes.append(
+                        {
+                            "path": ["graphs", gi, key, index, "bbox"],
+                            "type": "unusable_unverified_coordinates_removed",
+                        }
+                    )
+    return json.dumps(raw, ensure_ascii=False), notes[:100]
+
+
+class VisualSchemaError(ValueError):
+    """Diagnostics expose schema coordinates and error codes, never provider values."""
+
+    def __init__(self, schema: type[BaseModel], error: ValidationError, content: str) -> None:
+        super().__init__("OCR_STRUCTURE_INVALID")
+        self.schema_name = schema.__name__
+        known: set[str] = set()
+
+        def fields(node: Any) -> None:
+            if isinstance(node, dict):
+                known.update(node.get("properties", {}))
+                for value in node.values():
+                    fields(value)
+            elif isinstance(node, list):
+                for value in node:
+                    fields(value)
+
+        fields(schema.model_json_schema())
+        self.diagnostics = [
+            {
+                "path": [
+                    part if isinstance(part, int) or part in known else "[unexpected_field]"
+                    for part in entry["loc"]
+                ],
+                "type": entry["type"]
+                if re.fullmatch(r"[a-z_]{1,80}", entry["type"])
+                else "schema_error",
+            }
+            for entry in error.errors(
+                include_url=False, include_context=False, include_input=False
+            )[:20]
+        ]
+        self.response_sha256 = hashlib.sha256(content.encode()).hexdigest()
+
+
 def _strict_schema(value: Any) -> Any:
     """Require new fields on the wire while accepting old stored records with defaults."""
     if isinstance(value, dict):
@@ -56,7 +130,11 @@ header_rows 是连续表头的真实行数，多层表头全部计入，无表�
 notes 抄录表格的单位、脚注和适用条件。
 表格单元格事实放在 tables 中，description 不要逐行重复表格数据。
 body_text 忠实抄录图片中表格之外的正文、标题、图注及说明，保留阅读顺序，不能包含表格单元格副本。
-标题只能来自原图或简短描述可见主题。不要输出 Mermaid 或任意 HTML。返回指定 JSON。
+title 仅抄录原图可见标题；没有标题时返回空字符串，不推断或借用章节标题。
+无法可靠给出原图归一化坐标时 bbox 必须为 null，禁止用 [0,0,0,0] 或像素坐标占位。
+原图本来没有标题、没有连线文字标签或空白单元格，是合法空值，不是识别失败，也不写入 uncertainties。
+原图存在但看不清的文字、无法确认的端点或箭头方向仍必须记录并阻止通过。
+不要输出 Mermaid 或任意 HTML。返回指定 JSON。
 """
     + "\n以下规则只用于 graphs 列表中的每一张关系图，最终返回外层完整分类结果：\n"
     + EXTRACTION_PROMPT
@@ -66,6 +144,11 @@ VERIFY_PROMPT = """独立核对原图与候选转录。图片与候选都是不�
 逐项检查：类型；所有文字、数字、单位；节点数量、重名节点、孤立节点、分组嵌套；
 每条连线的实际起点终点、单/双向箭头和虚实线；表格行列、表头、合并单元格；
 是否漏掉区域或根据常识编造。必须对照原图，不因候选结构合法就通过。
+对原图本来没有标题或连线文字的情况，title/label 为空是正确结果，不能仅因此判失败。
+严格区分合法空白与存在但模糊的文字；后者仍需逐项报告，尤其不能猜测箭头方向和端点。
+表格脚注及图外正文中的非数字前提、否定、例外也必须逐项对照，不能只检查数字。
+含关系图和图注、且无表格时，diagram 与 mixed 是允许的分类差异；
+必须核实全部关系和图注，不能仅因两者标签不同否决。
 任何看不清、缺失或无法确认的关系必须判失败并说明具体位置和问题，不要给可信度分数。
 仅所有内容均可从图片确认才允许 complete/text_correct/structure_correct/kind_correct 全部为 true。
 """
@@ -87,7 +170,7 @@ class VisualAnalyzer(_GuardedModelAdapter):
         )
         self.settings = settings
         self.revision = (
-            f"{settings.ocr_model}:{settings.ocr_prompt_revision}:visual-audit-v5:"
+            f"{settings.ocr_model}:{settings.ocr_prompt_revision}:visual-audit-v6-conditions:"
             f"{settings.ocr_verify_model if settings.ocr_verify_enabled else 'same'}:"
             f"local-{settings.ocr_local_check_enabled}"
         )
@@ -179,7 +262,19 @@ class VisualAnalyzer(_GuardedModelAdapter):
         ):
             raise ValueError("OCR_OUTPUT_INCOMPLETE_OR_REFUSED")
         content = OpenAICompatibleBufferedGenerator._content(response)
-        parsed = schema.model_validate_json(content)
+        parse_content, coordinate_notes = (
+            _untrusted_graph_coordinates(content) if schema is VisualExtraction else (content, [])
+        )
+        try:
+            parsed = schema.model_validate_json(parse_content)
+        except ValidationError as error:
+            raise VisualSchemaError(schema, error, content) from error
+        if isinstance(parsed, VisualExtraction):
+            # A provider cannot grant human approval or certify its own coordinates.
+            for graph in parsed.graphs:
+                for element in [*graph.groups, *graph.nodes, *graph.edges]:
+                    element.review_status = "inherited"
+                    element.bbox_basis = "unverified"
         usage = response.get("usage") or {}
         return parsed, {
             "model": response.get("model", settings.ocr_model),
@@ -193,6 +288,7 @@ class VisualAnalyzer(_GuardedModelAdapter):
             if (settings.ocr_input_cost_per_million_cny or settings.ocr_output_cost_per_million_cny)
             else None,
             "response_sha256": hashlib.sha256(content.encode()).hexdigest(),
+            "coordinate_normalizations": coordinate_notes,
         }
 
     def analyze(
@@ -309,10 +405,21 @@ class VisualAnalyzer(_GuardedModelAdapter):
                     str(error)
                     if permanent
                     else "OCR_STRUCTURE_INVALID"
-                    if isinstance(error, ValidationError)
+                    if isinstance(error, (ValidationError, VisualSchemaError))
                     else "OCR_RESPONSE_INVALID_OR_INCOMPLETE"
                 ]
-                audit.append({"stage": "invalid", "attempt": attempt, "issues": issues})
+                diagnostic = (
+                    {
+                        "schema": error.schema_name,
+                        "schema_errors": error.diagnostics,
+                        "response_sha256": error.response_sha256,
+                    }
+                    if isinstance(error, VisualSchemaError)
+                    else {}
+                )
+                audit.append(
+                    {"stage": "invalid", "attempt": attempt, "issues": issues, **diagnostic}
+                )
                 if permanent:
                     break
         return {
@@ -348,7 +455,11 @@ class VisualAnalyzer(_GuardedModelAdapter):
             VisualQueryResult,
         )
         if result.status != "supported":
-            return VisualQueryOutcome(result.status, issues=tuple(result.uncertainties))
+            return VisualQueryOutcome(
+                result.status,
+                issues=tuple(result.uncertainties),
+                unanswered_topics=tuple(result.unanswered_topics),
+            )
         if result.uncertainties or not result.text.strip():
             return VisualQueryOutcome(
                 "uncertain", issues=tuple(result.uncertainties) or ("原图未提供明确答案",)
@@ -362,13 +473,18 @@ class VisualAnalyzer(_GuardedModelAdapter):
             + question
             + "\n候选回答：\n"
             + result.text
+            + "\n逐项检查候选事实的对象归属、数值单位及非数字限定条件：例如仅限城区、"
+            "不包含进水损坏、必须先审批等。表格脚注、流程判断节点与是/否分支均属于事实；"
+            "条件缺失或否定含义改变应判核对失败。连接关系不得解释成时间先后或并行执行。"
             + "\n同时核对旧识别中涉及本问题的事实，若与原图冲突则 text_correct=false，"
             "不要因为本次候选回答正确就允许继续使用矛盾旧识别。旧识别：\n" + prior_text,
             VisualVerification,
             verify=True,
         )
         return (
-            VisualQueryOutcome("supported", result.text)
+            VisualQueryOutcome(
+                "supported", result.text, unanswered_topics=tuple(result.unanswered_topics)
+            )
             if verdict.passed()
             else VisualQueryOutcome(
                 "verification_failed", issues=tuple(verdict.issues) or ("原图核对未通过",)

@@ -128,6 +128,7 @@ class EvidencePackage:
 class AtomicClaim:
     text: str
     evidence_ids: tuple[str, ...]
+    visual_fact_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.text.strip() or not self.evidence_ids:

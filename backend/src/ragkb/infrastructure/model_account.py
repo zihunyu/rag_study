@@ -20,6 +20,16 @@ from ragkb.config import EnvSettings
 from ragkb.domain.errors import ProviderRateLimited, ProviderTimeout, ProviderUnavailable
 
 operation: ContextVar[tuple[str, str, str]] = ContextVar("provider_operation", default=("", "", ""))
+request_priority: ContextVar[str] = ContextVar("model_request_priority", default="interactive")
+
+
+@contextmanager
+def background_requests() -> Iterator[None]:
+    token = request_priority.set("background")
+    try:
+        yield
+    finally:
+        request_priority.reset(token)
 
 
 @contextmanager
@@ -33,6 +43,15 @@ def provider_operation(version: str, asset: str, role: str) -> Iterator[None]:
 
 _ACQUIRE = """
 local now=tonumber(ARGV[1]); local reservation=tonumber(ARGV[4])
+local gone=redis.call('ZRANGEBYSCORE',KEYS[7],'-inf',now)
+for _,id in ipairs(gone) do
+    redis.call('ZREM',KEYS[5],id); redis.call('ZREM',KEYS[6],id)
+end
+redis.call('ZREMRANGEBYSCORE',KEYS[7],'-inf',now)
+local waiting=KEYS[5]; if ARGV[9]=='background' then waiting=KEYS[6] end
+redis.call('ZADD',waiting,'NX',tonumber(ARGV[8]),ARGV[2])
+redis.call('ZADD',KEYS[7],now+tonumber(ARGV[3]),ARGV[2])
+for i=5,8 do redis.call('EXPIRE',KEYS[i],3600) end
 redis.call('ZREMRANGEBYSCORE',KEYS[1],'-inf',now)
 local expired=redis.call('ZRANGEBYSCORE',KEYS[2],'-inf',now-60)
 for _,id in ipairs(expired) do redis.call('HDEL',KEYS[3],id) end
@@ -42,6 +61,15 @@ local cool=tonumber(redis.call('GET',KEYS[4]) or '0')
 if cool>now or redis.call('ZCARD',KEYS[1])>=tonumber(ARGV[5]) or
 redis.call('ZCARD',KEYS[2])>=tonumber(ARGV[6]) or
 tokens+reservation>tonumber(ARGV[7]) then return 0 end
+local fg=redis.call('ZRANGE',KEYS[5],0,0)[1]
+local bg=redis.call('ZRANGE',KEYS[6],0,0)[1]
+local selected=fg or bg
+local burst=tonumber(redis.call('GET',KEYS[8]) or '0')
+if bg and fg and burst>=tonumber(ARGV[10]) then selected=bg end
+if selected~=ARGV[2] then return 0 end
+redis.call('ZREM',waiting,ARGV[2]); redis.call('ZREM',KEYS[7],ARGV[2])
+if ARGV[9]=='background' then redis.call('SET',KEYS[8],0,'EX',3600)
+else redis.call('INCR',KEYS[8]); redis.call('EXPIRE',KEYS[8],3600) end
 redis.call('ZADD',KEYS[1],now+tonumber(ARGV[3]),ARGV[2])
 redis.call('ZADD',KEYS[2],now,ARGV[2]); redis.call('HSET',KEYS[3],ARGV[2],reservation)
 redis.call('EXPIRE',KEYS[1],3600)
@@ -89,13 +117,26 @@ class AccountLimiter:
         )
         digest = hashlib.sha256(material.encode()).hexdigest()[:32]
         prefix = self.settings.redis_key_prefix + "account:{" + digest + "}:"
-        keys = [prefix + value for value in ("active", "requests", "tokens", "cooldown")]
+        keys = [
+            prefix + value
+            for value in (
+                "active",
+                "requests",
+                "tokens",
+                "cooldown",
+                "interactive_waiters",
+                "background_waiters",
+                "waiter_expiry",
+                "interactive_burst",
+            )
+        ]
         identity = uuid.uuid4().hex
         reserved = estimate_tokens(payload) + int(payload.get("max_tokens", 0))
         if reserved > self.settings.model_account_tokens_per_minute:
             raise ProviderRateLimited("MODEL_ACCOUNT_REQUEST_EXCEEDS_TOKEN_BUDGET")
         deadline = time.monotonic() + remaining_timeout(timeout)
         acquired = False
+        arrived = time.time()
         try:
             while time.monotonic() < deadline:
                 check_cancelled()
@@ -111,6 +152,9 @@ class AccountLimiter:
                         str(self.settings.model_account_max_concurrency),
                         str(self.settings.model_account_requests_per_minute),
                         str(self.settings.model_account_tokens_per_minute),
+                        str(arrived),
+                        request_priority.get(),
+                        str(self.settings.model_account_interactive_burst),
                     )
                 )
                 if acquired:
@@ -122,6 +166,11 @@ class AccountLimiter:
         except redis.RedisError as error:
             raise ProviderUnavailable("MODEL_ACCOUNT_COORDINATOR_UNAVAILABLE") from error
         finally:
+            try:
+                for key in keys[4:7]:
+                    self.redis.zrem(key, identity)
+            except redis.RedisError:
+                pass  # expired waiters are pruned atomically by the next reservation
             if acquired:
                 try:
                     self.redis.zrem(keys[0], identity)

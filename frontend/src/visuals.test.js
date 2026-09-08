@@ -6,6 +6,7 @@ import VisualAsset from './components/VisualAsset.vue';
 import MarkdownContent from './components/MarkdownContent.vue';
 import VisualEditor from './components/VisualEditor.vue';
 import ConditionCoverage from './components/ConditionCoverage.vue';
+import ReadingImageCoverage from './components/ReadingImageCoverage.vue';
 
 const render = vi.hoisted(() => vi.fn());
 vi.mock('./mermaid.js', () => ({ renderDiagram: render }));
@@ -123,4 +124,124 @@ it('does not erase a human edit when the same asset is refreshed', async () => {
   await wrapper.get('input[type="checkbox"]').setValue(true);
   await wrapper.get('form').trigger('submit');
   expect(wrapper.emitted('save')[0][0].extraction.description).toBe('已核对的说明');
+});
+
+it('edits graph topology and requires a separate disposition for every issue', async () => {
+  const graph={direction:'LR',groups:[{id:'g',label:'生产区',parent:null,direction:'LR'}],nodes:[{id:'a',label:'A',group:'g',shape:'rectangle'},{id:'b',label:'B',group:null,shape:'diamond'}],edges:[{source:'a',target:'b',label:'失败',direction:'forward',style:'solid'}],uncertainties:['箭头不清楚']};
+  const record={...asset('review','图'),extraction:{kind:'diagram',title:'图',description:'',transcription:'',body_text:'',tables:[],graphs:[graph],uncertainties:[]}};
+  wrapper=mount(VisualEditor,{props:{asset:record,issues:[{id:'1'.repeat(24),message:'箭头不清楚'},{id:'2'.repeat(24),message:'分组需要核对'}]}});
+  const find=text=>wrapper.findAll('button').find(b=>b.text()===text);
+  await find('添加分组').trigger('click');
+  await find('添加节点').trigger('click');
+  await find('添加连线').trigger('click');
+  expect(wrapper.findAll('.graph-item')).toHaveLength(7);
+  await wrapper.get('[aria-label="图 1 分组 g1"]').setValue('测试区');
+  await wrapper.get('[aria-label="问题 1 处理结果"]').setValue('corrected');
+  await wrapper.get('[aria-label="问题 1 关联对象"]').setValue(['graphs/0']);
+  await wrapper.get('[aria-label="问题 1 核对说明"]').setValue('对照原图补回遗漏对象与连接');
+  await wrapper.findAll('textarea').at(-1).setValue('修复遗漏结构');
+  await wrapper.get('input[type="checkbox"]').setValue(true);
+  expect(find('确认修订并生成新版本').attributes('disabled')).toBeDefined();
+  await wrapper.get('[aria-label="问题 2 处理结果"]').setValue('confirmed');
+  await wrapper.get('[aria-label="问题 2 核对说明"]').setValue('原图中分组边界与现有记录一致');
+  await wrapper.get('form').trigger('submit');
+  const sent=wrapper.emitted('save')[0][0];
+  expect(sent.resolutions).toHaveLength(2);
+  expect(sent.extraction.graphs[0].groups).toHaveLength(2);
+  expect(sent.extraction.graphs[0].nodes).toHaveLength(3);
+  expect(sent.extraction.graphs[0].edges).toHaveLength(2);
+  expect(sent.extraction.graphs[0].uncertainties).toEqual([]);
+  expect(wrapper.text()).not.toContain('我已逐项修正并确认这些问题');
+});
+
+it('keeps the document condition captured at the start of editing', async () => {
+  const record={...asset('locked','图'),table_html:[],extraction:{kind:'text',title:'图',description:'原文',transcription:'',body_text:'',tables:[],graphs:[],uncertainties:[]}};
+  const sent=[];
+  vi.stubGlobal('fetch',vi.fn((url,options={})=>{
+    if(String(url).endsWith('/visuals')) return Promise.resolve(json({items:[record]}));
+    if(String(url).endsWith('/visual-review-context')) return Promise.resolve(json({row_version:7,historical:false,issues:{locked:[]}}));
+    if(options.method==='POST') {sent.push(options);return Promise.resolve(json({document_version_id:'new'}));}
+    throw Error('Unexpected latest-state refresh would discard the editing condition: '+url);
+  }));
+  wrapper=mount(DocumentVisuals,{props:{versionId:'v1',documentId:'doc',filename:'file.md'}}); await flushPromises();
+  await wrapper.findAll('button').find(b=>b.text()==='修订这张图').trigger('click'); await flushPromises();
+  const editor=wrapper.getComponent(VisualEditor);
+  await editor.findAll('textarea')[0].setValue('修订内容');
+  await editor.findAll('textarea').at(-1).setValue('对照原文修订');
+  await editor.get('input[type="checkbox"]').setValue(true);
+  await editor.get('form').trigger('submit'); await flushPromises();
+  expect(sent[0].headers.get('If-Match')).toBe('7');
+});
+
+it('does not show guessed model boxes as verified original-image locations', async () => {
+  const record={...asset('bbox','图'),table_html:[],extraction:{kind:'diagram',description:'',graphs:[{groups:[],nodes:[{id:'n',label:'组件',bbox:[.1,.2,.3,.4],bbox_basis:'unverified'}],edges:[]}]}};
+  wrapper=mount(VisualAsset,{props:{asset:record}});
+  await wrapper.findAll('button').find(b=>b.text()==='定位 组件').trigger('click');
+  expect(wrapper.find('.visual-region').exists()).toBe(false);
+  await wrapper.setProps({asset:{...record,extraction:{...record.extraction,graphs:[{groups:[],nodes:[{...record.extraction.graphs[0].nodes[0],bbox_basis:'human'}],edges:[]}]}}});
+  await wrapper.findAll('button').find(b=>b.text()==='定位 组件').trigger('click');
+  expect(wrapper.get('.visual-region').attributes('style')).toContain('left: 10%');
+  expect(wrapper.text()).toContain('人工对照原图确认');
+});
+
+it('preserves a complete table grid across insertion, deletion, merging and splitting', async () => {
+  const {resizeTable,mergeCells,splitCell}=await import('./visualEditing.js');
+  const table={rows:2,columns:2,header_rows:1,cells:[0,1,2,3].map(i=>({row:Math.floor(i/2),column:i%2,rowspan:1,colspan:1,text:String(i)}))};
+  expect(mergeCells(table,0,0,1,2)).toBe(true);
+  resizeTable(table,'column',1);
+  expect(table.cells.find(c=>c.row===0&&c.column===0).colspan).toBe(3);
+  resizeTable(table,'row',0);
+  expect(table.header_rows).toBe(2);
+  const merged=table.cells.find(c=>c.colspan===3);
+  splitCell(table,merged);
+  resizeTable(table,'column',1,true);
+  resizeTable(table,'row',0,true);
+  expect(table.rows).toBe(2);expect(table.columns).toBe(2);
+  const seen=new Set();for(const c of table.cells) for(let r=c.row;r<c.row+c.rowspan;r++) for(let k=c.column;k<c.column+c.colspan;k++) {expect(seen.has(`${r}:${k}`)).toBe(false);seen.add(`${r}:${k}`);}
+  expect(seen.size).toBe(4);
+});
+
+it('invalidates review target bindings when graph object positions change', async () => {
+  const record={...asset('binding','图'),table_html:[],extraction:{kind:'diagram',title:'',description:'',transcription:'',body_text:'',tables:[],graphs:[{direction:'LR',groups:[],nodes:[{id:'a',label:'A',group:null,shape:'rectangle'},{id:'b',label:'B',group:null,shape:'rectangle'}],edges:[],uncertainties:[]}],uncertainties:[]}};
+  wrapper=mount(VisualEditor,{props:{asset:record,issues:[{id:'1'.repeat(24),message:'A 应为 C'}]}});
+  await wrapper.get('[aria-label="问题 1 处理结果"]').setValue('corrected');
+  await wrapper.get('[aria-label="问题 1 关联对象"]').setValue(['graphs/0/nodes/1']);
+  await wrapper.findAll('button').find(b=>b.text()==='删除误识别节点').trigger('click');
+  expect(Array.from(wrapper.get('[aria-label="问题 1 关联对象"]').element.selectedOptions)).toHaveLength(0);
+  expect(wrapper.text()).toContain('请重新关联各问题的对象');
+  expect(wrapper.get('.region-editor select').element.value).toBe('');
+});
+
+it('labels partial graphs and candidate citation targets without claiming full approval', async () => {
+  const record={...asset('partial','流程'),table_html:[],graph_coverage:[{partial:true}],focus_targets:[{fact_id:'f1',text:'A 指向 B',usage:'citation_candidate',bbox:[.1,.2,.3,.4],bbox_basis:'human'}],extraction:{kind:'diagram',description:'',graphs:[{groups:[],nodes:[],edges:[]}]}};
+  wrapper=mount(VisualAsset,{props:{asset:record}});
+  expect(wrapper.text()).toContain('部分内容可用于问答');
+  expect(wrapper.text()).not.toContain('原图核对通过');
+  expect(wrapper.text()).toContain('该条引用包含的关系（点击定位）');
+  expect(wrapper.find('.visual-region').exists()).toBe(false);
+  await wrapper.findAll('button').find(b=>b.text()==='A 指向 B').trigger('click');
+  expect(wrapper.find('.visual-region').exists()).toBe(true);
+});
+
+it('distinguishes answer-used graph facts from historical citation candidates', async () => {
+  const record={...asset('facts','流程'),table_html:[],focus_targets:[{fact_id:'used',text:'已使用的关系',usage:'answer',bbox:[.1,.2,.3,.4],bbox_basis:'human'}],extraction:{kind:'diagram',description:'',graphs:[]}};
+  wrapper=mount(VisualAsset,{props:{asset:record}});
+  expect(wrapper.text()).toContain('回答引用的事实位置');
+  expect(wrapper.text()).not.toContain('该条引用包含的关系（点击定位）');
+  expect(wrapper.find('.visual-region').exists()).toBe(false);
+  await wrapper.findAll('button').find(b=>b.text()==='已使用的关系').trigger('click');
+  expect(wrapper.text()).toContain('人工对照原图确认');
+});
+
+it('distinguishes confirmed-image reuse from the image recheck budget count', async () => {
+  wrapper=mount(ReadingImageCoverage,{props:{report:{checked_images:0,image_checks:[{status:'supported',fact_ids:['fact']}]}}});
+  expect(wrapper.get('.reading-image-summary').text()).toBe('已使用已确认的图片资料');
+  expect(wrapper.get('.reading-image-summary').text()).not.toContain('0');
+  expect(wrapper.get('details').attributes('open')).toBeUndefined();
+  expect(wrapper.get('details').text()).toContain('进入图像复查预算：0 张');
+  expect(wrapper.get('details').text()).toContain('不代表本轮重新调用模型看图');
+  await wrapper.setProps({report:{checked_images:2,image_checks:[{status:'supported'}]}});
+  expect(wrapper.get('.reading-image-summary').text()).toBe('图像复查 2 张（可复用已确认结果）');
+  await wrapper.setProps({report:{checked_images:0,image_checks:[]}});
+  expect(wrapper.find('.reading-image-coverage').exists()).toBe(false);
 });

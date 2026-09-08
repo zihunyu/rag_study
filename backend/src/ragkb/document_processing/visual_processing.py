@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -25,6 +26,32 @@ from ragkb.domain.errors import IngestionCancelled
 from ragkb.domain.visuals import VisualExtraction, reviewed_extraction
 from ragkb.infrastructure.model_account import provider_operation
 from ragkb.infrastructure.visual_assets import VisualAssetStore
+
+
+def _review_history(
+    identity: str, prior: dict[str, Any] | None, plan: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Bind a legacy receipt only when the immutable plan proves a unique edited image."""
+    result = [
+        entry for entry in (prior or {}).get("history", []) if entry.get("asset_id") == identity
+    ]
+    unique_edit = set(plan.get("edits", {})) == {identity}
+    for entry in plan.get("history", []):
+        if entry.get("asset_id") == identity:
+            result.append(entry)
+        elif not entry.get("asset_id") and unique_edit:
+            result.append(
+                {
+                    **entry,
+                    "asset_id": identity,
+                    "legacy": True,
+                    "binding_basis": "single_edited_asset",
+                }
+            )
+    unique: dict[str, dict[str, Any]] = {}
+    for entry in result:
+        unique[json.dumps(entry, sort_keys=True, ensure_ascii=False)] = entry
+    return list(unique.values())
 
 
 class VisualProcessor:
@@ -55,6 +82,11 @@ class VisualProcessor:
                 "coverage": coverage,
                 "started_at": time.time(),
                 "plan": plan,
+                "legacy_version_history": [
+                    {**entry, "legacy": True, "scope": "version"}
+                    for entry in plan.get("history", [])
+                    if not entry.get("asset_id") and len(plan.get("edits", {})) != 1
+                ],
                 "total_images": len(pictures),
             },
         )
@@ -126,7 +158,7 @@ class VisualProcessor:
                         status="verified",
                         issues=[],
                         origin="human_review",
-                        history=(prior or {}).get("history", []) + plan.get("history", []),
+                        history=_review_history(identity, prior, plan),
                         revision=self.analyzer.revision,
                         analyzed_at=time.time(),
                     )

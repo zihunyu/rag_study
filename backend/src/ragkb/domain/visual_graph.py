@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class StrictModel(BaseModel):
@@ -17,26 +17,45 @@ class StrictModel(BaseModel):
 Direction = Literal["TB", "LR", "BT", "RL"]
 
 
-class Group(StrictModel):
+class LocatedElement(StrictModel):
+    """Coordinates are normalized original-image regions, never Mermaid layout positions."""
+
+    bbox: list[float] | None = Field(default=None, min_length=4, max_length=4)
+    bbox_basis: Literal["unverified", "ocr", "human"] = "unverified"
+    review_status: Literal["inherited", "confirmed", "pending", "excluded"] = "inherited"
+
+    @model_validator(mode="after")
+    def validate_bbox(self) -> LocatedElement:
+        if self.bbox is not None:
+            x0, y0, x1, y1 = self.bbox
+            if not (0 <= x0 < x1 <= 1 and 0 <= y0 < y1 <= 1):
+                raise ValueError("VISUAL_GRAPH_INVALID_SOURCE_REGION")
+        elif self.bbox_basis != "unverified":
+            raise ValueError("VISUAL_GRAPH_SOURCE_REGION_MISSING")
+        return self
+
+
+class Group(LocatedElement):
     id: str
     label: str
     parent: str | None
     direction: Direction
 
 
-class Node(StrictModel):
+class Node(LocatedElement):
     id: str
     label: str
     group: str | None
     shape: Literal["rectangle", "rounded", "diamond", "database", "circle"]
 
 
-class Edge(StrictModel):
+class Edge(LocatedElement):
     source: str
     target: str
     label: str
     direction: Literal["forward", "both", "none"]
     style: Literal["solid", "dashed"]
+    condition: str = Field(default="", max_length=2000)
 
 
 class Graph(StrictModel):
@@ -67,6 +86,11 @@ Rules:
    Do not guess an edge whose endpoints cannot be determined. Do not add explanatory nodes.
 8. Choose simple supported shapes for icons; spatial layout is reconstructed by Mermaid.
 9. Use a unique nonempty id for every node and group. Preserve useful reading order.
+10. Preserve yes/no branch wording in edge.label and any explicitly printed premise in
+    edge.condition. Do not infer an unprinted premise. A diamond remains a diamond.
+11. bbox, if readable, is [left, top, right, bottom] normalized to the ORIGINAL image.
+    Do not fabricate coordinates. Model coordinates always have bbox_basis="unverified".
+    review_status always remains "inherited"; only the review workflow may confirm facts.
 """.strip()
 
 

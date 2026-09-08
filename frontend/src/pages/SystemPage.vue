@@ -8,7 +8,7 @@ import ErrorNotice from '../components/ErrorNotice.vue';
 const resource = useResource(signal => request('/system/status', { signal }));
 onMounted(resource.load);
 const data = resource.data;
-const state = value => ['ready','ok'].includes(typeof value === 'string' ? value : value?.state) ? 'ready' : ['unavailable','insufficient_space','circuit_open'].includes(typeof value === 'string' ? value : value?.state) ? 'failed' : 'unknown';
+const state = value => ['ready','ok'].includes(typeof value === 'string' ? value : value?.state) ? 'ready' : ['unavailable','insufficient_space','circuit_open','stalled'].includes(typeof value === 'string' ? value : value?.state) ? 'failed' : 'unknown';
 const items = computed(() => {
   const deps = data.value?.dependencies || {};
   const base = [{ key: 'mysql', name: 'MySQL', detail: '文档、版本与对话持久化', icon: Database }, { key: 'sqlite', name: '本地数据库', detail: '本地运行时持久化存储', icon: Database }, { key: 'queue', name: 'Redis 处理队列', detail: '文件任务与重试状态', icon: Network }, { key: 'retrieval_release', name: '检索控制面', detail: '索引代次与来源有效性', icon: Server }, { key: 'storage', name: '文件存储', detail: deps.storage ? `可用空间 ${fileSize(deps.storage.free_bytes)}` : '原文件与解析产物', icon: HardDrive }].filter(item => deps[item.key] != null).map(item => ({ ...item, status: state(deps[item.key]) }));
@@ -16,11 +16,11 @@ const items = computed(() => {
     const provider = deps.providers?.[key];
     if (provider) base.push({ key, name: label, icon: Cpu, status: provider.circuit_open || provider.consecutive_failures ? 'failed' : provider.last_success_epoch ? 'ready' : 'unknown', detail: provider.last_success_epoch ? `最近成功 ${dateTime(provider.last_success_epoch)}` : '尚无本次运行的成功调用记录' });
   }
-  if (data.value) base.push({ key: 'worker', name: '文件处理 Worker', detail: data.value.worker.reason, icon: Cpu, status: 'unknown' }, { key: 'parser', name: 'MinerU 文档解析', detail: data.value.parser.state === 'configured' ? '已配置；解析调用尚未在此页检测' : '尚未配置远程解析服务', icon: FileIcon, status: 'unknown' });
+  if (data.value) base.push({ key: 'worker', name: '文件处理 Worker', detail: data.value.worker.reason, icon: Cpu, status: state(data.value.worker) }, { key: 'parser', name: 'MinerU 文档解析', detail: data.value.parser.state === 'configured' ? '已配置；解析调用尚未在此页检测' : '尚未配置远程解析服务', icon: FileIcon, status: 'unknown' });
   return base;
 });
 const FileIcon = HardDrive;
-const reasons = { MYSQL_UNAVAILABLE: '文档数据库连接失败', REDIS_QUEUE_UNAVAILABLE: '处理队列连接失败', RETRIEVAL_RELEASE_UNAVAILABLE: '检索控制状态读取失败', LOCAL_STORAGE_FREE_SPACE_LOW: '本地文件存储空间不足', EMBEDDING_CIRCUIT_OPEN: '向量模型连续调用失败', RERANKER_CIRCUIT_OPEN: '重排模型连续调用失败', GENERATOR_CIRCUIT_OPEN: '回答模型连续调用失败', VERIFIER_CIRCUIT_OPEN: '答案验证模型连续调用失败' };
+const reasons = { MYSQL_UNAVAILABLE: '文档数据库连接失败', REDIS_QUEUE_UNAVAILABLE: '处理队列连接失败', RETRIEVAL_RELEASE_UNAVAILABLE: '检索控制状态读取失败', LOCAL_STORAGE_FREE_SPACE_LOW: '本地文件存储空间不足', EMBEDDING_CIRCUIT_OPEN: '向量模型连续调用失败', RERANKER_CIRCUIT_OPEN: '重排模型连续调用失败', GENERATOR_CIRCUIT_OPEN: '回答模型连续调用失败', VERIFIER_CIRCUIT_OPEN: '答案验证模型连续调用失败', WORKER_HEARTBEAT_UNAVAILABLE: '文件处理进程已停止或心跳过期', WORKER_TASK_STALLED: '文件处理任务长时间没有进展' };
 const labels = { ready: '正常', failed: '异常', unknown: '未检测' };
 </script>
 <template><div class="page"><div class="page-heading"><div><p class="eyebrow">SYSTEM HEALTH</p><h1>运行状态，一目了然。</h1><p class="page-description">根据实际探针与调用记录，了解知识库的运行情况。</p></div><button class="btn primary" :disabled="resource.loading.value" @click="resource.load"><RotateCw :size="17"/>{{ resource.loading.value ? '检测中…' : '重新检测' }}</button></div><ErrorNotice :error="resource.error.value" retry @retry="resource.load"/>

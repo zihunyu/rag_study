@@ -38,7 +38,11 @@ class RedisVerifiedAnswerCache:
             return None
         try:
             parsed_claims = tuple(
-                AtomicClaim(str(item["text"]), tuple(map(str, item["evidence_ids"])))
+                AtomicClaim(
+                    str(item["text"]),
+                    tuple(map(str, item["evidence_ids"])),
+                    tuple(map(str, item.get("visual_fact_ids", []))),
+                )
                 for item in claims
                 if isinstance(item, dict)
             )
@@ -63,7 +67,11 @@ class RedisVerifiedAnswerCache:
                     "synthesized": draft.synthesized,
                     "citation_ids": list(draft.citation_ids),
                     "claims": [
-                        {"text": claim.text, "evidence_ids": list(claim.evidence_ids)}
+                        {
+                            "text": claim.text,
+                            "evidence_ids": list(claim.evidence_ids),
+                            "visual_fact_ids": list(claim.visual_fact_ids),
+                        }
                         for claim in draft.claims
                     ],
                 },

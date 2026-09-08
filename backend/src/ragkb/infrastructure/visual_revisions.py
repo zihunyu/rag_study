@@ -26,6 +26,15 @@ def exclusion_closure(
         if len(rows) < 100:
             break
         offset += len(rows)
+    # A blocked image is absent from indexed chunks, but its visible draft may
+    # explicitly depend on another section/figure. Use it only for exclusion
+    # closure, never as answer evidence, so partial publication cannot miss it.
+    for asset in assets.values():
+        extraction = asset.get("extraction") or {}
+        section = str(asset.get("section_path", "root"))
+        texts.setdefault(section, []).extend(
+            str(extraction.get(key, "")) for key in ("body_text", "transcription", "description")
+        )
     excluded = set(sections)
     while True:
         terms = {s for s in excluded if s != "root" and len(s) > 2}

@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from ragkb.api.support import principal, require_role
 from ragkb.domain.visual_comparison import extraction_diff
+from ragkb.domain.visual_review import IssueResolution, review_issues, validate_review
 from ragkb.domain.visuals import VisualExtraction, reviewed_extraction
 from ragkb.infrastructure.visual_assets import VisualAssetStore
 from ragkb.infrastructure.visual_revisions import exclusion_closure
@@ -20,6 +21,7 @@ from ragkb.runtime_components import RuntimeComponents
 class VisualEdit(BaseModel):
     asset_id: str = Field(pattern=r"^[a-f0-9]{32}$")
     extraction: VisualExtraction
+    resolutions: list[IssueResolution] = Field(default_factory=list, max_length=500)
 
 
 class VisualRevisionRequest(BaseModel):
@@ -29,6 +31,25 @@ class VisualRevisionRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=2000, pattern=r".*\S.*")
     confirmed_against_original: bool = False
     confirm_independent_sections: bool = False
+    restore_from_history: bool = False
+    acknowledged_latest_version_id: str | None = None
+
+
+def latest_version(runtime: RuntimeComponents, document_id: str) -> dict[str, Any]:
+    return max(runtime.repository.get_versions(document_id), key=lambda v: int(v["version_no"]))
+
+
+def require_latest_source(
+    runtime: RuntimeComponents,
+    version: dict[str, Any],
+    *,
+    restore: bool = False,
+    acknowledged: str | None = None,
+) -> dict[str, Any]:
+    latest = latest_version(runtime, str(version["document_id"]))
+    if latest["id"] != version["id"] and not (restore and acknowledged == latest["id"]):
+        raise HTTPException(409, "VISUAL_HISTORICAL_SOURCE_REQUIRES_RESTORE")
+    return latest
 
 
 def build_visual_revision_router(
@@ -37,6 +58,37 @@ def build_visual_revision_router(
     management_version: Callable[[str, Request], dict[str, Any]],
 ) -> APIRouter:
     router = APIRouter(tags=["visual-revisions"])
+
+    @router.get("/api/document-versions/{version_id}/visual-review-context")
+    def review_context(version_id: str, request: Request) -> dict[str, Any]:
+        source = management_version(version_id, request)
+        document = runtime.repository.get_document(str(source["document_id"]))
+        latest = latest_version(runtime, str(source["document_id"]))
+        old = {a["id"]: a for a in store.list_assets(version_id)}
+        current = {a["id"]: a for a in store.list_assets(str(latest["id"]))}
+        return {
+            "row_version": document["row_version"],
+            "source_version_id": version_id,
+            "latest_version_id": latest["id"],
+            "source_version_no": source["version_no"],
+            "latest_version_no": latest["version_no"],
+            "historical": latest["id"] != version_id,
+            "original_changed": source.get("content_sha256") != latest.get("content_sha256"),
+            "restore_warning": "恢复会以所选历史原文创建新版本，包括正文、图片及已排除范围。",
+            "issues": {key: review_issues(asset) for key, asset in old.items()},
+            "differences": [
+                {
+                    "asset_id": key,
+                    "changes": extraction_diff(
+                        old.get(key, {}).get("extraction") or {},
+                        current.get(key, {}).get("extraction") or {},
+                    ),
+                }
+                for key in sorted(old.keys() | current.keys())
+            ]
+            if latest["id"] != version_id
+            else [],
+        }
 
     @router.get("/api/document-versions/{version_id}/visual-exclusion-preview")
     def preview(version_id: str, asset_id: str, request: Request) -> dict[str, Any]:
@@ -116,6 +168,12 @@ def build_visual_revision_router(
             replay = runtime.repository.idempotency_response(operation, key, fingerprint)
             if replay:
                 return replay
+            latest = require_latest_source(
+                runtime,
+                version,
+                restore=body.restore_from_history,
+                acknowledged=body.acknowledged_latest_version_id,
+            )
             ids = (
                 set(body.retry_assets) | set(body.exclude_assets) | {e.asset_id for e in body.edits}
             )
@@ -126,8 +184,11 @@ def build_visual_revision_router(
                 for a in assets.values()
             ):
                 raise HTTPException(409, "VISUAL_PROCESSING_BUSY")
-            if (set(body.retry_assets) & set(body.exclude_assets)) or any(
-                e.asset_id in body.exclude_assets for e in body.edits
+            if (
+                (set(body.retry_assets) & set(body.exclude_assets))
+                or any(e.asset_id in body.exclude_assets for e in body.edits)
+                or (set(body.retry_assets) & {e.asset_id for e in body.edits})
+                or len(body.edits) != len({e.asset_id for e in body.edits})
             ):
                 raise HTTPException(422, "VISUAL_REVISION_ACTION_CONFLICT")
             if body.edits and not body.confirmed_against_original:
@@ -136,6 +197,20 @@ def build_visual_revision_router(
                 raise HTTPException(422, "VISUAL_UNRESOLVED_UNCERTAINTIES")
             for edit in body.edits:
                 original = assets[edit.asset_id].get("extraction")
+                try:
+                    validate_review(assets[edit.asset_id], edit.extraction, edit.resolutions)
+                except ValueError as error:
+                    raise HTTPException(422, str(error)) from error
+                if any(
+                    x.review_status == "excluded"
+                    for graph in edit.extraction.graphs
+                    for x in [*graph.groups, *graph.nodes, *graph.edges]
+                ):
+                    # Free prose has no per-relation provenance. It cannot reintroduce a
+                    # removed branch, condition or endpoint alongside the accepted subgraph.
+                    edit.extraction = edit.extraction.model_copy(
+                        update={"body_text": "", "description": "", "transcription": ""}
+                    )
                 if original:
                     edit.extraction = reviewed_extraction(
                         VisualExtraction.model_validate(original), edit.extraction
@@ -153,6 +228,7 @@ def build_visual_revision_router(
                     "actor": principal(request).user_id,
                     "reason": body.reason,
                     "asset_id": e.asset_id,
+                    "resolutions": [r.model_dump() for r in e.resolutions],
                     "changes": extraction_diff(
                         assets[e.asset_id].get("extraction") or {}, e.extraction.model_dump()
                     ),
@@ -171,6 +247,8 @@ def build_visual_revision_router(
                 "reason": body.reason,
                 "actor": principal(request).user_id,
                 "confirmed_independent": body.confirm_independent_sections,
+                "restored_from_history": body.restore_from_history,
+                "replaced_latest_version_id": latest["id"],
             }
             try:
                 condition = int(if_match.strip('"'))

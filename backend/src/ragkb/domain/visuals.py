@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import html
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
+from ragkb.domain.graph_facts import graph_facts
 from ragkb.domain.visual_graph import Graph, StrictModel, validate_graph
 
 
@@ -100,23 +101,24 @@ class VisualExtraction(StrictModel):
         parts = [self.title, self.description]
         if self.body_text:
             parts.append(self.body_text)
-        if include_transcription:
+        blocked_graph_facts = any(
+            graph.uncertainties
+            or any(
+                item.review_status in {"pending", "excluded"}
+                for item in [*graph.groups, *graph.nodes, *graph.edges]
+            )
+            for graph in self.graphs
+        )
+        if blocked_graph_facts:
+            # Generated prose may still contain excluded relationships. Structured facts
+            # are authoritative after partial review; the original remains in the audit.
+            parts = [self.title]
+        if include_transcription and not blocked_graph_facts:
             parts.append(self.transcription)
-        for graph in self.graphs:
-            labels = {n.id: n.label for n in graph.nodes}
-            labels.update({g.id: g.label for g in graph.groups})
-            parts.extend(f"组件：{n.label}" for n in graph.nodes if n.label)
-            for group in graph.groups:
-                children = [n.label for n in graph.nodes if n.group == group.id and n.label]
-                if children:
-                    parts.append(f"分组 {group.label} 包含：{'、'.join(children)}")
-            for edge in graph.edges:
-                relation = {"forward": "指向", "both": "双向连接", "none": "相连（无箭头）"}
-                parts.append(
-                    f"{labels[edge.source]} {relation[edge.direction]} "
-                    f"{labels[edge.target]}；{edge.label}"
-                    + ("；虚线" if edge.style == "dashed" else "")
-                )
+        for index, graph in enumerate(self.graphs):
+            parts.extend(
+                fact.text for fact in graph_facts(graph, scope=f"text:{index}", verified=True)
+            )
         if include_tables:
             parts.extend(
                 "\n".join([table.title, table.as_html(), *table.notes]) for table in self.tables
@@ -130,6 +132,15 @@ def reviewed_extraction(original: VisualExtraction, edited: VisualExtraction) ->
     Original output stays in the base version. Text outside a table/graph belongs
     in body_text; the human reviewer explicitly confirms that field separately.
     """
+    if any(
+        graph.uncertainties
+        or any(
+            item.review_status in {"pending", "excluded"}
+            for item in [*graph.groups, *graph.nodes, *graph.edges]
+        )
+        for graph in edited.graphs
+    ):
+        return edited.model_copy(update={"transcription": "", "description": "", "body_text": ""})
     if original.tables == edited.tables and original.graphs == edited.graphs:
         return edited
     visible = [edited.body_text]
@@ -190,3 +201,6 @@ class VisualQueryOutcome:
     ]
     text: str = ""
     issues: tuple[str, ...] = ()
+    unanswered_topics: tuple[str, ...] = ()
+    facts: tuple[dict[str, Any], ...] = ()
+    truncated: bool = False

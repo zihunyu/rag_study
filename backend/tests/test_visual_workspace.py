@@ -237,6 +237,9 @@ def test_cross_version_cache_and_human_changes_do_not_cross_scopes(tmp_path):
     store.ledger.put("version_plan", "v4", {"base_version_id": "v3"})
     revised = processor.process("v4", pictures, {}, "doc")[0][1]
     assert revised["origin"] == "human_review" and revised["history"]
+    assert revised["history"][0]["asset_id"] == a["id"]
+    assert revised["history"][0]["legacy"]
+    assert revised["history"][0]["binding_basis"] == "single_edited_asset"
     fresh = processor.process("v5", pictures, {}, "doc")[0][1]
     assert fresh["extraction"]["title"] != "人工修正"
     VisualProcessor(store, analyzer, config, scope="tenant-b").process("vb", pictures, {}, "doc")

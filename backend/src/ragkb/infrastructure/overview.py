@@ -38,6 +38,47 @@ class OverviewReader:
         self.repository, self.authorization, self.store = repository, authorization, store
         self.settings, self.reader, self.visual = settings, reader, visual
 
+    def annotate_associations(
+        self,
+        evidence: tuple[Evidence, ...],
+        *,
+        reference_sources: tuple[Evidence, ...] | None = None,
+    ) -> tuple[Evidence, ...]:
+        """A figure reference relates documents; it never establishes graph-node identity."""
+        links = []
+        for version in dict.fromkeys(e.document_version_id for e in evidence):
+            links.extend(
+                explicit_image_links(
+                    self.store.list_assets(version),
+                    [
+                        e
+                        for e in (reference_sources if reference_sources is not None else evidence)
+                        if e.document_version_id == version and e.authorized and e.current_version
+                    ],
+                )
+            )
+        return tuple(
+            replace(
+                e,
+                locator={
+                    **e.locator,
+                    "visual_associations": [
+                        link
+                        for link in links
+                        if link["document_version_id"] == e.document_version_id
+                        and (
+                            e.chunk_id == link["source_chunk_id"]
+                            or link["target_asset_id"] in e.locator.get("visual_asset_ids", [])
+                            or set(link["source_asset_ids"]).intersection(
+                                e.locator.get("visual_asset_ids", [])
+                            )
+                        )
+                    ],
+                },
+            )
+            for e in evidence
+        )
+
     def related_sources(
         self, evidence: tuple[Evidence, ...], context: SearchContext
     ) -> tuple[Evidence, ...]:
@@ -210,10 +251,19 @@ class OverviewReader:
             ).session(question)
         counter = ConservativeTokenCounter()
         total_tokens = sum(counter.count(e.text) for e in evidence)
+        # Schedule the complete authorized inventory by relevance before consuming the
+        # image budget; document order must not give unrelated early figures priority.
+        annotated = self.annotate_associations(tuple(evidence))
+        checked_inventory = session(annotated) if session else annotated
+        checked_by_source = {(e.document_version_id, e.chunk_id): e for e in checked_inventory}
         reduced: list[list[Evidence]] = []
         for (version, section), contents in sections.items():
             check_cancelled()
-            checked = session(tuple(contents)) if session else tuple(contents)
+            checked = tuple(
+                checked_by_source[(e.document_version_id, e.chunk_id)]
+                for e in contents
+                if (e.document_version_id, e.chunk_id) in checked_by_source
+            )
             section_report: dict[str, Any] = {
                 "version_id": version,
                 "section": section,
@@ -224,6 +274,13 @@ class OverviewReader:
             if len(checked) != len(contents):
                 section_report["state"] = "incomplete"
                 report["gaps"].append(section + "：部分图片未通过本轮核对或超过看图预算")
+            for item in checked:
+                for topic in item.locator.get("visual_unanswered_topics", []):
+                    section_report["state"] = "incomplete"
+                    report["gaps"].append(section + "：" + str(topic))
+                if item.locator.get("graph_query_truncated"):
+                    section_report["state"] = "incomplete"
+                    report["gaps"].append(section + "：图关系查询达到路径或步数上限")
             output = list(checked)
             if total_tokens > self.settings.overview_evidence_tokens:
                 output = []
@@ -314,6 +371,9 @@ class OverviewReader:
                 "asset_id": asset,
                 "status": outcome.status,
                 "issues": list(outcome.issues),
+                "unanswered_topics": list(outcome.unanswered_topics),
+                "fact_ids": [f["fact_id"] for f in outcome.facts],
+                "truncated": outcome.truncated,
             }
             for (version, asset), outcome in (session.checked.items() if session else [])
         ]
@@ -348,6 +408,9 @@ def explicit_image_links(
                         "target_asset_id": targets[0],
                         "reference": label,
                         "basis": "explicit_figure_reference",
+                        "document_version_id": item.document_version_id,
+                        "source_asset_ids": list(item.locator.get("visual_asset_ids", [])),
+                        "node_mapping_confirmed": False,
                     }
                 )
     return links

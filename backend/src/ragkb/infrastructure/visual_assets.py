@@ -82,6 +82,7 @@ class VisualAssetStore:
 
     @staticmethod
     def public(asset: dict[str, Any], version_id: str) -> dict[str, Any]:
+        from ragkb.domain.graph_facts import accepted_graph_projection
         from ragkb.domain.visual_graph import to_mermaid
         from ragkb.domain.visuals import VisualExtraction
 
@@ -115,10 +116,28 @@ class VisualAssetStore:
         extraction = asset.get("extraction")
         if extraction:
             parsed = VisualExtraction.model_validate(extraction)
+            graphs = (
+                [accepted_graph_projection(g) for g in parsed.graphs]
+                if asset.get("status") == "verified"
+                else parsed.graphs
+            )
             result.update(
                 extraction=parsed.model_dump(),
-                mermaid=[to_mermaid(g) for g in parsed.graphs],
+                mermaid=[to_mermaid(g) for g in graphs if g.nodes],
                 table_html=[t.as_html() for t in parsed.tables],
+                graph_coverage=[
+                    {
+                        "graph": index,
+                        "partial": source != projected,
+                        "retained_nodes": len(projected.nodes),
+                        "retained_edges": len(projected.edges),
+                        "excluded_nodes": len(source.nodes) - len(projected.nodes),
+                        "excluded_edges": len(source.edges) - len(projected.edges),
+                    }
+                    for index, (source, projected) in enumerate(
+                        zip(parsed.graphs, graphs, strict=True)
+                    )
+                ],
             )
         result["image_url"] = f"/api/document-versions/{version_id}/visuals/{asset['id']}/image"
         return result

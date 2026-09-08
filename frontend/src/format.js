@@ -28,6 +28,17 @@ export function errorMessage(error) {
 
 export function visualIssueMessage(code) {
   return ({
+    VISUAL_HISTORICAL_SOURCE_REQUIRES_RESTORE: '所选版本已经不是最新版本，请刷新并切换到最新版本；确需恢复旧原文时，先对照历史恢复差异。',
+    VISUAL_ISSUE_RESOLUTIONS_REQUIRED: '原识别问题需要逐项填写处理结果和理由，刷新复核面板后检查遗漏项。',
+    VISUAL_REVIEW_CORRECTION_SCOPE_MISMATCH: '修正字段与该问题的所属图表不一致，请关联对应图表内确实改动的内容。',
+    VISUAL_REVIEW_CORRECTION_MISSING: '选择了已经修正，但内容没有变化；请修改相应内容，或如实选择已核对原识别正确。',
+    VISUAL_REVIEW_EXCLUSION_MISSING: '请明确选择并排除无法确认的对象，相关连接也需要一并排除。',
+    VISUAL_UNRESOLVED_UNCERTAINTIES: '仍有待核对内容，请逐项处理或明确排除后再提交。',
+    VISUAL_EXCLUDED_EDGE_DEPENDENCY: '已排除对象的关联连线仍未排除，请检查依赖关系。',
+    VISUAL_EXCLUDED_GROUP_DEPENDENCY: '已排除分组中仍有保留对象，请检查并排除依赖内容。',
+    VISUAL_METADATA_TITLE_INFERRED: '识别说明：展示标题来自上下文，不作为原图可见文字。',
+    VISUAL_EDGE_LABEL_ABSENT: '识别说明：原图连线没有可见文字标签。',
+    VISUAL_TRANSCRIPTION_VISIBLE_SPELLING: '识别说明：保留原图可见拼写，未自动修改。',
     VISUAL_TABLE_ROW_TOO_LARGE: '表格单行内容过长，暂未入库。请将原表按完整记录分成较小的表格后重新上传。',
     OCR_IMAGE_BYTES_LIMIT: '原图文件超过识别大小限制，请缩小文件后重新上传。',
     OCR_IMAGE_PIXELS_LIMIT: '原图像素超过识别限制，请按完整内容分成较小的图片。',

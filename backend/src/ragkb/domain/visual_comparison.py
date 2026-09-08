@@ -6,6 +6,8 @@ import re
 from collections import Counter
 from typing import Any
 
+from ragkb.domain.graph_identity import compact as graph_text
+from ragkb.domain.graph_identity import endpoint_labels, match_graphs
 from ragkb.domain.visuals import VisualExtraction
 
 
@@ -25,19 +27,31 @@ def _grid(table: Any) -> dict[tuple[int, int], str]:
 def _edges(extraction: VisualExtraction) -> Counter[tuple[str, str, str, str]]:
     result: Counter[tuple[str, str, str, str]] = Counter()
     for graph in extraction.graphs:
-        labels = {node.id: _text(node.label) for node in graph.nodes}
-        labels.update({group.id: _text(group.label) for group in graph.groups})
+        labels = endpoint_labels(graph)
         for edge in graph.edges:
             left, right = labels[edge.source], labels[edge.target]
             if edge.direction in {"both", "none"}:
                 left, right = sorted([left, right])
-            result[(left, right, edge.direction + ":" + edge.style, _text(edge.label))] += 1
+            result[
+                (
+                    left,
+                    right,
+                    edge.direction + ":" + edge.style,
+                    _text(edge.label) + ":" + _text(edge.condition),
+                )
+            ] += 1
     return result
 
 
 def compare_readings(first: VisualExtraction, second: VisualExtraction) -> list[str]:
     issues = second.issues()
-    if first.kind != second.kind:
+    graph_kind_equivalent = (
+        {first.kind, second.kind} <= {"diagram", "mixed"}
+        and bool(first.graphs and second.graphs)
+        and not first.tables
+        and not second.tables
+    )
+    if first.kind != second.kind and not graph_kind_equivalent:
         issues.append("两次独立读取对图片类型判断不同")
     if len(first.tables) != len(second.tables):
         issues.append("两次独立读取的表格数量不同")
@@ -50,42 +64,31 @@ def compare_readings(first: VisualExtraction, second: VisualExtraction) -> list[
                 issues.append(
                     f"表格 {index} 第 {row + 1} 行第 {column + 1} 列文字、数值或单位存在分歧"
                 )
-        # Conditions may be worded differently; compare explicit values/units rather than prose.
-        for token in re.findall(r"[-+±]?\d+(?:\.\d+)?\s*[A-Za-z℃%°]*", " ".join(a.notes)):
-            if (
-                re.search(
-                    r"(?<![\d.,])" + re.escape(_text(token)) + r"(?![\d.,A-Za-z])",
-                    _text(" ".join(b.notes) + "\n" + second.transcription),
-                )
-                is None
-            ):
-                issues.append(f"表格 {index} 的限定条件未得到独立确认")
-                break
-    nodes_a = Counter(_text(n.label) for g in first.graphs for n in g.nodes)
-    nodes_b = Counter(_text(n.label) for g in second.graphs for n in g.nodes)
+        # Non-numeric exclusions (e.g. only in urban areas) are just as material as values.
+        # A paraphrase is a reviewable disagreement until its equivalence is confirmed.
+        if Counter(_text(note) for note in a.notes) != Counter(_text(note) for note in b.notes):
+            issues.append(f"表格 {index} 的限定条件未得到独立确认")
+    nodes_a = Counter(graph_text(n.label) for g in first.graphs for n in g.nodes)
+    nodes_b = Counter(graph_text(n.label) for g in second.graphs for n in g.nodes)
     if nodes_a != nodes_b:
         issues.append("关系图的节点名称或数量存在分歧")
-    if any(count > 1 for count in nodes_a.values()):
-        issues.append("存在同名节点，需人工核对其分组和连线身份")
-
-    def groups(extraction: VisualExtraction) -> Counter[tuple[str, str, tuple[str, ...]]]:
-        return Counter(
-            (
-                _text(group.label),
-                next(
-                    (_text(parent.label) for parent in graph.groups if parent.id == group.parent),
-                    "",
-                ),
-                tuple(sorted(_text(node.label) for node in graph.nodes if node.group == group.id)),
+    if len(first.graphs) != len(second.graphs):
+        issues.append("关系图的数量存在分歧")
+    remaining = list(second.graphs)
+    for graph in first.graphs:
+        exhausted = False
+        for index, candidate in enumerate(remaining):
+            match = match_graphs(graph, candidate)
+            exhausted |= match.exhausted
+            if match.mapping is not None:
+                remaining.pop(index)
+                break
+        else:
+            issues.append(
+                "关系图实例对应超过核对上限，需按原图确认"
+                if exhausted
+                else "关系图的分组包含关系、连线端点、箭头方向或条件存在分歧"
             )
-            for graph in extraction.graphs
-            for group in graph.groups
-        )
-
-    if groups(first) != groups(second):
-        issues.append("关系图的分组包含关系存在分歧")
-    if _edges(first) != _edges(second):
-        issues.append("关系图的连线端点、箭头方向或条件存在分歧")
     return list(dict.fromkeys(issues))[:100]
 
 

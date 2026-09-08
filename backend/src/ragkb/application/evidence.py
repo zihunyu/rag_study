@@ -31,7 +31,7 @@ from ragkb.domain.retrieval import (
 
 
 class SearchBackedEvidenceProvider:
-    revision = "search-backed-evidence:coverage-selection-v2"
+    revision = "search-backed-evidence:staged-visual-facts-v3"
 
     def __init__(
         self,
@@ -252,16 +252,46 @@ class SearchBackedEvidenceProvider:
             visual_session_factory(question) if callable(visual_session_factory) else None
         )
 
-        def check_visuals() -> None:
+        deferred_visuals: list[Evidence] = []
+        figure_reference_sources: dict[tuple[str, str], Evidence] = {}
+
+        def check_visuals(*, final: bool = False) -> None:
             nonlocal evidence
+            for item in deferred_visuals:
+                if not any(
+                    (e.document_version_id, e.chunk_id) == (item.document_version_id, item.chunk_id)
+                    for e in evidence
+                ):
+                    evidence.append(replace(item, evidence_id=f"E{len(evidence) + 1}"))
+            deferred_visuals.clear()
             if self.overview_reader:
                 for related in self.overview_reader.related_sources(tuple(evidence), context):
                     key = (related.document_id, related.document_version_id, related.chunk_id)
                     if key not in seen_sources:
                         seen_sources.add(key)
                         evidence.append(replace(related, evidence_id=f"E{len(evidence) + 1}"))
+                annotate = getattr(self.overview_reader, "annotate_associations", None)
+                if callable(annotate):
+                    for item in evidence:
+                        figure_reference_sources.setdefault(
+                            (item.document_version_id, item.chunk_id), item
+                        )
+                    evidence = list(
+                        annotate(
+                            tuple(evidence),
+                            reference_sources=tuple(figure_reference_sources.values()),
+                        )
+                    )
             if visual_session is not None:
-                evidence = list(visual_session(tuple(evidence)))
+                reserve = (
+                    1
+                    if self.evidence_selector is not None
+                    and not final
+                    and visual_session.owner.max_images > 1
+                    else 0
+                )
+                evidence = list(visual_session(tuple(evidence), reserve_images=reserve))
+                deferred_visuals.extend(visual_session.deferred)
             elif self.visual_enricher is not None:
                 evidence = list(self.visual_enricher(question, tuple(evidence)))
 
@@ -293,9 +323,11 @@ class SearchBackedEvidenceProvider:
                             and health is RetrievalHealth.HEALTHY
                         ):
                             health = RetrievalHealth.DEGRADED
-                    if len(queries) > 1 and health is not RetrievalHealth.UNAVAILABLE:
-                        check_visuals()
-                        choice = self.evidence_selector.select(question, tuple(evidence))
+                if (
+                    len(queries) > 1 or deferred_visuals
+                ) and health is not RetrievalHealth.UNAVAILABLE:
+                    check_visuals(final=True)
+                    choice = self.evidence_selector.select(question, tuple(evidence))
                 coverage, clarification = choice.coverage, choice.clarification
                 selected: set[str] = set()
                 used = 0

@@ -13,6 +13,7 @@ from dataclasses import asdict, replace
 from typing import Literal
 from urllib.parse import urlparse
 
+from ragkb.application.provider_budget import ConservativeTokenCounter
 from ragkb.application.tracing import InMemoryTracer, TracerPort
 from ragkb.contracts.rag import (
     BufferedGenerationPort,
@@ -48,6 +49,7 @@ from ragkb.domain.rag import (
     VerificationResult,
 )
 from ragkb.domain.retrieval import RetrievalHealth, SecurityWatermarkNotReady
+from ragkb.domain.visual_claims import used_visual_fact_ids, visual_claim_evidence
 
 _URL_PATTERN = re.compile(r"https?://[^\s)\]}>]+", re.IGNORECASE)
 _CREDENTIAL_REQUEST_PATTERN = re.compile(
@@ -59,6 +61,60 @@ _NUMERIC_REVIEW_REQUIRED = "NUMERIC_FACT_REQUIRES_SEMANTIC_REVIEW"
 _SURFACE_REVIEW_REQUIRED = "ANSWER_SURFACE_REQUIRES_SEMANTIC_REVIEW"
 
 
+def condition_repair_evidence(
+    package: EvidencePackage,
+    checks: tuple[dict[str, str], ...],
+    *,
+    cited_ids: tuple[str, ...],
+    max_tokens: int = 8000,
+) -> tuple[Evidence, ...]:
+    """Promote original, authorized condition sources from the review pool within budget.
+
+    Missing sources and already cited sources are indivisible: dropping either would
+    repeat the omission or remove the facts that the repair is meant to qualify.
+    """
+    missing = [c for c in checks if c["status"] == "missing"]
+    by_id = {e.evidence_id: e for e in package.evidence}
+    quotes: dict[str, list[str]] = {}
+    for check in missing:
+        source = by_id.get(check["evidence_id"])
+        quote = check["source_quote"]
+        if (
+            source is None
+            or not source.authorized
+            or not source.current_version
+            or not source.valid_at(package.query_time_epoch)
+            or not quote.strip()
+            or quote not in source.text
+        ):
+            raise InvalidProviderResponse("VERIFIER_CONDITION_REPAIR_SOURCE_INVALID")
+        quotes.setdefault(source.evidence_id, []).append(quote)
+    mandatory = set(quotes) | set(cited_ids)
+    ordered = [e for e in package.evidence if e.evidence_id in mandatory]
+    ordered += [e for e in package.generation_evidence if e.evidence_id not in mandatory]
+    counter, used = ConservativeTokenCounter(), 0
+    result = []
+    for source in ordered:
+        item = replace(
+            source,
+            source_role="hit" if source.source_role == "conflict_context" else source.source_role,
+            locator={
+                **source.locator,
+                "conditions_to_preserve": quotes.get(source.evidence_id, []),
+            },
+        )
+        size = counter.count(
+            json.dumps({"text": item.text, "locator": item.locator}, ensure_ascii=False)
+        )
+        if used + size > max_tokens:
+            if source.evidence_id in mandatory:
+                raise InvalidProviderResponse("VERIFIER_CONDITION_REPAIR_BUDGET_EXCEEDED")
+            continue
+        result.append(item)
+        used += size
+    return tuple(result)
+
+
 def _normalized_fact_text(value: str) -> str:
     return normalize_numeric_text(value)
 
@@ -66,7 +122,7 @@ def _normalized_fact_text(value: str) -> str:
 class DeterministicClaimVerifier:
     """Fail-closed structural checks that run before any answer is marked verified."""
 
-    revision = "deterministic-claim-verifier:surface-numeric-and-conflicts-v2"
+    revision = "deterministic-claim-verifier:surface-numeric-and-graph-facts-v3"
 
     def __init__(self, allowed_output_domains: tuple[str, ...] = ()) -> None:
         self.allowed_output_domains = frozenset(
@@ -166,7 +222,13 @@ class DeterministicClaimVerifier:
                     )
                 )
                 continue
-            cited_evidence = tuple(item for item in cited if item is not None)
+            try:
+                cited_evidence = visual_claim_evidence(claim, evidence)
+            except ValueError as error:
+                verdicts.append(
+                    ClaimVerdict(claim.text, claim.evidence_ids, "INSUFFICIENT", str(error))
+                )
+                continue
             source = "\n".join(item.text for item in cited_evidence)
             numeric_check = check_numeric_facts(claim.text, tuple(e.text for e in cited_evidence))
             unsupported_url = next(
@@ -569,6 +631,11 @@ class TrustedQAService:
                 warnings=("CLAIM_CITATION_VALIDATION_FAILED",),
             )
         cited = tuple(available[evidence_id] for evidence_id in claim_citation_ids)
+        try:
+            for claim in draft.claims:
+                visual_claim_evidence(claim, package.generation_evidence)
+        except ValueError as error:
+            return self._save(package, AnswerStatus.SYSTEM_ERROR, warnings=(str(error),))
         if not self._permission_recheck(package, subject_scope_tokens, clearance_level):
             return self._save(
                 package,
@@ -584,24 +651,27 @@ class TrustedQAService:
             ):
                 # One bounded repair; use source quotes rather than the verifier's free-form
                 # explanation. The repaired answer crosses every verification gate again.
-                missing = [c for c in verification.condition_checks if c["status"] == "missing"]
-                repair_evidence = tuple(
-                    replace(
-                        e,
-                        locator={
-                            **e.locator,
-                            "conditions_to_preserve": [
-                                c["source_quote"]
-                                for c in missing
-                                if c["evidence_id"] == e.evidence_id
-                            ],
-                        },
+                repair_evidence = condition_repair_evidence(
+                    package,
+                    verification.condition_checks,
+                    cited_ids=claim_citation_ids,
+                    max_tokens=max(
+                        8000,
+                        int(
+                            getattr(
+                                getattr(self.generator, "_settings", None),
+                                "overview_evidence_tokens",
+                                8000,
+                            )
+                        ),
                     )
-                    for e in package.generation_evidence
+                    if package.coverage_report.get("mode") == "overview"
+                    else 8000,
                 )
                 with self.tracer.span("rag.ask.conditions.repair"):
                     repaired = self.generator.generate(question, repair_evidence)
                 if repaired.status is DraftAnswerStatus.ANSWERED:
+                    available = {e.evidence_id: e for e in repair_evidence}
                     repaired_ids = tuple(
                         dict.fromkeys(i for c in repaired.claims for i in c.evidence_ids)
                     )
@@ -622,7 +692,16 @@ class TrustedQAService:
                             warnings=("PRE_VERIFIER_PERMISSION_RECHECK_FAILED",),
                         )
                     draft, claim_citation_ids = repaired, repaired_ids
+                    for claim in draft.claims:
+                        visual_claim_evidence(claim, repair_evidence)
                     cited = tuple(available[i] for i in repaired_ids)
+                    package = replace(
+                        package,
+                        evidence=tuple(
+                            available.get(e.evidence_id, replace(e, source_role="conflict_context"))
+                            for e in package.evidence
+                        ),
+                    )
                     verification = self.verifier.verify(question, draft, package.evidence)
         except TransientProviderError:
             return self._save(
@@ -672,6 +751,22 @@ class TrustedQAService:
                 AnswerStatus.INSUFFICIENT_EVIDENCE,
                 warnings=("VERIFIED_CLAIMS_EMPTY",),
             )
+        package = replace(
+            package,
+            evidence=tuple(
+                replace(
+                    e,
+                    locator={
+                        **e.locator,
+                        "used_visual_fact_ids": used_visual_fact_ids(draft.claims, e),
+                    },
+                )
+                if e.locator.get("visual_facts") and e.evidence_id in claim_citation_ids
+                else e
+                for e in package.evidence
+            ),
+        )
+        cited = tuple(e for e in package.evidence if e.evidence_id in claim_citation_ids)
         # All model calls have finished. Runtime assembly shares this guard with
         # lifecycle mutations, serializing the release decision and its side effects
         # against revocation in this runtime. HTTP transport is outside this boundary.
@@ -801,7 +896,19 @@ def verified_answer_cache_key(package: EvidencePackage) -> str:
         "retrieval_revision": package.retrieval_revision,
         "prompt_revision": package.prompt_revision,
         "model_revision": package.model_revision,
-        "evidence": [asdict(item) for item in package.evidence],
+        "evidence": [
+            asdict(
+                replace(
+                    item,
+                    locator={
+                        key: value
+                        for key, value in item.locator.items()
+                        if key != "used_visual_fact_ids"
+                    },
+                )
+            )
+            for item in package.evidence
+        ],
     }
     serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()

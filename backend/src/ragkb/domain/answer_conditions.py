@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Any
 
 from ragkb.domain.rag import DraftAnswer, Evidence
 
 _CONDITION = re.compile(
-    r"仅(?:限|当|在|适用|支持|提供|允许)?|必须|不得|禁止|不能|不支持|不适用|不包括|不包含|不涵盖|不含|"
+    r"仅(?:限|当|在|适用|支持|提供|允许)?|必须|不得|禁止|不能|不支持|不适用|不包括|不包含|不涵盖|不含|不在|不予|免除|"
     r"需(?:要|先|提供|满足|经过)|应当|须|"
     r"除外|除非|否则|如果|假如|若|当.{0,60}时|前提|限定条件|适用范围|注意事项|"
     r"至少|至多|不超过|不得超过|上限|下限|有效期|条件[：:]|范围[：:]|"
@@ -17,6 +18,42 @@ _CONDITION = re.compile(
     r"[<>≤≥]=?\s*\d",
     re.I,
 )
+_BRANCH = re.compile(
+    r"(?:是|否|成功|失败|通过|未通过|正常|异常|yes|no|true|false|success|failure)\s*[：:]?\s*(?:→|->|⇒)|"
+    r"(?:指向|双向连接|相连|→|->).+[；;]\s*(?:条件[：:]\s*)?(?:是|否|成功|失败|通过|未通过|正常|异常|yes|no|true|false)(?:[。.]|$)",
+    re.I,
+)
+
+
+def _terms(text: str) -> set[str]:
+    text = re.sub(r"\[E[^\]]+\]", "", text).casefold()
+    text = re.sub(
+        r"设备|产品|系统|资料|内容|相关|可以|支持|提供|仅限|位于|包括|不包括|适用|条件", "", text
+    )
+    result = {
+        word
+        for word in re.findall(r"[a-z]{2,}|\d+(?:\.\d+)?", text)
+        if word
+        not in {
+            "the",
+            "is",
+            "are",
+            "and",
+            "or",
+            "in",
+            "of",
+            "to",
+            "for",
+            "only",
+            "must",
+            "device",
+            "product",
+            "system",
+        }
+    }
+    for part in re.findall(r"[\u4e00-\u9fff]+", text):
+        result.update(part[i : i + 2] for i in range(len(part) - 1))
+    return result
 
 
 def _has_condition_witness(source: str, quote: str) -> bool:
@@ -62,6 +99,65 @@ def _has_condition_witness(source: str, quote: str) -> bool:
     return different_language and bool(_CONDITION.search(quote))
 
 
+def _witness_text(value: str) -> tuple[str, list[int]]:
+    ignored: set[int] = set()
+    for match in re.finditer(r"\[E\d+\]", value):
+        ignored.update(range(match.start(), match.end()))
+    for match in re.finditer(r"\*\*(.+?)\*\*|(?<!\w)__(.+?)__(?!\w)", value, re.S):
+        ignored.update([match.start(), match.start() + 1, match.end() - 2, match.end() - 1])
+    text: list[str] = []
+    positions: list[int] = []
+    for index, character in enumerate(value):
+        if index in ignored or character.isspace():
+            continue
+        normalized = unicodedata.normalize("NFKC", character)
+        text.extend(normalized)
+        positions.extend([index] * len(normalized))
+    return "".join(text), positions
+
+
+def resolve_condition_witness(
+    quote: str, draft: DraftAnswer, expected: dict[str, Any], required: list[dict[str, Any]]
+) -> str:
+    """Recover only a unique, already displayed span; never repair factual wording.
+
+    Some providers move the paragraph citation or add a final period when quoting a
+    semicolon clause. Formatting recovery must preserve all substantive characters.
+    Pronouns may use one unambiguous decision explicitly named in the same paragraph.
+    """
+    if quote not in draft.text:
+        if set(re.findall(r"\[(E\d+)\]", quote)) - set(draft.citation_ids):
+            return quote
+        needle, _ = _witness_text(quote)
+        needle = needle.rstrip(".。!?！？;；")
+        haystack, offsets = _witness_text(draft.text)
+        start = haystack.find(needle) if len(needle) >= 6 else -1
+        if start < 0 or haystack.find(needle, start + 1) >= 0:
+            return quote
+        quote = draft.text[offsets[start] : offsets[start + len(needle) - 1] + 1]
+    if expected.get("kind") != "workflow_branch" or not quote or quote not in draft.text:
+        return quote
+    if _terms(str(expected.get("source", ""))).intersection(_terms(quote)):
+        return quote
+    start = draft.text.find(quote)
+    if draft.text.find(quote, start + 1) >= 0:
+        return quote
+    begin = draft.text.rfind("\n\n", 0, start) + 2 if "\n\n" in draft.text[:start] else 0
+    end = draft.text.find("\n\n", start + len(quote))
+    paragraph = draft.text[begin : end if end >= 0 else len(draft.text)]
+    if len(paragraph) > 3000:
+        return quote
+    plain, _ = _witness_text(paragraph)
+    names = {
+        _witness_text(str(r.get("source", "")))[0]
+        for r in required
+        if r.get("kind") == "workflow_branch"
+    }
+    matched = {name for name in names if name and name in plain}
+    name, _ = _witness_text(str(expected.get("source", "")))
+    return paragraph if matched == {name} else quote
+
+
 def condition_quotes(text: str) -> list[str]:
     # Preserve each complete source sentence / table row, including its qualifier.
     # Dots in decimals and English abbreviations are deliberately not split.
@@ -90,7 +186,11 @@ def condition_quotes(text: str) -> list[str]:
                 result.append(value)
         else:
             table_conditions = False
-        if value and not value.startswith("#") and _CONDITION.search(value):
+        if (
+            value
+            and not value.startswith("#")
+            and (_CONDITION.search(value) or _BRANCH.search(value))
+        ):
             result.append(value)
     return list(dict.fromkeys(result))
 
@@ -99,7 +199,29 @@ def condition_requirements(evidence: tuple[Evidence, ...]) -> list[dict[str, Any
     result: list[dict[str, Any]] = []
     seen: dict[tuple[str, str, str], dict[str, Any]] = {}
     for item in evidence:
-        for quote in condition_quotes(item.text):
+        structured = {
+            fact["text"]: fact
+            for fact in item.locator.get("visual_facts", [])
+            if isinstance(fact, dict)
+            and fact.get("condition")
+            and isinstance(fact.get("text"), str)
+            and fact["text"] in item.text
+        }
+        coverage_quote = item.locator.get("visual_coverage_quote")
+        coverage = (
+            [coverage_quote]
+            if isinstance(coverage_quote, str) and coverage_quote and coverage_quote in item.text
+            else []
+        )
+        for quote in dict.fromkeys([*condition_quotes(item.text), *structured, *coverage]):
+            preceding = re.split(
+                r"[。！？!?\n]", item.text[: item.text.find(quote)].rstrip("。！？!?\n ")
+            )[-1]
+            applicability = (
+                str(item.locator.get("section_path", "")) + " " + preceding[-180:] + " " + quote
+            )
+            if quote in structured:
+                applicability = quote
             key = (
                 item.document_version_id,
                 str(item.locator.get("section_path", item.chunk_id)),
@@ -113,7 +235,23 @@ def condition_requirements(evidence: tuple[Evidence, ...]) -> list[dict[str, Any
                 "evidence_id": item.evidence_id,
                 "source_quote": quote,
                 "equivalent_evidence_ids": [item.evidence_id],
+                "applicability_context": applicability,
             }
+            if quote in structured:
+                fact = structured[quote]
+                requirement.update(
+                    {
+                        "kind": "source_condition"
+                        if fact.get("kind") == "note"
+                        else "workflow_branch",
+                        "fact_id": fact["fact_id"],
+                        "source": fact.get("source", ""),
+                        "target": fact.get("target", ""),
+                        "condition": fact["condition"],
+                    }
+                )
+            if quote in coverage:
+                requirement["kind"] = "coverage_limit"
             seen[key] = requirement
             result.append(requirement)
     return result
@@ -123,6 +261,7 @@ def validate_condition_checks(
     raw: Any,
     required: list[dict[str, Any]],
     draft: DraftAnswer,
+    question: str = "",
 ) -> tuple[dict[str, str], ...]:
     if not required:
         return ()
@@ -134,6 +273,8 @@ def validate_condition_checks(
             raise ValueError("VERIFIER_CONDITION_ID_INVALID")
         status = check.get("status")
         quote, reason = check.get("answer_quote"), check.get("reason")
+        if status == "covered" and isinstance(quote, str):
+            quote = resolve_condition_witness(quote, draft, expected, required)
         if (
             status not in {"covered", "missing", "not_applicable"}
             or not isinstance(reason, str)
@@ -154,6 +295,91 @@ def validate_condition_checks(
             or (status != "covered" and quote)
         ):
             raise ValueError("VERIFIER_CONDITION_WITNESS_INVALID")
+        # A verifier must not use a true fragment as a witness for an omitted conjunct.
+        # Full semantic verification remains mandatory; these checks catch common
+        # internally inconsistent provider verdicts rather than claiming equivalence.
+        if (
+            status == "covered"
+            and expected.get("kind") == "coverage_limit"
+            and not re.search(
+                r"仅|部分|尚未|无法|不能确认|未覆盖|不完整|"
+                r"\b(?:partial|incomplete|unconfirmed|cannot|not all)\b",
+                quote,
+                re.I,
+            )
+        ):
+            status, quote, reason = "missing", "", "回答没有说明已知的图关系覆盖缺口"
+        if status == "covered":
+            source_quote = expected["source_quote"]
+            restriction = re.search(r"仅限|仅在|仅当|\bonly\b", source_quote, re.I)
+            condition_body = source_quote[restriction.start() :] if restriction else source_quote
+            parts = re.split(r"且|并且|以及|\band\b|[；;]", condition_body, flags=re.I)
+            material = [re.split(r"提供|支持|允许", p)[0] for p in parts if _terms(p)]
+            if (
+                expected.get("kind") != "workflow_branch"
+                and (len(material) > 1 or restriction)
+                and any(not _terms(p).intersection(_terms(quote)) for p in material)
+            ):
+                status, quote = "missing", ""
+                reason = "回答遗漏了原文的并列前提或执行分支"
+            elif re.search(
+                r"不得|禁止|不包括|不包含|不支持|不适用|不含|不在|除外|\b(?:not|never|cannot|except)\b",
+                source_quote,
+                re.I,
+            ) and not re.search(
+                r"不得|禁止|不|除外|排除|自费|付费|收费|\b(?:not|never|cannot|except|exclud\w*|paid)\b",
+                quote,
+                re.I,
+            ):
+                status, quote, reason = "missing", "", "回答未保留原文的否定限制或例外"
+            elif expected.get("kind") == "workflow_branch":
+                condition = str(expected["condition"])
+                for field in ("source", "target"):
+                    endpoint_terms = _terms(str(expected.get(field, "")))
+                    if endpoint_terms and not endpoint_terms.intersection(_terms(quote)):
+                        status, quote, reason = "missing", "", "回答未保留判断节点与对应执行对象"
+                        break
+                negative_branch = re.search(
+                    r"分支[：:]\s*(?:否|失败|未通过|false|no|failure)(?:[；;]|$)", condition, re.I
+                )
+                if (
+                    status == "covered"
+                    and negative_branch
+                    and not re.search(
+                        r"未|不|否|失败|异常|\b(?:not|no|false|fail\w*)\b", quote, re.I
+                    )
+                ):
+                    status, quote, reason = "missing", "", "回答遗漏了否定或失败分支的前提"
+        if status == "not_applicable" and question:
+            topics = _terms(question).intersection(
+                _terms(str(expected.get("applicability_context", expected["source_quote"])))
+            )
+            overview = bool(
+                re.search(
+                    r"总结|概述|整个流程|全部步骤|\b(?:summari[sz]e|overview)\b", question, re.I
+                )
+            )
+            identity_only = bool(
+                re.search(r"(?:名字|名称|叫什么)|\b(?:name|called)\b", question, re.I)
+            ) and not re.search(
+                r"条件|限制|维修|流程|分支|\b(?:condition|repair|branch|limit)\b", question, re.I
+            )
+            if not identity_only and (
+                topics
+                or (overview and expected.get("kind") in {"workflow_branch", "coverage_limit"})
+                or (
+                    expected.get("kind") == "coverage_limit"
+                    and re.search(
+                        r"流程|路径|分支|架构|连接|\b(?:path|flow|branch|architecture|connect)\b",
+                        question,
+                        re.I,
+                    )
+                )
+            ):
+                status, reason = (
+                    "missing",
+                    "该条件与问题明确涉及的主题或流程有关，不能仅以未回答而排除",
+                )
         checks.append(
             {
                 "id": expected["id"],

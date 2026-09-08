@@ -175,6 +175,9 @@ class EnvSettings(BaseModel):
     worker_dependency_failure_threshold: int = Field(default=3, gt=0)
     worker_dependency_cooldown_seconds: float = Field(default=30, gt=0)
     worker_failure_pause_seconds: float = Field(default=1, gt=0)
+    worker_heartbeat_interval_seconds: float = Field(default=5, ge=1, le=30)
+    worker_heartbeat_stale_seconds: float = Field(default=30, ge=10, le=300)
+    worker_task_stall_seconds: float = Field(default=900, ge=60, le=7200)
 
     mineru_base_url: str = "https://mineru.net/api/v4"
     mineru_tokens: tuple[SecretStr, ...] = ()
@@ -233,6 +236,7 @@ class EnvSettings(BaseModel):
     ocr_verify_allow_http: bool = False
     ocr_verify_timeout_seconds: float = Field(default=180, gt=0)
     ocr_local_check_enabled: bool = False
+    ocr_local_max_concurrency: int = Field(default=2, ge=1, le=4)
     ocr_render_fallback_enabled: bool = True
     ocr_render_max_pages: int = Field(default=100, ge=1, le=1000)
     ocr_render_dpi: int = Field(default=150, ge=72, le=300)
@@ -241,12 +245,14 @@ class EnvSettings(BaseModel):
     ocr_cross_version_cache_enabled: bool = True
     model_account_limit_enabled: bool = False
     model_usage_enabled: bool = False
+    model_usage_raw_retention_days: int = Field(default=90, ge=1, le=3650)
     ocr_verify_input_cost_per_million_cny: float = Field(default=0, ge=0)
     ocr_verify_output_cost_per_million_cny: float = Field(default=0, ge=0)
     model_account_group: str = ""
     model_account_max_concurrency: int = Field(default=3, ge=1, le=64)
     model_account_requests_per_minute: int = Field(default=60, ge=1)
     model_account_tokens_per_minute: int = Field(default=200000, ge=1000)
+    model_account_interactive_burst: int = Field(default=3, ge=1, le=10)
     overview_enabled: bool = True
     overview_max_output_tokens: int = Field(default=8192, ge=2048, le=32768)
     overview_max_chunks: int = Field(default=1200, ge=30, le=20000)
@@ -402,6 +408,10 @@ class EnvSettings(BaseModel):
             raise ValueError("archive entry limit cannot exceed total archive limit")
         if self.worker_retry_max_delay_seconds < self.queue_retry_delay_seconds:
             raise ValueError("worker retry maximum cannot be below retry base")
+        if self.worker_heartbeat_stale_seconds < self.worker_heartbeat_interval_seconds * 3:
+            raise ValueError(
+                "worker heartbeat expiry must allow at least three heartbeat intervals"
+            )
         return self
 
 
