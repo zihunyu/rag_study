@@ -105,7 +105,11 @@ class ParserRouter:
                 return IsolatedNativeParser(source_format).parse(source, document_version_id)
             return self.route(source_format).parse(source, document_version_id)
         except ParsingDeferred as error:
-            if source_format == "pdf" and error.code == "OCR_REQUIRED":
+            if (
+                source_format == "pdf"
+                and source_format not in self._overridden
+                and error.code == "OCR_REQUIRED"
+            ):
                 return self._scanned_pdf_stub.parse(source, document_version_id)
             raise
 

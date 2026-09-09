@@ -303,7 +303,9 @@ class SearchBackedEvidenceProvider:
         warnings = list(result.warnings)
         if self.evidence_selector is not None and health is not RetrievalHealth.UNAVAILABLE:
             try:
-                choice = self.evidence_selector.select(question, tuple(evidence))
+                choice = (
+                    visual_session.preselected(tuple(evidence)) if visual_session else None
+                ) or self.evidence_selector.select(question, tuple(evidence))
                 # One supplemental round, at most two queries; same tenant, space,
                 # release and permission context. No bypass of retrieval fences.
                 if choice.coverage in {"partial", "missing"}:
@@ -327,7 +329,9 @@ class SearchBackedEvidenceProvider:
                     len(queries) > 1 or deferred_visuals
                 ) and health is not RetrievalHealth.UNAVAILABLE:
                     check_visuals(final=True)
-                    choice = self.evidence_selector.select(question, tuple(evidence))
+                    choice = (
+                        visual_session.preselected(tuple(evidence)) if visual_session else None
+                    ) or self.evidence_selector.select(question, tuple(evidence))
                 coverage, clarification = choice.coverage, choice.clarification
                 selected: set[str] = set()
                 used = 0
@@ -360,6 +364,21 @@ class SearchBackedEvidenceProvider:
                 ) from error
         if visual_session is not None:
             warnings.extend(visual_session.warnings)
+        missing_crops = [
+            e.evidence_id
+            for e in evidence
+            if e.source_role != "conflict_context"
+            and e.locator.get("qa_structure", {}).get("visual_gap")
+        ]
+        coverage_report = {}
+        if missing_crops:
+            coverage = "partial"
+            warnings.append("VISUAL_SOURCE_CROP_MISSING")
+            coverage_report = {
+                "complete": False,
+                "gaps": ["相关图表没有可用裁图，图中专有内容尚未确认。"],
+                "missing_crop_evidence_ids": missing_crops,
+            }
         return EvidencePackage(
             rag_run_id=new_uuid7(),
             tenant_id=tenant_id,
@@ -389,4 +408,5 @@ class SearchBackedEvidenceProvider:
                 else QuestionDisposition.ANSWERABLE
             ),
             clarification_fields=("subject",) if coverage == "ambiguous" else (),
+            coverage_report=coverage_report,
         )

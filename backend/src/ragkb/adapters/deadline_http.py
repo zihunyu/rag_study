@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import threading
+import time
 from typing import Any
 
 import httpx
@@ -22,7 +23,12 @@ class DeadlineHttpClient:
         self.closed = False
 
     def post(self, url: str, **kwargs: Any) -> httpx.Response:
+        from ragkb.application.cancellation import check_cancelled
+
+        check_cancelled()
         timeout = float(kwargs["timeout"].read)
+        deadline = time.monotonic() + timeout + 0.1
+        cleaned = threading.Event()
         with self.lock:
             if self.closed:
                 raise RuntimeError("MODEL_HTTP_CLIENT_CLOSED")
@@ -36,13 +42,28 @@ class DeadlineHttpClient:
                     return await self.client.post(url, **kwargs)
             except TimeoutError as error:
                 raise httpx.ReadTimeout("MODEL_PROVIDER_TOTAL_TIMEOUT") from error
+            finally:
+                cleaned.set()
 
         future = asyncio.run_coroutine_threadsafe(send(), self.loop)
         try:
-            return future.result(timeout=timeout + 0.1)
+            while True:
+                check_cancelled()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise concurrent.futures.TimeoutError()
+                try:
+                    return future.result(timeout=min(0.1, remaining))
+                except concurrent.futures.TimeoutError:
+                    if future.done():
+                        raise
         except concurrent.futures.TimeoutError as error:
             future.cancel()
             raise httpx.ReadTimeout("MODEL_PROVIDER_TOTAL_TIMEOUT") from error
+        finally:
+            if not future.done():
+                future.cancel()
+            cleaned.wait(1)
 
     def close(self) -> None:
         with self.lock:

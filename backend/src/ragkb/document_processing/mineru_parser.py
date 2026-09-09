@@ -18,11 +18,12 @@ _NODE_TYPES = {
     "code": NodeType.CODE,
     "list": NodeType.LIST,
     "image": NodeType.IMAGE,
+    "chart": NodeType.IMAGE,
 }
 
 
 class MinerUProductionParser:
-    revision = "mineru-production-canonical"
+    revision = "mineru-production-canonical:v2-layout"
 
     def __init__(
         self,
@@ -83,17 +84,28 @@ class MinerUProductionParser:
                 else None
             )
             item_type = str(raw.get("type", "text")).casefold()
+            text_level = raw.get("text_level")
+            heading_level = (
+                text_level
+                if isinstance(text_level, int)
+                and not isinstance(text_level, bool)
+                and 1 <= text_level <= 6
+                else None
+            )
+            is_heading = item_type == "title" or (item_type == "text" and heading_level is not None)
             metadata: dict[str, Any] = {
                 "mineru_type": item_type,
                 "artifact_id": artifact_id,
             }
-            if item_type == "title":
-                metadata["heading_level"] = 1
+            if is_heading:
+                metadata["heading_level"] = heading_level or 1
             nodes.append(
                 CanonicalNode(
                     node_id=str(raw.get("node_id", "")),
                     parent_node_id=None,
-                    node_type=_NODE_TYPES.get(item_type, NodeType.PARAGRAPH),
+                    node_type=NodeType.HEADING
+                    if is_heading
+                    else _NODE_TYPES.get(item_type, NodeType.PARAGRAPH),
                     original_text=text,
                     display_text=text,
                     locator=SourceLocator(page=page, bbox=typed_bbox),
@@ -102,6 +114,9 @@ class MinerUProductionParser:
             )
         if not nodes:
             raise ValueError("MINERU_CANONICAL_DOCUMENT_EMPTY")
+        from ragkb.document_processing.qa_structure import prepare_nodes
+
+        nodes = list(prepare_nodes(nodes))
         return canonical_document(
             source,
             document_version_id,

@@ -60,6 +60,9 @@ class InMemoryTracer:
             raise
         finally:
             duration = time.perf_counter() - started
+            from ragkb.application.qa_performance import record_event
+
+            record_event("stage", name=name, seconds=round(duration, 4), status=status.lower())
             self._current.reset(token)
             self._completed.append(
                 CompletedSpan(

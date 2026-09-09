@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from ragkb.domain.rag import (
     AskResult,
@@ -68,10 +68,23 @@ class ClaimVerifierPort(Protocol):
     ) -> VerificationResult: ...
 
 
+@runtime_checkable
+class CitationRepairPort(Protocol):
+    def repair_citations(
+        self, question: str, draft: DraftAnswer, evidence: tuple[Evidence, ...]
+    ) -> DraftAnswer: ...
+
+
 class VerifiedAnswerCachePort(Protocol):
     def get(self, package: EvidencePackage) -> DraftAnswer | None: ...
 
     def put(self, package: EvidencePackage, draft: DraftAnswer) -> None: ...
+
+
+class ExactAnswerReusePort(Protocol):
+    def execute(
+        self, service: Any, question: str, tenant: str, user: str, **scope: Any
+    ) -> AskResult: ...
 
 
 class FinalPermissionPort(Protocol):

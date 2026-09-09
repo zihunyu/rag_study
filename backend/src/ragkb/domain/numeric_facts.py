@@ -489,3 +489,59 @@ def check_numeric_facts(claim: str, sources: tuple[str, ...]) -> NumericCheck:
         else:
             return "mismatch"
     return "uncertain" if uncertain else "supported"
+
+
+def explicit_calculation_requires_review(claim: str, sources: tuple[str, ...]) -> bool:
+    """Permit checked arithmetic to reach independent semantic verification.
+
+    This does not establish object/condition/unit bindings. The semantic verifier
+    still checks those against the cited sources and the complete answer. A bare
+    novel number, an incorrect equation or an unavailable operand stays blocked.
+    """
+    text = _prepare(claim).replace("−", "-")
+    number = r"[+-]?\d{1,18}(?:\.\d{1,8})?"
+    unit = r"(?:kwh|kw|wh|w|v|a)"
+    equation = re.compile(
+        rf"(?<![\w.])(?P<a>{number})\s*(?P<au>{unit})?\s*(?P<op>[+*/×÷-])\s*"
+        rf"(?P<b>{number})\s*(?P<bu>{unit})?\s*=\s*(?P<c>{number})(?![\d.])"
+        rf"\s*(?P<cu>{unit})?(?![a-z])"
+    )
+    matches = tuple(equation.finditer(text))
+    if not matches or len(matches) > 4:
+        return False
+    source_values = {
+        value
+        for source in sources
+        for fact in extract_numeric_facts(source).facts
+        if fact.certain and fact.relation == "eq"
+        for value in fact.values
+    }
+    results = set()
+    for match in matches:
+        if match["au"] or match["bu"]:
+            # Explicit operand units are supported only for same-unit addition or
+            # subtraction. No dimensional conversion is inferred locally.
+            if match["op"] not in {"+", "-"} or not (match["au"] == match["bu"] == match["cu"]):
+                return False
+        a, b, result = (Decimal(match[group]) for group in ("a", "b", "c"))
+        if a not in source_values or b not in source_values:
+            return False
+        with localcontext() as context:
+            context.prec = 80
+            op = match["op"]
+            if op in {"/", "÷"} and not b:
+                return False
+            actual = (
+                a + b if op == "+" else a - b if op == "-" else a * b if op in {"*", "×"} else a / b
+            )
+        if actual != result:
+            return False
+        results.add(result)
+    remainder = equation.sub("", text)
+    # Check the rest normally after removing only the independently calculated
+    # outputs; unrelated literal errors cannot hitchhike on a valid equation.
+    parsed = extract_numeric_facts(remainder)
+    for fact in reversed(parsed.facts):
+        if fact.certain and len(fact.values) == 1 and fact.values[0] in results:
+            remainder = remainder[: fact.start] + remainder[fact.end :]
+    return check_numeric_facts(remainder, sources) != "mismatch"

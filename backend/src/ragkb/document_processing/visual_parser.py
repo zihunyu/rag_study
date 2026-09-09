@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 from ragkb.adapters.visual_http import VisualAnalyzer
 from ragkb.application.cancellation import check_cancelled
@@ -20,7 +21,7 @@ from ragkb.infrastructure.visual_assets import VisualAssetStore
 
 
 class VisualDocumentParser:
-    revision = "visual-document-v4:graph-facts-reviewed-regions"
+    revision = "visual-document-v6:provider-layout-first"
 
     def __init__(
         self,
@@ -55,43 +56,67 @@ class VisualDocumentParser:
             from ragkb.infrastructure.visual_rematerialization import apply_snapshot
 
             return apply_snapshot(self.store, source, document_version_id, plan)
-        coverage = inventory(source, self.kind)
-        source_images = native_images(
-            source,
-            "pdf" if self.kind == "pdf_scanned" else self.kind,
-            self.settings.ocr_max_image_bytes,
-        )
-        if coverage["needs_render"] and self.settings.ocr_render_fallback_enabled:
-            try:
-                rendered, coverage = render_fallback(
-                    source,
-                    self.kind,
-                    coverage,
-                    self.settings,
-                    self.store.storage.path_for("temp", "visual-render"),
-                )
-                if coverage.get("rendered_whole_document"):
-                    source_images = rendered
-                else:
-                    rendered_pages = set(coverage.get("rendered_pages", []))
-                    source_images = [
-                        p for p in source_images if p.locator.page not in rendered_pages
-                    ] + rendered
-            except (ValueError, OSError) as error:
-                coverage["render_error"] = (
-                    str(error) if str(error).isupper() else "VISUAL_RENDER_FAILED"
-                )
+        base_doc: CanonicalDocument | None = None
+        coverage: dict[str, Any]
+        supplied = getattr(self.base, "visual_sources", None)
+        provider_layout = False
+        if callable(supplied):
+            provider_layout = True
+            # A layout provider owns text and structure for every format it handles.
+            # Only its figure/table crops need visual enrichment. Inspecting native
+            # images or rendering first could bypass MinerU or overwrite its text.
+            self.store.ledger.put("version", document_version_id, {"stage": "parsing"})
+            base_doc = self.base.parse(source, document_version_id)
+            source_images = supplied(base_doc, self.settings.ocr_max_image_bytes)
+            coverage = {
+                "inspection": "inspected",
+                "objects": [],
+                "needs_render": False,
+                "render_pages": [],
+                "layout_parser": base_doc.parser_revision,
+                "visual_source": "parser_layout",
+            }
+        else:
+            coverage = inventory(source, self.kind)
+            source_images = native_images(
+                source,
+                "pdf" if self.kind == "pdf_scanned" else self.kind,
+                self.settings.ocr_max_image_bytes,
+            )
+            if coverage["needs_render"] and self.settings.ocr_render_fallback_enabled:
+                try:
+                    rendered, coverage = render_fallback(
+                        source,
+                        self.kind,
+                        coverage,
+                        self.settings,
+                        self.store.storage.path_for("temp", "visual-render"),
+                    )
+                    if coverage.get("rendered_whole_document"):
+                        source_images = rendered
+                    else:
+                        rendered_pages = set(coverage.get("rendered_pages", []))
+                        source_images = [
+                            p for p in source_images if p.locator.page not in rendered_pages
+                        ] + rendered
+                except (ValueError, OSError) as error:
+                    coverage["render_error"] = (
+                        str(error) if str(error).isupper() else "VISUAL_RENDER_FAILED"
+                    )
         self.store.ledger.put(
             "version", document_version_id, {"coverage": coverage, "stage": "inspecting"}
         )
-        base_doc: CanonicalDocument | None = None
-        if self.kind != "image" and not coverage.get("rendered_whole_document"):
+        if (
+            base_doc is None
+            and self.kind != "image"
+            and not coverage.get("rendered_whole_document")
+        ):
             try:
                 base_doc = self.base.parse(source, document_version_id)
             except ParsingDeferred as error:
                 if error.code not in {"PARSE_EMPTY", "OCR_REQUIRED"} or not source_images:
                     raise
-        if base_doc is not None:
+        if base_doc is not None and not provider_layout:
             pages = set(coverage.get("rendered_pages", []))
             if pages:
                 base_doc = replace(
@@ -252,6 +277,10 @@ class VisualDocumentParser:
                         )
                     )
         nodes = _insert_visual_nodes(nodes, visual_nodes)
+        from ragkb.document_processing.qa_structure import prepare_nodes
+
+        if provider_layout:
+            nodes = list(prepare_nodes(nodes))
         if not nodes:
             raise ParsingDeferred("PARSE_EMPTY", "No independently publishable content remains")
         if base_doc is None:

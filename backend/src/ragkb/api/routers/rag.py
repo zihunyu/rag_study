@@ -150,7 +150,9 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
             reading_scope(body.reading),
             provider_operation("space:" + space_id, "", "qa"),
             request_deadline(
-                runtime.settings.overview_timeout_seconds if body.reading.mode != "fact" else 120
+                runtime.settings.overview_timeout_seconds
+                if body.reading.mode != "fact"
+                else runtime.settings.qa_fact_timeout_seconds
             ),
         ):
             result = runtime.qa_service.ask(
@@ -190,7 +192,7 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
                 request_deadline(
                     runtime.settings.overview_timeout_seconds
                     if body.reading.mode != "fact"
-                    else 120
+                    else runtime.settings.qa_fact_timeout_seconds
                 ),
             ):
                 result = runtime.qa_service.ask(

@@ -1,0 +1,55 @@
+.acceptance-page { max-width: 1560px; }
+.acceptance-page h2 { margin: 0 0 10px; font-size: 18px; }
+.acceptance-page h3 { margin: 0 0 12px; }
+.acceptance-page .panel { padding: 22px; }
+.acceptance-space { width: min(380px, 40vw); display: grid; gap: 8px; }
+.acceptance-tabs, .acceptance-toolbar, .acceptance-toolbar > div { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.acceptance-tabs { border-bottom: 1px solid var(--border); margin-bottom: 24px; }
+.acceptance-tabs > button { padding: 14px 18px; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+.acceptance-tabs > button.active { color: var(--accent); border-bottom: 2px solid var(--accent); font-weight: 600; }
+.acceptance-tabs span { margin-left: 6px; }
+.acceptance-toolbar { justify-content: space-between; margin-bottom: 18px; }
+.acceptance-table { overflow-x: auto; }
+.acceptance-table table, .acceptance-run-detail table { width: 100%; border-collapse: collapse; text-align: left; }
+.acceptance-page th, .acceptance-page td { padding: 13px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.acceptance-page td p { max-width: 580px; margin: 7px 0; line-height: 1.65; }
+.acceptance-page td .text-button { margin-right: 12px; }
+.acceptance-page small { color: var(--muted); }
+.acceptance-run-form { margin-top: 20px; display: flex; align-items: end; gap: 16px; flex-wrap: wrap; }
+.acceptance-run-form > div { flex: 1; min-width: 220px; }
+.acceptance-page label:not(.acceptance-check), .acceptance-dialog form > label { display: grid; gap: 8px; }
+.acceptance-page input[type=number] { max-width: 170px; }
+.acceptance-empty { padding: 45px 20px; color: var(--muted); line-height: 1.8; }
+.acceptance-run-layout { display: grid; grid-template-columns: 270px minmax(0, 1fr); gap: 20px; }
+.acceptance-run-list { align-self: start; max-height: 80vh; overflow-y: auto; }
+.acceptance-run-list > button { display: grid; gap: 8px; text-align: left; width: 100%; padding: 15px 12px; margin: 5px 0; border: 1px solid transparent; border-radius: 8px; background: transparent; cursor: pointer; }
+.acceptance-run-list > button.active { border-color: var(--accent); background: var(--accent-dim); }
+.acceptance-run-detail { display: grid; gap: 20px; min-width: 0; }
+.acceptance-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 20px 0; }
+.acceptance-metrics > div { padding: 18px; border: 1px solid var(--border); border-radius: 8px; display: grid; gap: 7px; }
+.acceptance-metrics strong { font-size: 28px; }
+.acceptance-metrics span { font-size: 13px; color: var(--muted); }
+.acceptance-notice { background: var(--accent-dim); border: 1px solid var(--border); border-radius: 8px; padding: 14px 18px; line-height: 1.7; }
+.acceptance-overlay { position: fixed; inset: 0; z-index: 80; background: #0009; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.acceptance-dialog { width: min(780px, 100%); max-height: 92vh; overflow-y: auto; background: var(--panel); color: var(--text); border-radius: 14px; padding: 28px; box-shadow: 0 18px 70px #14274133; }
+.acceptance-dialog.wide { width: min(1080px, 100%); }
+.acceptance-dialog header, .acceptance-dialog footer { display: flex; gap: 18px; align-items: start; justify-content: space-between; margin-bottom: 24px; }
+.acceptance-dialog form { display: grid; gap: 20px; }
+.acceptance-dialog footer { justify-content: end; margin: 0; }
+.acceptance-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.acceptance-dialog fieldset { padding: 16px; border: 1px solid var(--border); border-radius: 8px; max-height: 230px; overflow-y: auto; }
+.acceptance-check { display: flex; gap: 10px; align-items: baseline; margin: 12px 0; line-height: 1.6; }
+.acceptance-check input { flex-shrink: 0; }
+.acceptance-dialog .panel { margin: 18px 0; }
+.acceptance-page details { margin: 14px 0; line-height: 1.7; }
+.acceptance-page summary { cursor: pointer; color: var(--accent); }
+.acceptance-page pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 16px; background: var(--bg); max-height: 450px; overflow: auto; }
+.acceptance-check-results { list-style: none; padding: 0; }
+.acceptance-check-results li { padding: 9px 0; display: flex; justify-content: space-between; gap: 20px; }
+.acceptance-check-results span { color: var(--muted); }
+.acceptance-source { white-space: pre-wrap; line-height: 1.8; border-left: 3px solid var(--accent); padding-left: 16px; }
+@media (max-width: 1000px) { .acceptance-run-layout { grid-template-columns: 1fr; } .acceptance-run-list { max-height: 240px; } }
+@media (max-width: 640px) { .acceptance-space { width: 100%; } .acceptance-metrics, .acceptance-fields { grid-template-columns: 1fr 1fr; } .acceptance-overlay { padding: 8px; } .acceptance-dialog { padding: 18px; } }
+
+.acceptance-toolbar > label:has(input[type=checkbox]) { display: flex; align-items: center; }
+.acceptance-dialog > header { position: sticky; top: -28px; background: var(--panel); z-index: 1; padding: 12px 0; }

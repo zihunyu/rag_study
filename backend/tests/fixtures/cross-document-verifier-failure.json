@@ -1,0 +1,698 @@
+{
+  "description": "Synthetic three-file verifier response captured on 2026-09-08 before the fix. K3 incorrectly marked covered.",
+  "question": "请分别回答：星云 X1 的保修期及起算时间是什么？海岚 Q7 在常温、低温下的额定功率分别是多少？星桥服务合同取消后多久退款、退到哪里？请给出每项的资料引用。",
+  "draft": {
+    "text": "| 项目 | 答案 | 资料引用 |\n|---|---|---|\n| 星云 X1 保修期及起算时间 | 保修期为三年，从购买之日起计算。 | [E1] |\n| 海岚 Q7 常温额定功率 | 420 W。 | [E10] |\n| 海岚 Q7 低温额定功率 | 390 W。 | [E10] |\n| 星桥服务合同取消后的退款时间和去向 | 取消服务后，退款须在三十天内完成，并原路返回支付账户。 | [E2] |",
+    "citation_ids": [
+      "E1",
+      "E10",
+      "E2"
+    ],
+    "claims": [
+      {
+        "text": "星云 X1 的保修期为三年。",
+        "evidence_ids": [
+          "E1"
+        ],
+        "visual_fact_ids": []
+      },
+      {
+        "text": "星云 X1 的保修期从购买之日起计算。",
+        "evidence_ids": [
+          "E1"
+        ],
+        "visual_fact_ids": []
+      },
+      {
+        "text": "海岚 Q7 在常温环境下的额定功率为 420 W。",
+        "evidence_ids": [
+          "E10"
+        ],
+        "visual_fact_ids": []
+      },
+      {
+        "text": "海岚 Q7 在低温环境下的额定功率为 390 W。",
+        "evidence_ids": [
+          "E10"
+        ],
+        "visual_fact_ids": []
+      },
+      {
+        "text": "星桥服务合同取消服务后，退款须在三十天内完成。",
+        "evidence_ids": [
+          "E2"
+        ],
+        "visual_fact_ids": []
+      },
+      {
+        "text": "星桥服务合同取消服务后，退款原路返回支付账户。",
+        "evidence_ids": [
+          "E2"
+        ],
+        "visual_fact_ids": []
+      }
+    ],
+    "status": "answered",
+    "synthesized": true
+  },
+  "verifier_response": {
+    "id": "resp_01fa9261bb43248c016a9fb7b1dfa487d086e50ff68249c041",
+    "object": "chat.completion",
+    "created": 1788852152,
+    "model": "gpt-5.4-mini",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "{\"verdicts\":[{\"claim_id\":\"C1\",\"verdict\":\"SUPPORTED\",\"reason_code\":\"E1 states the warranty period is three years.\"},{\"claim_id\":\"C2\",\"verdict\":\"SUPPORTED\",\"reason_code\":\"E1 states it is calculated from the purchase date.\"},{\"claim_id\":\"C3\",\"verdict\":\"SUPPORTED\",\"reason_code\":\"E10 supports 420 W at normal temperature for 海岚Q7.\"},{\"claim_id\":\"C4\",\"verdict\":\"SUPPORTED\",\"reason_code\":\"E10 supports 390 W at low temperature for 海岚Q7.\"},{\"claim_id\":\"C5\",\"verdict\":\"SUPPORTED\",\"reason_code\":\"E2 states refunds must be completed within thirty days after cancellation.\"},{\"claim_id\":\"C6\",\"verdict\":\"SUPPORTED\",\"reason_code\":\"E2 states refunds are returned to the original payment account.\"}],\"answer_check\":{\"covered\":true,\"citations_valid\":true,\"reason_code\":\"all displayed facts match the supported claims and each row has a relevant citation\"},\"conflict_check\":{\"checked\":true,\"conflicting_evidence_ids\":[]},\"condition_checks\":[{\"id\":\"K1\",\"status\":\"covered\",\"answer_quote\":\"| 星桥服务合同取消后的退款时间和去向 | 取消服务后，退款须在三十天内完成，并原路返回支付账户。 | [E2] |\",\"reason\":\"The answer explicitly states both the thirty-day refund deadline and that it returns to the payment account.\"},{\"id\":\"K2\",\"status\":\"not_applicable\",\"answer_quote\":\"\",\"reason\":\"The answer is about warranty, power, and refund policy, not on-site repair scheduling or appointment requirements.\"},{\"id\":\"K3\",\"status\":\"covered\",\"answer_quote\":\"| 星云 X1 保修期及起算时间 | 保修期为三年，从购买之日起计算。 | [E1] |\",\"reason\":\"The answer addresses 星云 X1 and preserves the source's product scope, albeit without the fictional-product note.\"}]}"
+        },
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 5510,
+      "completion_tokens": 416,
+      "total_tokens": 5926
+    },
+    "service_tier": "default"
+  },
+  "evidence": [
+    {
+      "evidence_id": "E1",
+      "chunk_id": "chunk-3ec3fa1fe8931c17f1a1d725",
+      "document_id": "01a07725-818a-7f6b-8c2a-d4a370d6f1ca",
+      "document_version_id": "01a079d4-70c5-78b4-8d3e-f685c5fd2449",
+      "text": "SECTION_PATH: 星云 X1 服务手册（合成验收资料） / 保修政策\n星云 X1 服务手册（合成验收资料） / 保修政策\n星云 X1 的保修期为三年，从购买之日起计算。",
+      "locator": {
+        "kind": "paragraph",
+        "heading": "星云 X1 服务手册（合成验收资料） / 保修政策",
+        "ordinal": 1,
+        "is_parent": false,
+        "vector_pk": "local:production-g3-generation:chunk-3ec3fa1fe8931c17f1a1d725:f1",
+        "char_range": [
+          54,
+          77
+        ],
+        "section_id": "section-89258be5f6792e2af9acc3c5",
+        "token_count": 6,
+        "section_path": "星云 X1 服务手册（合成验收资料） / 保修政策",
+        "tokenizer_id": "local-functional-wordlevel-v1:dc79b7fad55e256a",
+        "vector_indexed": true,
+        "chunking_revision": "token-aware:v3:structure:600:80",
+        "visual_associations": [],
+        "conditions_to_preserve": []
+      },
+      "valid_from_epoch": 1788750363,
+      "valid_to_epoch": 0,
+      "authority_rank": 0,
+      "permission_revision": 1,
+      "authorized": true,
+      "current_version": true,
+      "source_role": "hit",
+      "parent_chunk_id": "parent-4988516e0b190eee300410c5",
+      "display_text": "星云 X1 的保修期为三年，从购买之日起计算。"
+    },
+    {
+      "evidence_id": "E2",
+      "chunk_id": "chunk-7978acd4785a0a73eb05f970",
+      "document_id": "01a079db-10da-70d9-8dd6-6d6499e0b5fb",
+      "document_version_id": "01a079db-10dc-7380-bba1-24337dc1947b",
+      "text": "SECTION_PATH: 退款条款\n退款条款\n星桥服务合同约定：取消服务后，退款须在三十天内完成。退款原路返回支付账户。",
+      "locator": {
+        "kind": "paragraph",
+        "heading": "退款条款",
+        "ordinal": 1,
+        "is_parent": false,
+        "vector_pk": "local:production-g3-generation:chunk-7978acd4785a0a73eb05f970:f1",
+        "char_range": [
+          18,
+          55
+        ],
+        "section_id": "section-69a0f73a02a456256e5e01bc",
+        "token_count": 8,
+        "section_path": "退款条款",
+        "tokenizer_id": "local-functional-wordlevel-v1:dc79b7fad55e256a",
+        "vector_indexed": true,
+        "chunking_revision": "token-aware:v3:structure:600:80",
+        "visual_associations": [],
+        "conditions_to_preserve": []
+      },
+      "valid_from_epoch": 1788750798,
+      "valid_to_epoch": 0,
+      "authority_rank": 0,
+      "permission_revision": 1,
+      "authorized": true,
+      "current_version": true,
+      "source_role": "hit",
+      "parent_chunk_id": "parent-758da8b50eb15b8f5a51d675",
+      "display_text": "星桥服务合同约定：取消服务后，退款须在三十天内完成。退款原路返回支付账户。"
+    },
+    {
+      "evidence_id": "E3",
+      "chunk_id": "chunk-1f22c0451cab746294cb3278",
+      "document_id": "01a079da-f69f-7d1b-969d-640cb5c4970b",
+      "document_version_id": "01a079da-f69f-7a7b-9cfb-8667cf57af6a",
+      "text": "DOCUMENT_TITLE: 设备参数-合成\nTABLE_HEADER: 型号 | 环境 | 额定功率(W)\n海岚Q7 | 低温 | 390",
+      "locator": {
+        "row": 3,
+        "kind": "table",
+        "sheet": "csv",
+        "heading": "",
+        "ordinal": 2,
+        "is_parent": false,
+        "vector_pk": "local:production-g3-generation:chunk-1f22c0451cab746294cb3278:f1",
+        "cell_range": "A3:C3",
+        "section_id": "section-63a9cf5577fb5c804797cab3",
+        "token_count": 5,
+        "section_path": "root",
+        "source_spans": [
+          {
+            "role": "table_context",
+            "locator": {
+              "row": 3,
+              "sheet": "csv",
+              "cell_range": "A3:C3"
+            }
+          }
+        ],
+        "tokenizer_id": "local-functional-wordlevel-v1:dc79b7fad55e256a",
+        "vector_indexed": true,
+        "chunking_revision": "token-aware:v3:structure:600:80",
+        "visual_associations": []
+      },
+      "valid_from_epoch": 1788750792,
+      "valid_to_epoch": 0,
+      "authority_rank": 0,
+      "permission_revision": 1,
+      "authorized": true,
+      "current_version": true,
+      "source_role": "conflict_context",
+      "parent_chunk_id": "parent-ddd13b2e4535cb2f82c068ef",
+      "display_text": "海岚Q7 | 低温 | 390"
+    },
+    {
+      "evidence_id": "E4",
+      "chunk_id": "chunk-368160a1b04855390dbe8082",
+      "document_id": "01a079da-f69f-7d1b-969d-640cb5c4970b",
+      "document_version_id": "01a079da-f69f-7a7b-9cfb-8667cf57af6a",
+      "text": "DOCUMENT_TITLE: 设备参数-合成\nTABLE_HEADER: 型号 | 环境 | 额定功率(W)\n海岚Q7 | 常温 | 420",
+      "locator": {
+        "row": 2,
+        "kind": "table",
+        "sheet": "csv",
+        "heading": "",
+        "ordinal": 1,
+        "is_parent": false,
+        "vector_pk": "local:production-g3-generation:chunk-368160a1b04855390dbe8082:f1",
+        "cell_range": "A2:C2",
+        "section_id": "section-63a9cf5577fb5c804797cab3",
+        "token_count": 5,
+        "section_path": "root",
+        "source_spans": [
+          {
+            "role": "table_context",
+            "locator": {
+              "row": 2,
+              "sheet": "csv",
+              "cell_range": "A2:C2"
+            }
+          }
+        ],
+        "tokenizer_id": "local-functional-wordlevel-v1:dc79b7fad55e256a",
+        "vector_indexed": true,
+        "chunking_revision": "token-aware:v3:structure:600:80",
+        "visual_associations": []
+      },
+      "valid_from_epoch": 1788750792,
+      "valid_to_epoch": 0,
+      "authority_rank": 0,
+      "permission_revision": 1,
+      "authorized": true,
+      "current_version": true,
+      "source_role": "conflict_context",
+      "parent_chunk_id": "parent-ddd13b2e4535cb2f82c068ef",
+      "display_text": "海岚Q7 | 常温 | 420"
+    },
+    {
+      "evidence_id": "E5",
+      "chunk_id": "chunk-33da2df93abdf09f4332e60c",
+      "document_id": "01a07725-818a-7f6b-8c2a-d4a370d6f1ca",
+      "document_version_id": "01a079d4-70c5-78b4-8d3e-f685c5fd2449",
+      "text": "SECTION_PATH: 星云 X1 服务手册（合成验收资料） / 上门服务\n星云 X1 服务手册（合成验收资料） / 上门服务\n星云 X1 支持上门维修服务。用户需要提前预约，上门维修的服务时间是工作日 09:00 至 18:00。",
+      "locator": {
+        "kind": "paragraph",
+        "heading": "星云 X1 服务手册（合成验收资料） / 上门服务",
+        "ordinal": 2,
+        "is_parent": false,
+        "vector_pk": "local:production-g3-generation:chunk-33da2df93abdf09f4332e60c:f1",
+        "char_range": [
+          87,
+          139
+        ],
+        "section_id": "section-f1fe169a98406283cf434ac8",
+        "token_count": 15,
+        "section_path": "星云 X1 服务手册（合成验收资料） / 上门服务",
+        "tokenizer_id": "local-functional-wordlevel-v1:dc79b7fad55e256a",
+        "vector_indexed": true,
+        "chunking_revision": "token-aware:v3:structure:600:80",
+        "visual_associations": [],
+        "conditions_to_preserve": [
+          "用户需要提前预约，上门维修的服务时间是工作日 09:00 至 18:00。"
+        ]
+      },
+      "valid_from_epoch": 1788750363,
+      "valid_to_epoch": 0,
+      "authority_rank": 0,
+      "permission_revision": 1,
+      "authorized": true,
+      "current_version": true,
+      "source_role": "hit",
+      "parent_chunk_id": "parent-dc9bcba29dbe512fb2bb093f",
+      "display_text": "星云 X1 支持上门维修服务。用户需要提前预约，上门维修的服务时间是工作日 09:00 至 18:00。"
+    },
+    {
+      "evidence_id": "E6",
+      "chunk_id": "chunk-1f378f291cc8df66b1cd51e2",
+      "document_id": "01a079db-10da-70d9-8dd6-6d6499e0b5fb",
+      "document_version_id": "01a079db-10dc-7380-bba1-24337dc1947b",
+      "text": "DOCUMENT_TITLE: 退款条款\n星桥服务合同（合成测试）",
+      "locator": {
+        "kind": "paragraph",
+        "heading": "",
+        "ordinal": 0,
+        "is_parent": false,
+        "vector_pk": "local:production-g3-generation:chunk-1f378f291cc8df66b1cd51e2:f1",
+        "char_range": [
+          0,
+          12
+        ],
+        "section_id": "section-b22bca6223ecd13ca62cb87f",
+        "token_count": 4,
+        "section_path": "root",
+        "tokenizer_id": "local-functional-wordlevel-v1:dc79b7fad55e256a",
+        "vector_indexed": true,
+        "chunking_revision": "token-aware:v3:structure:600:80",
+        "visual_associations": []
+      },
+      "valid_from_epoch": 1788750798,
+      "valid_to_epoch": 0,
+      "authority_rank": 0,
+      "permission_revision": 1,
+      "authorized": true,
+      "current_version": true,
+      "source_role": "conflict_context",
+      "parent_chunk_id": "parent-4f472acb964df5374f0fb517",
+      "display_text": "星桥服务合同（合成测试）"
+    },
+    {
+      "evidence_id": "E7",
+      "chunk_id": "chunk-be29e7ac3dd77cfa40840ebb",
+      "document_id": "01a07725-818a-7f6b-8c2a-d4a370d6f1ca",
+      "document_version_id": "01a079d4-70c5-78b4-8d3e-f685c5fd2449",
+      "text": "SECTION_PATH: 星云 X1 服务手册（合成验收资料）\n星云 X1 服务手册（合成验收资料）\n本文件描述一个虚构产品，仅用于软件链路验收。",
+      "locator": {
+        "kind": "paragraph",
+        "heading": "星云 X1 服务手册（合成验收资料）",
+        "ordinal": 0,
+        "is_parent": false,
+        "vector_pk": "local:production-g3-generation:chunk-be29e7ac3dd77cfa40840ebb:f1",
+        "char_range": [
+          22,
+          44
+        ],
+        "section_id": "section-25677e250511378deba06f81",
+        "token_count": 4,
+        "section_path": "星云 X1 服务手册（合成验收资料）",
+        "tokenizer_id": "local-functional-wordlevel-v1:dc79b7fad55e256a",
+        "vector_indexed": true,
+        "chunking_revision": "token-aware:v3:structure:600:80",
+        "visual_associations": [],
+        "conditions_to_preserve": [
+          "本文件描述一个虚构产品，仅用于软件链路验收。"
+        ]
+      },
+      "valid_from_epoch": 1788750363,
+      "valid_to_epoch": 0,
+      "authority_rank": 0,
+      "permission_revision": 1,
+      "authorized": true,
+      "current_version": true,
+      "source_role": "hit",
+      "parent_chunk_id": "parent-bb27f9af0c0e9174595d74d9",
+      "display_text": "本文件描述一个虚构产品，仅用于软件链路验收。"
+    },
+    {
+      "evidence_id": "E8",
+      "chunk_id": "parent-4988516e0b190eee300410c5",
+      "document_id": "01a07725-818a-7f6b-8c2a-d4a370d6f1ca",
+      "document_version_id": "01a079d4-70c5-78b4-8d3e-f685c5fd2449",
+      "text": "SECTION_PATH: 星云 X1 服务手册（合成验收资料） / 保修政策\n星云 X1 服务手册（合成验收资料）\n星云 X1 服务手册（合成验收资料） / 保修政策\n星云 X1 的保修期为三年，从购买之日起计算。",
+      "locator": {
+        "kind": "parent",
+        "heading": "",
+        "ordinal": 1,
+        "is_parent": true,
+        "char_range": [
+          54,
+          77
+        ],
+        "section_id": "section-89258be5f6792e2af9acc3c5",
+        "token_count": 6,
+        "section_path": "星云 X1 服务手册（合成验收资料） / 保修政策",
+        "source_spans": [
+          {
+            "locator": {
+              "char_range": [
+                54,
+                77
+              ]
+            },
+            "chunk_id": "chunk-3ec3fa1fe8931c17f1a1d725"
+          }
+        ],
+        "tokenizer_id": "local-functional-wordlevel-v1:dc79b7fad55e256a",
+        "vector_indexed": false,
+        "chunking_revision": "token-aware:v3:structure:600:80",
+        "visual_associations": []
+      },
+      "valid_from_epoch": 1788750363,
+      "valid_to_epoch": 0,
+      "authority_rank": 0,
+      "permission_revision": 1,
+      "authorized": true,
+      "current_version": true,
+      "source_role": "conflict_context",
+      "parent_chunk_id": null,
+      "display_text": "星云 X1 的保修期为三年，从购买之日起计算。"
+    },
+    {
+      "evidence_id": "E9",
+      "chunk_id": "parent-758da8b50eb15b8f5a51d675",
+      "document_id": "01a079db-10da-70d9-8dd6-6d6499e0b5fb",
+      "document_version_id": "01a079db-10dc-7380-bba1-24337dc1947b",
+      "text": "SECTION_PATH: 退款条款\n退款条款\n退款条款\n星桥服务合同约定：取消服务后，退款须在三十天内完成。退款原路返回支付账户。",
+      "locator": {
+        "kind": "parent",
+        "heading": "",
+        "ordinal": 1,
+        "is_parent": true,
+        "char_range": [
+          18,
+          55
+        ],
+        "section_id": "section-69a0f73a02a456256e5e01bc",
+        "token_count": 8,
+        "section_path": "退款条款",
+        "source_spans": [
+          {
+            "locator": {
+              "char_range": [
+                18,
+                55
+              ]
+            },
+            "chunk_id": "chunk-7978acd4785a0a73eb05f970"
+          }
+        ],
+        "tokenizer_id": "local-functional-wordlevel-v1:dc79b7fad55e256a",
+        "vector_indexed": false,
+        "chunking_revision": "token-aware:v3:structure:600:80",
+        "visual_associations": []
+      },
+      "valid_from_epoch": 1788750798,
+      "valid_to_epoch": 0,
+      "authority_rank": 0,
+      "permission_revision": 1,
+      "authorized": true,
+      "current_version": true,
+      "source_role": "conflict_context",
+      "parent_chunk_id": null,
+      "display_text": "星桥服务合同约定：取消服务后，退款须在三十天内完成。退款原路返回支付账户。"
+    },
+    {
+      "evidence_id": "E10",
+      "chunk_id": "parent-ddd13b2e4535cb2f82c068ef",
+      "document_id": "01a079da-f69f-7d1b-969d-640cb5c4970b",
+      "document_version_id": "01a079da-f69f-7a7b-9cfb-8667cf57af6a",
+      "text": "设备参数-合成\nroot\n型号 | 环境 | 额定功率(W)\n海岚Q7 | 常温 | 420\n海岚Q7 | 低温 | 390",
+      "locator": {
+        "row": 1,
+        "kind": "parent",
+        "sheet": "csv",
+        "heading": "",
+        "ordinal": 0,
+        "is_parent": true,
+        "cell_range": "A1:C1",
+        "section_id": "section-63a9cf5577fb5c804797cab3",
+        "token_count": 18,
+        "section_path": "root",
+        "source_spans": [
+          {
+            "locator": {
+              "row": 1,
+              "sheet": "csv",
+              "cell_range": "A1:C1",
+              "source_spans": [
+                {
+                  "role": "table_context",
+                  "locator": {
+                    "row": 1,
+                    "sheet": "csv",
+                    "cell_range": "A1:C1"
+                  }
+                }
+              ]
+            },
+            "chunk_id": "chunk-8c86b5af0baabc0a05ada44e"
+          },
+          {
+            "locator": {
+              "row": 2,
+              "sheet": "csv",
+              "cell_range": "A2:C2",
+              "source_spans": [
+                {
+                  "role": "table_context",
+                  "locator": {
+                    "row": 2,
+                    "sheet": "csv",
+                    "cell_range": "A2:C2"
+                  }
+                }
+              ]
+            },
+            "chunk_id": "chunk-368160a1b04855390dbe8082"
+          },
+          {
+            "locator": {
+              "row": 3,
+              "sheet": "csv",
+              "cell_range": "A3:C3",
+              "source_spans": [
+                {
+                  "role": "table_context",
+                  "locator": {
+                    "row": 3,
+                    "sheet": "csv",
+                    "cell_range": "A3:C3"
+                  }
+                }
+              ]
+            },
+            "chunk_id": "chunk-1f22c0451cab746294cb3278"
+          }
+        ],
+        "tokenizer_id": "local-functional-wordlevel-v1:dc79b7fad55e256a",
+        "vector_indexed": false,
+        "chunking_revision": "token-aware:v3:structure:600:80",
+        "visual_associations": [],
+        "conditions_to_preserve": []
+      },
+      "valid_from_epoch": 1788750792,
+      "valid_to_epoch": 0,
+      "authority_rank": 0,
+      "permission_revision": 1,
+      "authorized": true,
+      "current_version": true,
+      "source_role": "parent_context",
+      "parent_chunk_id": null,
+      "display_text": "型号 | 环境 | 额定功率(W)\n海岚Q7 | 常温 | 420\n海岚Q7 | 低温 | 390"
+    },
+    {
+      "evidence_id": "E11",
+      "chunk_id": "parent-dc9bcba29dbe512fb2bb093f",
+      "document_id": "01a07725-818a-7f6b-8c2a-d4a370d6f1ca",
+      "document_version_id": "01a079d4-70c5-78b4-8d3e-f685c5fd2449",
+      "text": "SECTION_PATH: 星云 X1 服务手册（合成验收资料） / 上门服务\n星云 X1 服务手册（合成验收资料）\n星云 X1 服务手册（合成验收资料） / 上门服务\n星云 X1 支持上门维修服务。用户需要提前预约，上门维修的服务时间是工作日 09:00 至 18:00。",
+      "locator": {
+        "kind": "parent",
+        "heading": "",
+        "ordinal": 2,
+        "is_parent": true,
+        "char_range": [
+          87,
+          139
+        ],
+        "section_id": "section-f1fe169a98406283cf434ac8",
+        "token_count": 15,
+        "section_path": "星云 X1 服务手册（合成验收资料） / 上门服务",
+        "source_spans": [
+          {
+            "locator": {
+              "char_range": [
+                87,
+                139
+              ]
+            },
+            "chunk_id": "chunk-33da2df93abdf09f4332e60c"
+          }
+        ],
+        "tokenizer_id": "local-functional-wordlevel-v1:dc79b7fad55e256a",
+        "vector_indexed": false,
+        "chunking_revision": "token-aware:v3:structure:600:80",
+        "visual_associations": []
+      },
+      "valid_from_epoch": 1788750363,
+      "valid_to_epoch": 0,
+      "authority_rank": 0,
+      "permission_revision": 1,
+      "authorized": true,
+      "current_version": true,
+      "source_role": "conflict_context",
+      "parent_chunk_id": null,
+      "display_text": "星云 X1 支持上门维修服务。用户需要提前预约，上门维修的服务时间是工作日 09:00 至 18:00。"
+    },
+    {
+      "evidence_id": "E12",
+      "chunk_id": "parent-4f472acb964df5374f0fb517",
+      "document_id": "01a079db-10da-70d9-8dd6-6d6499e0b5fb",
+      "document_version_id": "01a079db-10dc-7380-bba1-24337dc1947b",
+      "text": "退款条款\nroot\n星桥服务合同（合成测试）",
+      "locator": {
+        "kind": "parent",
+        "heading": "",
+        "ordinal": 0,
+        "is_parent": true,
+        "char_range": [
+          0,
+          12
+        ],
+        "section_id": "section-b22bca6223ecd13ca62cb87f",
+        "token_count": 4,
+        "section_path": "root",
+        "source_spans": [
+          {
+            "locator": {
+              "char_range": [
+                0,
+                12
+              ]
+            },
+            "chunk_id": "chunk-1f378f291cc8df66b1cd51e2"
+          }
+        ],
+        "tokenizer_id": "local-functional-wordlevel-v1:dc79b7fad55e256a",
+        "vector_indexed": false,
+        "chunking_revision": "token-aware:v3:structure:600:80",
+        "visual_associations": []
+      },
+      "valid_from_epoch": 1788750798,
+      "valid_to_epoch": 0,
+      "authority_rank": 0,
+      "permission_revision": 1,
+      "authorized": true,
+      "current_version": true,
+      "source_role": "conflict_context",
+      "parent_chunk_id": null,
+      "display_text": "星桥服务合同（合成测试）"
+    },
+    {
+      "evidence_id": "E13",
+      "chunk_id": "parent-bb27f9af0c0e9174595d74d9",
+      "document_id": "01a07725-818a-7f6b-8c2a-d4a370d6f1ca",
+      "document_version_id": "01a079d4-70c5-78b4-8d3e-f685c5fd2449",
+      "text": "SECTION_PATH: 星云 X1 服务手册（合成验收资料）\n星云 X1 服务手册（合成验收资料）\n星云 X1 服务手册（合成验收资料）\n本文件描述一个虚构产品，仅用于软件链路验收。",
+      "locator": {
+        "kind": "parent",
+        "heading": "",
+        "ordinal": 0,
+        "is_parent": true,
+        "char_range": [
+          22,
+          44
+        ],
+        "section_id": "section-25677e250511378deba06f81",
+        "token_count": 4,
+        "section_path": "星云 X1 服务手册（合成验收资料）",
+        "source_spans": [
+          {
+            "locator": {
+              "char_range": [
+                22,
+                44
+              ]
+            },
+            "chunk_id": "chunk-be29e7ac3dd77cfa40840ebb"
+          }
+        ],
+        "tokenizer_id": "local-functional-wordlevel-v1:dc79b7fad55e256a",
+        "vector_indexed": false,
+        "chunking_revision": "token-aware:v3:structure:600:80",
+        "visual_associations": []
+      },
+      "valid_from_epoch": 1788750363,
+      "valid_to_epoch": 0,
+      "authority_rank": 0,
+      "permission_revision": 1,
+      "authorized": true,
+      "current_version": true,
+      "source_role": "conflict_context",
+      "parent_chunk_id": null,
+      "display_text": "本文件描述一个虚构产品，仅用于软件链路验收。"
+    },
+    {
+      "evidence_id": "E14",
+      "chunk_id": "chunk-8c86b5af0baabc0a05ada44e",
+      "document_id": "01a079da-f69f-7d1b-969d-640cb5c4970b",
+      "document_version_id": "01a079da-f69f-7a7b-9cfb-8667cf57af6a",
+      "text": "DOCUMENT_TITLE: 设备参数-合成\n型号 | 环境 | 额定功率(W)",
+      "locator": {
+        "row": 1,
+        "kind": "table",
+        "sheet": "csv",
+        "heading": "",
+        "ordinal": 0,
+        "is_parent": false,
+        "vector_pk": "local:production-g3-generation:chunk-8c86b5af0baabc0a05ada44e:f1",
+        "cell_range": "A1:C1",
+        "section_id": "section-63a9cf5577fb5c804797cab3",
+        "token_count": 8,
+        "section_path": "root",
+        "source_spans": [
+          {
+            "role": "table_context",
+            "locator": {
+              "row": 1,
+              "sheet": "csv",
+              "cell_range": "A1:C1"
+            }
+          }
+        ],
+        "tokenizer_id": "local-functional-wordlevel-v1:dc79b7fad55e256a",
+        "vector_indexed": true,
+        "chunking_revision": "token-aware:v3:structure:600:80",
+        "visual_associations": []
+      },
+      "valid_from_epoch": 1788750792,
+      "valid_to_epoch": 0,
+      "authority_rank": 0,
+      "permission_revision": 1,
+      "authorized": true,
+      "current_version": true,
+      "source_role": "conflict_context",
+      "parent_chunk_id": null,
+      "display_text": "型号 | 环境 | 额定功率(W)"
+    }
+  ]
+}

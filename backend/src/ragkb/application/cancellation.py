@@ -24,7 +24,9 @@ def check_cancelled() -> None:
 
 @contextmanager
 def cancellation_scope(callback: Callable[[], bool] | None) -> Iterator[None]:
-    token = _check.set(callback if callback is not None else _check.get())
+    parent = _check.get()
+    combined = (lambda: bool(parent() or callback())) if parent and callback else callback or parent
+    token = _check.set(combined)
     try:
         check_cancelled()
         yield

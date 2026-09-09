@@ -123,7 +123,11 @@ def test_unclaimed_hallucination_in_answer_body_is_rejected(tmp_path: Path) -> N
     assert result.status is AnswerStatus.INSUFFICIENT_EVIDENCE
     assert result.answer is None
     assert result.verified is False
-    assert result.warnings == ("ANSWER_CLAIM_UNCOVERED",)
+    assert result.warnings == (
+        "ANSWER_NOT_SUPPORTED",
+        "ANSWER_CLAIM_UNCOVERED",
+        "ANSWER_CITATION_COVERAGE_INVALID",
+    )
 
 
 def test_returned_answer_is_rebuilt_only_from_verified_claims(tmp_path: Path) -> None:

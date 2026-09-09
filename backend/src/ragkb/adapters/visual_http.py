@@ -21,6 +21,7 @@ from ragkb.adapters.model_http import (
 from ragkb.application.cancellation import check_cancelled
 from ragkb.config import EnvSettings
 from ragkb.document_processing.image_views import image_views
+from ragkb.domain.errors import InvalidProviderResponse, TransientProviderError
 from ragkb.domain.visual_comparison import compare_readings
 from ragkb.domain.visual_graph import EXTRACTION_PROMPT
 from ragkb.domain.visuals import (
@@ -298,6 +299,7 @@ class VisualAnalyzer(_GuardedModelAdapter):
         issues: list[str] = []
         extraction: VisualExtraction | None = None
         for attempt in range(self.settings.ocr_max_repair_attempts + 1):
+            phase = "extracting"
             prompt = EXTRACT_PROMPT + "\nUNTRUSTED_CONTEXT:\n" + context[:4000]
             if issues:
                 prompt += "\n重新检查原图，前次发现问题（禁止猜测修补）：" + json.dumps(
@@ -317,6 +319,7 @@ class VisualAnalyzer(_GuardedModelAdapter):
                 )
                 if progress:
                     progress("verifying")
+                phase = "verifying"
                 if self.settings.ocr_verify_enabled:
                     independent, receipt = self._call(
                         data,
@@ -392,6 +395,42 @@ class VisualAnalyzer(_GuardedModelAdapter):
                     }
                 if not issues:
                     issues = ["原图核对未通过，请检查遗漏内容或关系"]
+            except (InvalidProviderResponse, TransientProviderError) as error:
+                # Supplemental perception cannot discard a document's parsed body.
+                # Retain the candidate for manual review, never as verified evidence.
+                # Transport retries are already bounded; repairing the extraction
+                # prompt cannot resolve a rejected request or an unavailable provider.
+                code = (
+                    error.code
+                    if re.fullmatch(r"[A-Z][A-Z0-9_]{0,99}", error.code)
+                    else "OCR_PROVIDER_FAILED"
+                )
+                diagnostic: dict[str, Any] = {
+                    "stage": "provider_failed",
+                    "phase": phase,
+                    "attempt": attempt,
+                    "error_code": code,
+                    "retryable": isinstance(error, TransientProviderError),
+                }
+                response = getattr(error.__cause__, "response", None)
+                status = getattr(response, "status_code", None)
+                if isinstance(status, int) and 400 <= status <= 599:
+                    diagnostic["http_status"] = status
+                issues = [
+                    ("图片复核" if phase == "verifying" else "图片识别")
+                    + "接口调用失败，请稍后重试这张图或人工复核："
+                    + code
+                ]
+                audit.append(diagnostic)
+                return {
+                    "status": "needs_review",
+                    "extraction": extraction.model_dump() if extraction else None,
+                    "issues": issues,
+                    "audit": audit,
+                    "revision": self.revision,
+                    "error_code": code,
+                    "provider_failure": diagnostic,
+                }
             except (ValidationError, ValueError) as error:
                 # Never echo provider responses, credentials or base64 into public errors.
                 permanent = str(error) in {

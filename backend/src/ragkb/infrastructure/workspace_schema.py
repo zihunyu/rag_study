@@ -115,6 +115,60 @@ WORKSPACE_TABLES["conversation_turn_options"] = """
 """
 
 
+WORKSPACE_TABLES.update(
+    {
+        "acceptance_cases": """
+        id VARCHAR(191) PRIMARY KEY, tenant_id VARCHAR(191) NOT NULL,
+        space_id VARCHAR(191) NOT NULL, case_key VARCHAR(80) NOT NULL,
+        revision INTEGER NOT NULL, payload_json LONGTEXT NOT NULL,
+        updated_at DOUBLE NOT NULL, UNIQUE(tenant_id, space_id, case_key)
+    """,
+        "acceptance_case_revisions": """
+        case_id VARCHAR(191) NOT NULL, revision INTEGER NOT NULL,
+        payload_json LONGTEXT NOT NULL, actor_id VARCHAR(191) NOT NULL,
+        created_at DOUBLE NOT NULL, PRIMARY KEY(case_id, revision)
+    """,
+        "acceptance_runs": """
+        id VARCHAR(191) PRIMARY KEY, tenant_id VARCHAR(191) NOT NULL,
+        space_id VARCHAR(191) NOT NULL, actor_id VARCHAR(191) NOT NULL,
+        request_key VARCHAR(191) NOT NULL, payload_json LONGTEXT NOT NULL,
+        state VARCHAR(32) NOT NULL, reason VARCHAR(191) NOT NULL DEFAULT '',
+        call_limit INTEGER NOT NULL, calls_reserved INTEGER NOT NULL DEFAULT 0,
+        execution_token VARCHAR(191) NOT NULL DEFAULT '',
+        lease_until DOUBLE NOT NULL DEFAULT 0, pause_requested INTEGER NOT NULL DEFAULT 0,
+        created_at DOUBLE NOT NULL, updated_at DOUBLE NOT NULL,
+        UNIQUE(tenant_id, space_id, actor_id, request_key)
+    """,
+        "acceptance_attempts": """
+        id VARCHAR(191) PRIMARY KEY, run_id VARCHAR(191) NOT NULL,
+        case_id VARCHAR(191) NOT NULL, attempt INTEGER NOT NULL,
+        state VARCHAR(32) NOT NULL, payload_json LONGTEXT NOT NULL,
+        created_at DOUBLE NOT NULL, updated_at DOUBLE NOT NULL,
+        UNIQUE(run_id, case_id, attempt)
+    """,
+        "acceptance_reviews": """
+        id VARCHAR(191) PRIMARY KEY, attempt_id VARCHAR(191) NOT NULL,
+        actor_id VARCHAR(191) NOT NULL, verdict VARCHAR(32) NOT NULL,
+        note TEXT NOT NULL, created_at DOUBLE NOT NULL
+    """,
+        "acceptance_calls": """
+        id VARCHAR(191) PRIMARY KEY, run_id VARCHAR(191) NOT NULL,
+        attempt_id VARCHAR(191) NOT NULL, payload_json TEXT NOT NULL,
+        created_at DOUBLE NOT NULL
+    """,
+    }
+)
+WORKSPACE_INDEXES.update(
+    {
+        "idx_acceptance_cases_space": "acceptance_cases(tenant_id, space_id, updated_at)",
+        "idx_acceptance_runs_space": "acceptance_runs(tenant_id, space_id, created_at)",
+        "idx_acceptance_attempts_run": "acceptance_attempts(run_id, created_at)",
+        "idx_acceptance_reviews_attempt": "acceptance_reviews(attempt_id, created_at)",
+        "idx_acceptance_calls_run": "acceptance_calls(run_id, created_at)",
+    }
+)
+
+
 def mysql_workspace_migrations() -> tuple[tuple[str, str], ...]:
     tables = tuple(
         (

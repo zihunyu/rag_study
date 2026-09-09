@@ -122,11 +122,12 @@ def corpus(tmp_path: Path):
 
 
 @pytest.mark.parametrize("file_count", [2, 3])
-def test_one_answer_cites_each_selected_file_and_resolves_its_own_source(corpus, file_count):
+@pytest.mark.parametrize("mode", ["fact", "compare", "overview"])
+def test_one_answer_cites_each_selected_file_and_resolves_its_own_source(corpus, file_count, mode):
     components, client, space_id, documents = corpus
     expected_ids = {doc["document_id"] for doc in documents[:file_count]}
     # Empty document_ids is the default UI's entire-knowledge-base scope.
-    reading = {"mode": "fact"}
+    reading = {"mode": mode}
     if file_count == 2:
         reading["document_ids"] = sorted(expected_ids)
     search = client.post("/api/search", json={"query": QUESTION, "space_id": space_id})
@@ -148,6 +149,12 @@ def test_one_answer_cites_each_selected_file_and_resolves_its_own_source(corpus,
         assert fact not in result["answer"]
     package = components.rag_repository.get_package(result["rag_run_id"])
     assert {item.document_id for item in package.generation_evidence} == expected_ids
+    if mode in {"compare", "overview"}:
+        assert package.coverage_report["mode"] == "overview"
+        assert package.coverage_report["scope_complete"] is True
+        assert {
+            d["document_id"] for d in package.coverage_report["source_documents"]
+        } == expected_ids
     cited_documents = set()
     for citation in result["citations"]:
         evidence = components.rag_repository.get_evidence(
@@ -158,6 +165,35 @@ def test_one_answer_cites_each_selected_file_and_resolves_its_own_source(corpus,
         assert source.status_code == 200, source.text
         assert source.json()["text"] == (evidence.display_text or evidence.text)
     assert cited_documents == expected_ids
+
+
+@pytest.mark.parametrize("mode", ["fact", "compare"])
+def test_conflicting_current_files_cannot_publish_one_policy_as_the_answer(corpus, mode):
+    components, client, space_id, documents = corpus
+    conflicting = _upload(
+        client, components, space_id, "conflicting-warranty.md", "星云设备的保修期为五年。"
+    )
+    response = client.post(
+        "/api/ask",
+        json={
+            "question": "星云设备的保修期是多少年？",
+            "space_id": space_id,
+            "reading": {
+                "mode": mode,
+                "document_ids": [documents[0]["document_id"], conflicting["document_id"]],
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["status"] == "conflicting_evidence", result
+    assert result["answer"] is None and result["citations"] == []
+    assert "UNRESOLVED_POLICY_CONFLICT" in result["warnings"]
+    package = components.rag_repository.get_package(result["rag_run_id"])
+    assert {e.document_id for e in package.evidence} == {
+        documents[0]["document_id"],
+        conflicting["document_id"],
+    }
 
 
 def test_other_knowledge_base_and_unpublished_file_never_enter_answer(corpus):

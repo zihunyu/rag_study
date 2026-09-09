@@ -9,7 +9,7 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from email.utils import parsedate_to_datetime
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 import redis
@@ -108,16 +108,13 @@ class AccountLimiter:
             decode_responses=True,
         )
 
-    @contextmanager
-    def reserve(
-        self, url: str, headers: Mapping[str, str], payload: Mapping[str, Any], timeout: float
-    ) -> Iterator[tuple[list[str], str]]:
+    def _keys(self, url: str, headers: Mapping[str, str]) -> list[str]:
         material = self.settings.model_account_group or (
             str(urlsplit(url).hostname) + "\n" + headers.get("Authorization", "")
         )
         digest = hashlib.sha256(material.encode()).hexdigest()[:32]
         prefix = self.settings.redis_key_prefix + "account:{" + digest + "}:"
-        keys = [
+        return [
             prefix + value
             for value in (
                 "active",
@@ -130,6 +127,43 @@ class AccountLimiter:
                 "interactive_burst",
             )
         ]
+
+    def available_workers(self, url: str, headers: Mapping[str, str], per_call_tokens: int) -> int:
+        keys = self._keys(url, headers)
+        try:
+            capacity = self.redis.eval(
+                "local ids=redis.call('ZRANGEBYSCORE',KEYS[2],ARGV[1],'+inf'); local used=0; "
+                "for _,id in ipairs(ids) do used=used+tonumber(redis.ca"
+                "ll('HGET',KEYS[3],id) or '0') end; "
+                "return {redis.call('ZCOUNT',KEYS[1],ARGV[2],'+inf'),used,#ids,"
+                "redis.call('ZCARD',KEYS[5])+redis.call('ZCARD',KEYS[6]"
+                "),redis.call('GET',KEYS[4]) or '0'}",
+                len(keys),
+                *keys,
+                str(time.time() - 60),
+                str(time.time()),
+            )
+            slots, tokens, requests, waiting, cooldown = cast(list[Any], capacity)
+            if int(waiting) or float(cooldown) > time.time():
+                return 1
+            return max(
+                1,
+                min(
+                    3,
+                    self.settings.model_account_max_concurrency - int(slots),
+                    (self.settings.model_account_tokens_per_minute - int(tokens))
+                    // max(1, per_call_tokens),
+                    self.settings.model_account_requests_per_minute - int(requests),
+                ),
+            )
+        except redis.RedisError:
+            return 1  # Exact reservation still fails closed if the coordinator is unavailable.
+
+    @contextmanager
+    def reserve(
+        self, url: str, headers: Mapping[str, str], payload: Mapping[str, Any], timeout: float
+    ) -> Iterator[tuple[list[str], str]]:
+        keys = self._keys(url, headers)
         identity = uuid.uuid4().hex
         reserved = estimate_tokens(payload) + int(payload.get("max_tokens", 0))
         if reserved > self.settings.model_account_tokens_per_minute:

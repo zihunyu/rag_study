@@ -54,12 +54,14 @@ def test_verifier_failures_preserve_retry_policy(
             else response.json()
         )
         assert result["status"] == "system_error"
-        assert result["warnings"] == [warning]
+        assert result["warnings"] == [warning] + (
+            ["CLAIM_VERIFIER_TIMEOUT"] if failure is ProviderTimeout else []
+        )
         assert result["retryable"] is retryable
         assert result["verified"] is False
         assert result["answer"] is None and result["citations"] == []
         saved = runtime.rag_repository.get_result(result["rag_run_id"])
-        assert saved.retryable is retryable and saved.warnings == (warning,)
+        assert saved.retryable is retryable and saved.warnings == tuple(result["warnings"])
         assert "private-upstream-details" not in response.text
     assert len(calls) == 2  # Neither failure is cached as an answer.
 
@@ -115,7 +117,7 @@ def test_generator_returns_explicit_refusal_status_and_prompts_for_it(tmp_path):
     prompt = transport.calls[0]["payload"]["messages"][0]["content"]
     assert '"status":"insufficient_evidence"' in prompt
     assert "status (exactly answered or insufficient_evidence)" in prompt
-    assert generator.revision.endswith(":synthesized-markdown-v7-graph-fact-citations")
+    assert generator.revision.endswith(":synthesized-markdown-v15-citation-only-repair")
 
 
 @pytest.fixture

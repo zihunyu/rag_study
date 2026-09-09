@@ -12,7 +12,9 @@ from typing import Any
 
 from ragkb.adapters.conversation_context import ContextResolverPort, bounded_history
 from ragkb.application.cancellation import cancellation_scope, check_cancelled
+from ragkb.application.conversation_diagnostics import conversation_failure
 from ragkb.application.deadlines import request_deadline
+from ragkb.application.qa_performance import performance_report, performance_scope, timed_stage
 from ragkb.application.reading_scope import ReadingOptions, reading_scope
 from ragkb.domain.auth import RequestPrincipal
 from ragkb.domain.errors import IngestionCancelled
@@ -185,7 +187,14 @@ class ConversationService:
     def _execute(
         self, turn: dict[str, Any], conversation: dict[str, Any], subject: RequestPrincipal
     ) -> None:
+        with performance_scope():
+            self._execute_scoped(turn, conversation, subject)
+
+    def _execute_scoped(
+        self, turn: dict[str, Any], conversation: dict[str, Any], subject: RequestPrincipal
+    ) -> None:
         identity, token = turn["id"], new_uuid7()
+        phase = "conversation_context"
         done = threading.Event()
         lost_lease = threading.Event()
         heartbeat_thread: threading.Thread | None = None
@@ -241,7 +250,7 @@ class ConversationService:
                 request_deadline(
                     self.runtime.settings.overview_timeout_seconds
                     if reading.mode != "fact"
-                    else 120
+                    else self.runtime.settings.qa_fact_timeout_seconds
                 ),
             ):
                 rows = self.repository.turns(
@@ -258,9 +267,10 @@ class ConversationService:
                             "answer": result.get("answer") if result.get("verified") else "",
                         }
                     )
-                resolved = self.resolver.resolve(
-                    turn["original_question"], bounded_history(context)
-                )
+                with timed_stage("conversation.resolve"):
+                    resolved = self.resolver.resolve(
+                        turn["original_question"], bounded_history(context)
+                    )
                 check_cancelled()
                 if resolved.question is None:
                     self.repository.finish(
@@ -281,6 +291,7 @@ class ConversationService:
                     )
                     return
                 self.repository.stage(identity, token, resolved.question)
+                phase = "knowledge_qa"
                 self.runtime.lifecycle_store.reload()
                 result = self.runtime.qa_service.ask(
                     resolved.question,
@@ -293,6 +304,13 @@ class ConversationService:
                 check_cancelled()
                 payload = asdict(result)
                 payload.pop("evidence", None)
+                report = payload.setdefault("coverage_report", {})
+                qa_events = report.get("performance", {}).get("events", [])
+                conversation_performance = performance_report()
+                report["performance"] = {
+                    **conversation_performance,
+                    "events": conversation_performance.get("events", []) + qa_events,
+                }
                 if not result.verified:
                     payload.update(answer=None, citations=[])
                 self.repository.finish(
@@ -305,7 +323,8 @@ class ConversationService:
         except IngestionCancelled:
             self.repository.finish(identity, token, "cancelled")
         except Exception as error:
-            self.repository.finish(identity, token, "failed", error=type(error).__name__[:128])
+            failure = conversation_failure(error, phase, identity, performance_report())
+            self.repository.finish(identity, token, "failed", failure, error=failure["warnings"][0])
         finally:
             done.set()
             if heartbeat_thread:

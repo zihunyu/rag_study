@@ -258,12 +258,20 @@ class EnvSettings(BaseModel):
     overview_max_chunks: int = Field(default=1200, ge=30, le=20000)
     overview_max_images: int = Field(default=24, ge=1, le=200)
     overview_timeout_seconds: int = Field(default=900, ge=120, le=3600)
+    qa_fact_timeout_seconds: int = Field(default=300, ge=30, le=3600)
     overview_evidence_tokens: int = Field(default=18000, ge=2000, le=64000)
     verifier_base_url: str = ""
     verifier_api_key: SecretStr | None = None
     verifier_model: str = ""
     verifier_timeout_seconds: float = Field(default=30, gt=0)
+    verifier_total_timeout_seconds: float = Field(default=180, gt=0, le=900)
+    verifier_condition_batch_size: int = Field(default=16, ge=1, le=64)
+    verifier_condition_batch_characters: int = Field(default=6000, ge=500, le=18000)
+    verifier_max_condition_batches: int = Field(default=16, ge=1, le=64)
     verifier_max_concurrency: int = Field(default=4, gt=0)
+    verifier_condition_parallelism: int = Field(default=3, ge=1, le=3)
+    qa_visual_dependency_planning: bool = True
+    qa_exact_result_cache_enabled: bool = True
     model_http_connect_timeout_seconds: float = Field(default=10, gt=0)
     model_http_pool_timeout_seconds: float = Field(default=10, gt=0)
     model_http_max_connections: int = Field(default=100, gt=0)

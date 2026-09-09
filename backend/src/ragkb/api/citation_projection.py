@@ -2,11 +2,43 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
+
+from openpyxl.utils.cell import get_column_letter, range_boundaries
+
+
+def _parent_cell_range(locator: dict[str, Any]) -> str | None:
+    """Only merge witnessed, contiguous rows with the same columns and sheet."""
+    spans = locator.get("source_spans")
+    if not isinstance(spans, list) or not spans:
+        return None
+    bounds = []
+    sheet = locator.get("sheet", locator.get("sheet_name"))
+    for span in spans:
+        child = span.get("locator") if isinstance(span, dict) else None
+        if not isinstance(child, dict) or child.get("sheet", child.get("sheet_name")) != sheet:
+            return None
+        value = child.get("cell_range")
+        if not isinstance(value, str):
+            return None
+        try:
+            boundary = range_boundaries(value)
+        except ValueError:
+            return None
+        if any(n is None for n in boundary):
+            return None
+        bounds.append(cast(tuple[int, int, int, int], boundary))
+    ordered = sorted(bounds, key=lambda b: b[1])
+    left, top, right, bottom = ordered[0]
+    for a, start, b, end in ordered:
+        if (a, b) != (left, right) or start > bottom + 1:
+            return None
+        bottom = max(bottom, end)
+    return f"{get_column_letter(left)}{top}:{get_column_letter(right)}{bottom}"
 
 
 def citation_locator(locator: dict[str, Any]) -> dict[str, Any]:
-    return {
+    projected = {
         key: value
         for key, value in locator.items()
         if key
@@ -36,6 +68,15 @@ def citation_locator(locator: dict[str, Any]) -> dict[str, Any]:
             "source_type",
         }
     }
+    if locator.get("is_parent") and "cell_range" in projected:
+        # A parent inherits its first child's locator during chunking. Its
+        # displayed text may cover many rows; never label it as just row 1.
+        cell_range = _parent_cell_range(locator)
+        if cell_range:
+            projected["cell_range"] = cell_range
+        else:
+            projected.pop("cell_range")
+    return projected
 
 
 def cited_asset_ids(locator: dict[str, Any]) -> list[str]:
@@ -76,6 +117,92 @@ def reader_report(report: dict[str, Any]) -> dict[str, Any]:
             for k, v in report["conditions"].items()
             if k in {"checked", "covered", "missing", "not_applicable", "complete"}
             and isinstance(v, (int, bool))
+        }
+    failure = report.get("verification_failure")
+    if isinstance(failure, dict):
+        value["verification_failure"] = {
+            k: v
+            for k, v in failure.items()
+            if (
+                k
+                in {
+                    "batch_number",
+                    "batch_count",
+                    "completed_batches",
+                    "condition_count",
+                    "http_status",
+                }
+                and type(v) is int
+            )
+            or (
+                k == "stage"
+                and v
+                in {
+                    "claims_and_conflicts",
+                    "conditions",
+                    "condition_repair",
+                    "citation_repair",
+                    "answer_surface_repair",
+                }
+            )
+            or (
+                k == "provider_code"
+                and v
+                in {
+                    "MODEL_ACCOUNT_QUOTA_WAIT_TIMEOUT",
+                    "MODEL_PROVIDER_DEADLINE_EXCEEDED",
+                    "MODEL_PROVIDER_TIMEOUT",
+                    "MODEL_PROVIDER_RATE_LIMITED",
+                }
+            )
+        }
+    execution_failure = report.get("execution_failure")
+    if isinstance(execution_failure, dict):
+        from ragkb.application.conversation_diagnostics import PUBLIC_CONVERSATION_CODES
+
+        value["execution_failure"] = {
+            k: v
+            for k, v in execution_failure.items()
+            if (
+                k == "stage"
+                and isinstance(v, str)
+                and v in {"conversation_context", "knowledge_qa"}
+            )
+            or (k == "code" and isinstance(v, str) and v in PUBLIC_CONVERSATION_CODES)
+            or (k == "http_status" and type(v) is int and 400 <= v <= 599)
+            or (
+                k == "request_id"
+                and isinstance(v, str)
+                and len(v) == 36
+                and all(c in "0123456789abcdef-" for c in v)
+            )
+        }
+    performance = report.get("performance")
+    if isinstance(performance, dict) and type(performance.get("elapsed_seconds")) in {int, float}:
+        value["performance"] = {
+            "elapsed_seconds": performance["elapsed_seconds"],
+            "events": [
+                {
+                    k: v
+                    for k, v in event.items()
+                    if k
+                    in {
+                        "kind",
+                        "name",
+                        "seconds",
+                        "status",
+                        "batch_number",
+                        "sent",
+                        "queue_seconds",
+                        "network_seconds",
+                        "cache",
+                        "outcome",
+                    }
+                    and type(v) in {str, int, float, bool}
+                }
+                for event in performance.get("events", [])[:512]
+                if isinstance(event, dict)
+            ],
         }
     value["image_checks"] = [
         {"status": c["status"]}

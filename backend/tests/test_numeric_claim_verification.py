@@ -109,6 +109,47 @@ def test_semantic_success_cannot_override_known_failure(
     assert semantic.calls == 0
 
 
+@pytest.mark.parametrize("supported", [True, False])
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "R9 功率减少 70 W，计算为 480 - 410 = 70 W。",
+        "计算：R9 从常温变为低温时，额定功率减少 480 W - 410 W = 70 W。",
+    ],
+)
+def test_grounded_explicit_calculation_requires_independent_semantic_check(supported, claim):
+    semantic = RecordingSemanticVerifier(supported=supported)
+    evidence = (_evidence(text="型号 | 常温功率 | 低温功率\nR9 | 480 | 410"),)
+    result = CompositeClaimVerifier(DeterministicClaimVerifier(), semantic).verify(
+        "R9 功率减少多少？", _draft(claim), evidence
+    )
+    assert semantic.calls == 1
+    assert result.supported is supported
+
+
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "R9 功率减少 70 W。",  # No inspectable derivation.
+        "R9 功率减少 80 W，计算为 480 - 410 = 80 W。",  # Wrong arithmetic.
+        "R9 功率减少 70 W，计算为 490 - 420 = 70 W。",  # Missing operands.
+        "R9 功率减少 70 W，计算为 480 - 410 = 70 W；电压 220 V。",  # Extra invention.
+        "R9 功率减少 80 W，计算为 480 W - 410 W = 80 W。",
+        "R9 功率减少 70 W，计算为 480 W - 410 V = 70 W。",  # Mixed dimensions.
+        "R9 功率减少 70 W，计算为 480 kW - 410 W = 70 W。",  # Unconverted scales.
+    ],
+)
+def test_invalid_or_unbound_calculations_still_fail_before_semantic_review(claim):
+    semantic = RecordingSemanticVerifier()
+    result = CompositeClaimVerifier(DeterministicClaimVerifier(), semantic).verify(
+        "R9 功率减少多少？",
+        _draft(claim),
+        (_evidence(text="型号 | 常温功率 | 低温功率\nR9 | 480 | 410"),),
+    )
+    assert not result.supported
+    assert semantic.calls == 0
+
+
 @pytest.mark.parametrize(
     "flag", ["citation_ids_valid", "answer_claims_covered", "conflict_checked", "policy_checked"]
 )

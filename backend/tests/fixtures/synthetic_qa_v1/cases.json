@@ -1,0 +1,1011 @@
+{
+  "dataset_id": "synthetic-qa-v1",
+  "schema_version": "synthetic-cases-1",
+  "synthetic": true,
+  "review_state": "source_checked_candidate",
+  "description": "人工编写的合成原文和问题，逐条校验依据；不是独立人工签署的业务标准答案，也不是已通过模型验收的结果。",
+  "cases": [
+    {
+      "id": "Q01",
+      "category": "单文件事实",
+      "knowledge_base": "main",
+      "reading": {
+        "mode": "fact",
+        "document_keys": [
+          "D02"
+        ]
+      },
+      "question": "澄星 R9 保修多久，从什么时候开始？",
+      "history": [],
+      "allowed_statuses": [
+        "answered"
+      ],
+      "answer_example": "保修三年，自购买凭证记载的购买日期起计算。",
+      "required_points": [
+        {
+          "meaning": "三年，起算时间为购买凭证记载的购买日期",
+          "fact_ids": [
+            "W1"
+          ],
+          "check_target": "answer"
+        }
+      ],
+      "required_source_documents": [
+        "D02"
+      ],
+      "minimum_distinct_cited_documents": 1,
+      "unknown_items": [],
+      "forbidden_claims": [],
+      "review_state": "source_checked_candidate",
+      "execution_state": "not_run"
+    },
+    {
+      "id": "Q02",
+      "category": "表格条件归属",
+      "knowledge_base": "main",
+      "reading": {
+        "mode": "fact",
+        "document_keys": [
+          "D01"
+        ]
+      },
+      "question": "澄星 R9 在常温和低温下的额定功率分别是多少？",
+      "history": [],
+      "allowed_statuses": [
+        "answered"
+      ],
+      "answer_example": "常温为 480 W，低温为 410 W。",
+      "required_points": [
+        {
+          "meaning": "常温 480 W",
+          "fact_ids": [
+            "P1"
+          ],
+          "check_target": "answer"
+        },
+        {
+          "meaning": "低温 410 W",
+          "fact_ids": [
+            "P2"
+          ],
+          "check_target": "answer"
+        }
+      ],
+      "required_source_documents": [
+        "D01"
+      ],
+      "minimum_distinct_cited_documents": 1,
+      "unknown_items": [],
+      "forbidden_claims": [
+        "把低温功率说成 480 W",
+        "把常温功率说成 410 W"
+      ],
+      "review_state": "source_checked_candidate",
+      "execution_state": "not_run"
+    },
+    {
+      "id": "Q03",
+      "category": "对象区分",
+      "knowledge_base": "main",
+      "reading": {
+        "mode": "fact",
+        "document_keys": []
+      },
+      "question": "岚舟 S2 常温额定功率和保修期是多少？",
+      "history": [],
+      "allowed_statuses": [
+        "answered"
+      ],
+      "answer_example": "常温额定功率 300 W；整机保修两年，自购买凭证记载的购买日期起算。",
+      "required_points": [
+        {
+          "meaning": "岚舟 S2 常温功率 300 W",
+          "fact_ids": [
+            "P3"
+          ],
+          "check_target": "answer"
+        },
+        {
+          "meaning": "岚舟 S2 保修两年及购买日期起算",
+          "fact_ids": [
+            "W2"
+          ],
+          "check_target": "answer"
+        }
+      ],
+      "required_source_documents": [
+        "D01",
+        "D02"
+      ],
+      "minimum_distinct_cited_documents": 2,
+      "unknown_items": [],
+      "forbidden_claims": [
+        "把澄星 R9 的三年保修或 480 W 套到岚舟 S2"
+      ],
+      "review_state": "source_checked_candidate",
+      "execution_state": "not_run"
+    },
+    {
+      "id": "Q04",
+      "category": "PDF 期限",
+      "knowledge_base": "main",
+      "reading": {
+        "mode": "fact",
+        "document_keys": [
+          "D03"
+        ]
+      },
+      "question": "澄星 R9 取消服务合同后，服务费何时退、退到哪里？",
+      "history": [],
+      "allowed_statuses": [
+        "answered"
+      ],
+      "answer_example": "自取消申请受理之日起十五个自然日内退回原支付账户。",
+      "required_points": [
+        {
+          "meaning": "十五个自然日，从取消申请受理之日起算，原支付账户",
+          "fact_ids": [
+            "R1"
+          ],
+          "check_target": "answer"
+        }
+      ],
+      "required_source_documents": [
+        "D03"
+      ],
+      "minimum_distinct_cited_documents": 1,
+      "unknown_items": [],
+      "forbidden_claims": [
+        "十五个工作日",
+        "从设备购买日起算"
+      ],
+      "review_state": "source_checked_candidate",
+      "execution_state": "not_run"
+    },
+    {
+      "id": "Q05",
+      "category": "双文件综合",
+      "knowledge_base": "main",
+      "reading": {
+        "mode": "fact",
+        "document_keys": [
+          "D01",
+          "D02"
+        ]
+      },
+      "question": "澄星 R9 的保修期、起算时间、常温功率和电池容量分别是多少？",
+      "history": [],
+      "allowed_statuses": [
+        "answered"
+      ],
+      "answer_example": "三年，自购买日期起算；常温 480 W，电池容量 960 Wh。",
+      "required_points": [
+        {
+          "meaning": "三年及购买凭证日期起算",
+          "fact_ids": [
+            "W1"
+          ],
+          "check_target": "answer"
+        },
+        {
+          "meaning": "常温 480 W，电池容量 960 Wh",
+          "fact_ids": [
+            "P1"
+          ],
+          "check_target": "answer"
+        }
+      ],
+      "required_source_documents": [
+        "D01",
+        "D02"
+      ],
+      "minimum_distinct_cited_documents": 2,
+      "unknown_items": [],
+      "forbidden_claims": [],
+      "review_state": "source_checked_candidate",
+      "execution_state": "not_run"
+    },
+    {
+      "id": "Q06",
+      "category": "三文件综合",
+      "knowledge_base": "main",
+      "reading": {
+        "mode": "fact",
+        "document_keys": [
+          "D01",
+          "D02",
+          "D03"
+        ]
+      },
+      "question": "请汇总澄星 R9 的保修期及起算时间、常温与低温功率，以及取消服务合同后的服务费退款期限和去向。",
+      "history": [],
+      "allowed_statuses": [
+        "answered"
+      ],
+      "answer_example": "保修三年，自购买凭证日期起算；常温 480 W、低温 410 W；服务费自取消申请受理之日起十五个自然日内原路退回。",
+      "required_points": [
+        {
+          "meaning": "保修三年及起算点",
+          "fact_ids": [
+            "W1"
+          ],
+          "check_target": "answer"
+        },
+        {
+          "meaning": "常温 480 W 和低温 410 W",
+          "fact_ids": [
+            "P1",
+            "P2"
+          ],
+          "check_target": "answer"
+        },
+        {
+          "meaning": "服务费退款十五个自然日、受理之日起算、原支付账户",
+          "fact_ids": [
+            "R1"
+          ],
+          "check_target": "answer"
+        }
+      ],
+      "required_source_documents": [
+        "D01",
+        "D02",
+        "D03"
+      ],
+      "minimum_distinct_cited_documents": 3,
+      "unknown_items": [],
+      "forbidden_claims": [],
+      "review_state": "source_checked_candidate",
+      "execution_state": "not_run"
+    },
+    {
+      "id": "Q07",
+      "category": "综合模式",
+      "knowledge_base": "main",
+      "reading": {
+        "mode": "compare",
+        "document_keys": [
+          "D02",
+          "D04",
+          "D05"
+        ]
+      },
+      "question": "综合保修条款、维修预约规则和服务网点表，说明澄星 R9 免费上门维修的条件、材料、预约时段和对应网点。",
+      "history": [],
+      "allowed_statuses": [
+        "answered"
+      ],
+      "answer_example": "需在保修期内且位于城区，进水或擅自拆机造成损坏除外；提交购买凭证、设备序列号和客户编号；至少提前一个工作日预约，周一至周五 09:00-18:00；对应 CX-A 青桐服务站。",
+      "required_points": [
+        {
+          "meaning": "保修期内且城区",
+          "fact_ids": [
+            "A1"
+          ],
+          "check_target": "answer"
+        },
+        {
+          "meaning": "进水和擅自拆机损坏除外",
+          "fact_ids": [
+            "W4"
+          ],
+          "check_target": "answer"
+        },
+        {
+          "meaning": "购买凭证、设备序列号和客户编号",
+          "fact_ids": [
+            "W3",
+            "A3"
+          ],
+          "check_target": "answer"
+        },
+        {
+          "meaning": "提前一个工作日、周一至周五 09:00 至 18:00",
+          "fact_ids": [
+            "A2"
+          ],
+          "check_target": "answer"
+        },
+        {
+          "meaning": "CX-A 青桐服务站上门服务",
+          "fact_ids": [
+            "S1"
+          ],
+          "check_target": "answer"
+        }
+      ],
+      "required_source_documents": [
+        "D02",
+        "D04",
+        "D05"
+      ],
+      "minimum_distinct_cited_documents": 3,
+      "unknown_items": [],
+      "forbidden_claims": [],
+      "review_state": "source_checked_candidate",
+      "execution_state": "not_run"
+    },
+    {
+      "id": "Q08",
+      "category": "并列条件",
+      "knowledge_base": "main",
+      "reading": {
+        "mode": "fact",
+        "document_keys": []
+      },
+      "question": "澄星 R9 还在保修期内，但设备在郊区，可以免费上门维修吗？",
+      "history": [],
+      "allowed_statuses": [
+        "answered"
+      ],
+      "answer_example": "不符合免费上门范围，因为还必须位于城区。",
+      "required_points": [
+        {
+          "meaning": "保修期内与城区是同时满足的条件，郊区不满足",
+          "fact_ids": [
+            "A1"
+          ],
+          "check_target": "answer"
+        }
+      ],
+      "required_source_documents": [
+        "D04"
+      ],
+      "minimum_distinct_cited_documents": 1,
+      "unknown_items": [],
+      "forbidden_claims": [
+        "只因在保修期内就承诺免费上门"
+      ],
+      "review_state": "source_checked_candidate",
+      "execution_state": "not_run"
+    },
+    {
+      "id": "Q09",
+      "category": "否定例外",
+      "knowledge_base": "main",
+      "reading": {
+        "mode": "fact",
+        "document_keys": []
+      },
+      "question": "澄星 R9 在城区且未过保，但进水损坏，可以免费上门保修吗？",
+      "history": [],
+      "allowed_statuses": [
+        "answered"
+      ],
+      "answer_example": "不能据此获得免费保修，进水损坏属于免费保修除外情形。",
+      "required_points": [
+        {
+          "meaning": "城区及保修期内只是基本前提",
+          "fact_ids": [
+            "A1"
+          ],
+          "check_target": "answer"
+        },
+        {
+          "meaning": "进水损坏不在免费保修范围",
+          "fact_ids": [
+            "W4"
+          ],
+          "check_target": "answer"
+        }
+      ],
+      "required_source_documents": [
+        "D02",
+        "D04"
+      ],
+      "minimum_distinct_cited_documents": 2,
+      "unknown_items": [],
+      "forbidden_claims": [
+        "忽略进水损坏例外并承诺免费维修"
+      ],
+      "review_state": "source_checked_candidate",
+      "execution_state": "not_run"
+    },
+    {
+      "id": "Q10",
+      "category": "跨文件材料合并",
+      "knowledge_base": "main",
+      "reading": {
+        "mode": "fact",
+        "document_keys": [
+          "D02",
+          "D04"
+        ]
+      },
+      "question": "预约澄星 R9 上门保修，需要准备哪些编号或凭证？",
+      "history": [],
+      "allowed_statuses": [
+        "answered"
+      ],
+      "answer_example": "客户编号、购买凭证和设备序列号。",
+      "required_points": [
+        {
+          "meaning": "客户编号",
+          "fact_ids": [
+            "A3"
+          ],
+          "check_target": "answer"
+        },
+        {
+          "meaning": "购买凭证和设备序列号",
+          "fact_ids": [
+            "W3"
+          ],
+          "check_target": "answer"
+        }
+      ],
+      "required_source_documents": [
+        "D02",
+        "D04"
+      ],
+      "minimum_distinct_cited_documents": 2,
+      "unknown_items": [],
+      "forbidden_claims": [
+        "只要求客户编号，遗漏购买凭证或设备序列号"
+      ],
+      "review_state": "source_checked_candidate",
+      "execution_state": "not_run"
+    },
+    {
+      "id": "Q11",
+      "category": "跨文件关联",
+      "knowledge_base": "main",
+      "reading": {
+        "mode": "fact",
+        "document_keys": [
+          "D04",
+          "D05"
+        ]
+      },
+      "question": "岚舟 S2 应选择哪个维修网点？请给出站点编码、名称和受理时段。",
+      "history": [],
+      "allowed_statuses": [
+        "answered"
+      ],
+      "answer_example": "岚舟 S2 采用寄修，应选 CX-B 白沙维修站，工作日 10:00-17:00 受理。",
+      "required_points": [
+        {
+          "meaning": "岚舟 S2 仅寄修且应选寄修站点",
+          "fact_ids": [
+            "A4"
+          ],
+          "check_target": "answer"
+        },
+        {
+          "meaning": "CX-B 白沙维修站，工作日 10:00-17:00",
+          "fact_ids": [
+            "S2"
+          ],
+          "check_target": "answer"
+        }
+      ],
+      "required_source_documents": [
+        "D04",
+        "D05"
+      ],
+      "minimum_distinct_cited_documents": 2,
+      "unknown_items": [],
+      "forbidden_claims": [
+        "选择 CX-A 上门站或 CX-C 咨询点处理寄修"
+      ],
+      "review_state": "source_checked_candidate",
+      "execution_state": "not_run"
+    },
+    {
+      "id": "Q12",
+      "category": "服务方式区分",
+      "knowledge_base": "main",
+      "reading": {
+        "mode": "fact",
+        "document_keys": []
+      },
+      "question": "岚舟 S2 在城区，可以像澄星 R9 一样预约上门维修吗？",
+      "history": [],
+      "allowed_statuses": [
+        "answered"
+      ],
+      "answer_example": "不可以，岚舟 S2 仅提供寄修，不提供上门维修。",
+      "required_points": [
+        {
+          "meaning": "岚舟 S2 仅寄修、不提供上门维修",
+          "fact_ids": [
+            "A4"
+          ],
+          "check_target": "answer"
+        }
+      ],
+      "required_source_documents": [
+        "D04"
+      ],
+      "minimum_distinct_cited_documents": 1,
+      "unknown_items": [],
+      "forbidden_claims": [
+        "把澄星 R9 的城区上门政策套到岚舟 S2"
+      ],
+      "review_state": "source_checked_candidate",
+      "execution_state": "not_run"
+    },
+    {
+      "id": "Q13",
+      "category": "期限单位区分",
+      "knowledge_base": "main",
+      "reading": {
+        "mode": "fact",
+        "document_keys": [
+          "D03"
+        ]
+      },
+      "question": "两种设备取消服务合同后的服务费退款期限有什么区别？",
+      "history": [],
+      "allowed_statuses": [
+        "answered"
+      ],
+      "answer_example": "澄星 R9 为十五个自然日，岚舟 S2 为七个工作日；均从取消申请受理日起算，并退回原支付账户。",
+      "required_points": [
+        {
+          "meaning": "R9 十五个自然日、受理日起算、原支付账户",
+          "fact_ids": [
+            "R1"
+          ],
+          "check_target": "answer"
+        },
+        {
+          "meaning": "S2 七个工作日、受理日起算、原支付账户",
+          "fact_ids": [
+            "R2"
+          ],
+          "check_target": "answer"
+        }
+      ],
+      "required_source_documents": [
+        "D03"
+      ],
+      "minimum_distinct_cited_documents": 1,
+      "unknown_items": [],
+      "forbidden_claims": [
+        "把两种期限都说成自然日或都说成工作日"
+      ],
+      "review_state": "source_checked_candidate",
+      "execution_state": "not_run"
+    },
+    {
+      "id": "Q14",
+      "category": "退款对象边界",
+      "knowledge_base": "main",
+      "reading": {
+        "mode": "fact",
+        "document_keys": [
+          "D03"
+        ]
+      },
+      "question": "取消澄星 R9 服务合同后，设备购买价款也会在十五个自然日内自动退回吗？",
+      "history": [],
+      "allowed_statuses": [
+        "answered"
+      ],
+      "answer_example": "不能如此判断。十五个自然日的退款条款仅针对服务费，不包括设备购买价款；设备订单也不会自动取消。",
+      "required_points": [
+        {
+          "meaning": "十五个自然日针对服务费",
+          "fact_ids": [
+            "R1",
+            "R3"
+          ],
+          "check_target": "answer"
+        },
+        {
+          "meaning": "取消服务合同不会自动取消设备订单",
+          "fact_ids": [
+            "R4"
+          ],
+          "check_target": "answer"
+        }
+      ],
+      "required_source_documents": [
+        "D03"
+      ],
+      "minimum_distinct_cited_documents": 1,
+      "unknown_items": [],
+      "forbidden_claims": [
+        "承诺设备价款按服务费条款自动退款"
+      ],
+      "review_state": "source_checked_candidate",
+      "execution_state": "not_run"
+    },
+    {
+      "id": "Q15",
+      "category": "跨文件流程",
+      "knowledge_base": "main",
+      "reading": {
+        "mode": "fact",
+        "document_keys": [
+          "D03",
+          "D06"
+        ]
+      },
+      "question": "我取消了澄星 R9 服务合同，设备订单尚未出库。设备订单是否也自动取消，应该怎么办？",
+      "history": [],
+      "allowed_statuses": [
+        "answered"
+      ],
+      "answer_example": "不会自动取消；需要单独申请取消设备订单，尚未出库的订单可以申请取消。",
+      "required_points": [
+        {
+          "meaning": "服务合同取消不自动取消设备订单，需单独申请",
+          "fact_ids": [
+            "R4"
+          ],
+          "check_target": "answer"
+        },
+        {
+          "meaning": "出库前设备订单可以申请取消",
+          "fact_ids": [
+            "L3"
+          ],
+          "check_target": "answer"
+        }
+      ],
+      "required_source_documents": [
+        "D03",
+        "D06"
+      ],
+      "minimum_distinct_cited_documents": 2,
+      "unknown_items": [],
+      "forbidden_claims": [],
+      "review_state": "source_checked_candidate",
+      "execution_state": "not_run"
+    },
+    {
+      "id": "Q16",
+      "category": "出库状态边界",
+      "knowledge_base": "main",
+      "reading": {
+        "mode": "fact",
+        "document_keys": [
+          "D03",
+          "D06"
+        ]
+      },
+      "question": "设备已出库，取消服务合同后还能直接取消设备订单吗？",
+      "history": [],
+      "allowed_statuses": [
+        "answered"
+      ],
+      "answer_example": "服务合同取消不会自动取消设备订单；已出库不能直接取消，需要按退货流程处理。",
+      "required_points": [
+        {
+          "meaning": "两个取消流程独立",
+          "fact_ids": [
+            "R4"
+          ],
+          "check_target": "answer"
+        },
+        {
+          "meaning": "出库后不能直接取消，需走退货流程",
+          "fact_ids": [
+            "L3"
+          ],
+          "check_target": "answer"
+        }
+      ],
+      "required_source_documents": [
+        "D03",
+        "D06"
+      ],
+      "minimum_distinct_cited_documents": 2,
+      "unknown_items": [],
+      "forbidden_claims": [
+        "承诺出库后直接取消订单"
+      ],
+      "review_state": "source_checked_candidate",
+      "execution_state": "not_run"
+    },
+    {
+      "id": "Q17",
+      "category": "有依据的计算",
+      "knowledge_base": "main",
+      "reading": {
+        "mode": "fact",
+        "document_keys": [
+          "D01"
+        ]
+      },
+      "question": "澄星 R9 从常温变为低温时，额定功率减少多少瓦？",
+      "history": [],
+      "allowed_statuses": [
+        "answered"
+      ],
+      "answer_example": "减少 70 W，由 480 W 减去 410 W 得到。",
+      "required_points": [
+        {
+          "meaning": "常温 480 W、低温 410 W",
+          "fact_ids": [
+            "P1",
+            "P2"
+          ],
+          "check_target": "answer"
+        },
+        {
+          "meaning": "差值 70 W，表达为计算所得",
+          "fact_ids": [
+            "P1",
+            "P2"
+          ],
+          "check_target": "answer"
+        }
+      ],
+      "required_source_documents": [
+        "D01"
+      ],
+      "minimum_distinct_cited_documents": 1,
+      "unknown_items": [],
+      "forbidden_claims": [],
+      "review_state": "source_checked_candidate",
+      "execution_state": "not_run",
+      "calculation": {
+        "operation": "subtract",
+        "source_fact_ids": [
+          "P1",
+          "P2"
+        ],
+        "column": "额定功率(W)",
+        "expected_value": 70,
+        "unit": "W"
+      }
+    },
+    {
+      "id": "Q18",
+      "category": "部分可回答",
+      "knowledge_base": "main",
+      "reading": {
+        "mode": "fact",
+        "document_keys": []
+      },
+      "question": "澄星 R9 的常温功率、保修期和额定电压分别是多少？",
+      "history": [],
+      "allowed_statuses": [
+        "answered"
+      ],
+      "answer_example": "常温 480 W，保修三年，自购买凭证日期起算；资料没有提供额定电压。",
+      "required_points": [
+        {
+          "meaning": "常温 480 W",
+          "fact_ids": [
+            "P1"
+          ],
+          "check_target": "answer"
+        },
+        {
+          "meaning": "三年及起算日期",
+          "fact_ids": [
+            "W1"
+          ],
+          "check_target": "answer"
+        }
+      ],
+      "required_source_documents": [
+        "D01",
+        "D02"
+      ],
+      "minimum_distinct_cited_documents": 2,
+      "unknown_items": [
+        "澄星 R9 额定电压"
+      ],
+      "forbidden_claims": [
+        "编造 220 V、24 V 或其他电压值"
+      ],
+      "review_state": "source_checked_candidate",
+      "execution_state": "not_run"
+    },
+    {
+      "id": "Q19",
+      "category": "全无答案",
+      "knowledge_base": "main",
+      "reading": {
+        "mode": "fact",
+        "document_keys": []
+      },
+      "question": "两种设备的客服电话和退货运费是多少？",
+      "history": [],
+      "allowed_statuses": [
+        "insufficient_evidence",
+        "answered"
+      ],
+      "answer_example": "现有资料没有提供客服电话或退货运费，无法确定。",
+      "required_points": [],
+      "required_source_documents": [],
+      "minimum_distinct_cited_documents": 0,
+      "unknown_items": [
+        "客服电话",
+        "退货运费"
+      ],
+      "forbidden_claims": [
+        "编造电话、免费退货或具体运费"
+      ],
+      "review_state": "source_checked_candidate",
+      "execution_state": "not_run"
+    },
+    {
+      "id": "Q20",
+      "category": "文件范围",
+      "knowledge_base": "main",
+      "reading": {
+        "mode": "fact",
+        "document_keys": [
+          "D01"
+        ]
+      },
+      "question": "仅依据设备参数表，澄星 R9 保修多久？",
+      "history": [],
+      "allowed_statuses": [
+        "insufficient_evidence",
+        "answered"
+      ],
+      "answer_example": "所选参数表没有保修期限，无法据此回答。",
+      "required_points": [],
+      "required_source_documents": [],
+      "minimum_distinct_cited_documents": 0,
+      "unknown_items": [
+        "保修期限"
+      ],
+      "forbidden_claims": [
+        "使用未选中的保修条款回答三年",
+        "引用 D02"
+      ],
+      "review_state": "source_checked_candidate",
+      "execution_state": "not_run"
+    },
+    {
+      "id": "Q21",
+      "category": "跨库与草稿隔离",
+      "knowledge_base": "main",
+      "reading": {
+        "mode": "fact",
+        "document_keys": []
+      },
+      "question": "请按本知识库已发布资料回答澄星 R9 的保修期。",
+      "history": [],
+      "allowed_statuses": [
+        "answered"
+      ],
+      "answer_example": "三年，自购买凭证记载的购买日期起算。",
+      "required_points": [
+        {
+          "meaning": "已发布保修期三年及起算日期",
+          "fact_ids": [
+            "W1"
+          ],
+          "check_target": "answer"
+        }
+      ],
+      "required_source_documents": [
+        "D02"
+      ],
+      "minimum_distinct_cited_documents": 1,
+      "unknown_items": [],
+      "forbidden_claims": [
+        "九十九年",
+        "八年",
+        "北辰档案",
+        "远帆草案",
+        "使用 D09 或 D10 作为依据"
+      ],
+      "review_state": "source_checked_candidate",
+      "execution_state": "not_run"
+    },
+    {
+      "id": "Q22",
+      "category": "非法文件选择",
+      "knowledge_base": "main",
+      "reading": {
+        "mode": "fact",
+        "document_keys": [
+          "D09",
+          "D10"
+        ]
+      },
+      "question": "请从指定资料中回答澄星 R9 的保修期。",
+      "history": [],
+      "allowed_statuses": [
+        "insufficient_evidence"
+      ],
+      "answer_example": "指定资料不在当前可读取范围，无法回答。",
+      "required_points": [],
+      "required_source_documents": [],
+      "minimum_distinct_cited_documents": 0,
+      "unknown_items": [],
+      "forbidden_claims": [
+        "引用外库 D09 或未发布 D10",
+        "发布任何保修年限答案"
+      ],
+      "review_state": "source_checked_candidate",
+      "execution_state": "not_run"
+    },
+    {
+      "id": "Q23",
+      "category": "冲突拒答",
+      "knowledge_base": "conflict",
+      "reading": {
+        "mode": "fact",
+        "document_keys": []
+      },
+      "question": "澄星 R9 服务费退款到底是十五天还是三十天？",
+      "history": [],
+      "allowed_statuses": [
+        "conflicting_evidence"
+      ],
+      "answer_example": "页面应提示两份资料冲突；当前 API 预期 status=conflicting_evidence、answer=null、citations=[]。",
+      "required_points": [
+        {
+          "meaning": "两份当前有效资料相互矛盾，不能自行选优先级",
+          "fact_ids": [
+            "C1",
+            "C2"
+          ],
+          "check_target": "retrieved_evidence"
+        }
+      ],
+      "required_source_documents": [],
+      "minimum_distinct_cited_documents": 0,
+      "unknown_items": [],
+      "forbidden_claims": [
+        "按文件顺序或文件名选一个期限",
+        "发布已验证的单一期限答案"
+      ],
+      "review_state": "source_checked_candidate",
+      "execution_state": "not_run",
+      "required_retrieved_documents": [
+        "D07",
+        "D08"
+      ]
+    },
+    {
+      "id": "Q24",
+      "category": "历史与本轮范围隔离",
+      "knowledge_base": "main",
+      "reading": {
+        "mode": "fact",
+        "document_keys": [
+          "D01"
+        ]
+      },
+      "question": "仅依据本轮选中的参数表，澄星 R9 保修多久？不要沿用之前回答。",
+      "history": [
+        {
+          "role": "user",
+          "content": "澄星 R9 保修多久？",
+          "reading": {
+            "mode": "fact",
+            "document_keys": [
+              "D02"
+            ]
+          }
+        },
+        {
+          "role": "assistant",
+          "content": "三年，自购买凭证记载的购买日期起算。",
+          "grounded_fact_ids": [
+            "W1"
+          ]
+        }
+      ],
+      "allowed_statuses": [
+        "insufficient_evidence",
+        "answered"
+      ],
+      "answer_example": "本轮选中的参数表没有保修期限，无法回答。",
+      "required_points": [],
+      "required_source_documents": [],
+      "minimum_distinct_cited_documents": 0,
+      "unknown_items": [
+        "本轮范围内的保修期限"
+      ],
+      "forbidden_claims": [
+        "从上一轮复用三年保修结论",
+        "引用本轮未选择的 D02"
+      ],
+      "review_state": "source_checked_candidate",
+      "execution_state": "not_run"
+    }
+  ]
+}

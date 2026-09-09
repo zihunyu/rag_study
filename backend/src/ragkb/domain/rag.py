@@ -114,6 +114,8 @@ class EvidencePackage:
     clarification_question: str | None = None
     coverage_report: dict[str, Any] = field(default_factory=dict)
     subject_authorization_revision: str = ""
+    # Private run-store data; never projected into AskResult or conversation APIs.
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         expected = [f"E{index}" for index in range(1, len(self.evidence) + 1)]

@@ -51,7 +51,7 @@ from ragkb.contracts.ports import DocumentProjectionPort, RetrievalReleasePort
 from ragkb.document_processing.chunking import TokenizerArtifact
 from ragkb.document_processing.isolated_parser import IsolatedNativeParser, UnconfiguredASRParser
 from ragkb.document_processing.mineru_parser import MinerUProductionParser
-from ragkb.document_processing.parsers import FallbackParser, ParserRouter
+from ragkb.document_processing.parsers import ParserRouter
 from ragkb.infrastructure.provider_checkpoints import JsonCheckpointStore
 from ragkb.infrastructure.provider_results import LocalProviderResultStore
 from ragkb.infrastructure.sqlite import SQLiteDatabase
@@ -265,9 +265,7 @@ class ProductionRuntimeFactory:
                     for kind in ("txt", "markdown", "html", "docx", "pptx", "xlsx", "xls", "csv")
                 },
                 "audio": UnconfiguredASRParser(),
-                "pdf": FallbackParser(
-                    IsolatedNativeParser("pdf"), pdf, fallback_codes=frozenset({"OCR_REQUIRED"})
-                ),
+                "pdf": pdf,
                 "pdf_scanned": pdf,
                 "image": MinerUProductionParser(
                     runner, result_store, source_format="image", is_ocr=True

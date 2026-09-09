@@ -11,6 +11,7 @@ import re
 import unicodedata
 from decimal import Decimal
 from itertools import combinations
+from typing import Any
 
 from ragkb.domain.numeric_facts import NumericFact, extract_numeric_facts
 from ragkb.domain.rag import AtomicClaim, Evidence
@@ -37,6 +38,42 @@ _POLARITY = {
     "不应当": ("应当", False),
 }
 _MODALS = re.compile("|".join(sorted(_POLARITY, key=len, reverse=True)))
+
+
+def conflict_witness_error(
+    pairs: Any, conflict_ids: list[str], evidence: tuple[Evidence, ...]
+) -> str:
+    """A positive semantic conflict needs two different, exact source assertions.
+
+    This validates the witness protocol, not semantic incompatibility. A missing
+    witness must trigger full verification again, never clear a conflict locally.
+    """
+    if not conflict_ids:
+        return ""
+    if not isinstance(pairs, list) or not 1 <= len(pairs) <= 8:
+        return "conflict_pairs_required"
+    by_id = {e.evidence_id: e for e in evidence}
+    witnessed = set()
+    for pair in pairs:
+        if not isinstance(pair, dict) or not isinstance(pair.get("reason"), str):
+            return "conflict_pair_invalid"
+        if not pair["reason"].strip():
+            return "conflict_reason_required"
+        quotes = []
+        for side in ("left", "right"):
+            source_id, quote = pair.get(side + "_id"), pair.get(side + "_quote")
+            if not isinstance(source_id, str) or source_id not in conflict_ids:
+                return "conflict_witness_source_invalid"
+            if not isinstance(quote, str) or not quote.strip():
+                return "conflict_quote_required"
+            source = by_id[source_id]
+            if quote not in (source.display_text or source.text):
+                return "conflict_quote_not_in_source"
+            quotes.append(re.sub(r"\s+", "", unicodedata.normalize("NFKC", quote)))
+            witnessed.add(source_id)
+        if quotes[0] == quotes[1]:
+            return "identical_assertions_are_not_a_conflict_witness"
+    return "" if witnessed == set(conflict_ids) else "conflict_sources_not_all_witnessed"
 
 
 def _scope(evidence: Evidence) -> tuple[str, tuple[str, ...]]:

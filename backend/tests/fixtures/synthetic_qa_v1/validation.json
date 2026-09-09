@@ -1,0 +1,22 @@
+{
+  "dataset_id": "synthetic-qa-v1",
+  "checked_on": "2026-09-08",
+  "source_document_count": 10,
+  "case_count": 24,
+  "referenced_fact_count": 26,
+  "source_formats": {
+    "csv": 2,
+    "md": 6,
+    "pdf": 1,
+    "txt": 1
+  },
+  "all_sources_parsed": true,
+  "all_fact_quotes_and_locators_checked": true,
+  "pdf_page_count": 1,
+  "pdf_visual_review": "passed",
+  "dataset_integrity_pytest_passed": 63,
+  "model_evaluation": "not_run",
+  "provider_calls": 0,
+  "suite_command": ".venv\\Scripts\\python.exe -X utf8 -m pytest backend/tests/test_synthetic_qa_dataset.py -q --tb=short",
+  "note": "检查文件和预期依据的一致性；不代表知识库已经回答通过这 24 道题。"
+}

@@ -234,7 +234,10 @@ class LowCostRealAcceptanceRunner:
             self.settings, transport=wrapped[2], external_call_approved=True
         )
         self.verifier = OpenAICompatibleClaimVerifier(
-            self.settings, transport=wrapped[3], external_call_approved=True
+            self.settings,
+            transport=wrapped[3],
+            external_call_approved=True,
+            condition_protocol_repair=False,
         )
         self.structural_verifier = DeterministicClaimVerifier()
         self.verifier_chain = CompositeClaimVerifier(self.structural_verifier, self.verifier)

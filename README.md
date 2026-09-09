@@ -135,8 +135,11 @@ SQLite 首次启动直接创建完整结构。已有部署应配置新的数据�
 `docs/openapi/openapi.json`。供应商的 `/v1`、MinerU `/api/v4`、`text-embedding-v4`
 属于外部协议或模型名称，继续按供应商要求配置。
 
-生产 Worker 将扫描 PDF/图片和旧 Office 文件送入真实 MinerU，验证结果 ZIP 后转换为 Canonical
-Document；Markdown、HTML、DOCX 和 PPTX 的标题结构则由本地真实解析器保留。
+生产 Worker 将所有 PDF（含文字型和扫描型）、图片和旧 Office 文件（DOC、PPT）送入真实
+MinerU，验证结果 ZIP 后转换为 Canonical Document。所有实际走 MinerU 的文件都先保留其正文、
+标题和结构；启用图片补充识别时，仅使用 MinerU 提取的插图、图表裁图，没有这些裁图时不调用
+图片模型。此规则按解析器能力生效，不限定 PDF，也不先将整页正文渲染为图片。
+Markdown、HTML、DOCX 和 PPTX 的标题结构由本地真实解析器保留。
 
 ## 分片与检索
 

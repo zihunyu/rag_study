@@ -12,6 +12,7 @@ export const router = createRouter({ history: createWebHistory(), routes: [
   { path: '/knowledge-bases/:spaceId/:view(documents|retrieval|settings|members|activity)?', component: () => import('./pages/LibraryPage.vue'), meta: { section: '知识库' } },
   { path: '/chat/:conversationId?', component: () => import('./pages/ChatPage.vue'), meta: { section: '知识问答' } },
   { path: '/tasks', component: () => import('./pages/TasksPage.vue'), meta: { section: '任务中心', manage: true } },
+  { path: '/acceptance/:spaceId?', component: () => import('./pages/AcceptancePage.vue'), meta: { section: '问答验收', manage: true } },
   { path: '/system', component: () => import('./pages/SystemPage.vue'), meta: { section: '系统状态', admin: true } },
   { path: '/:pathMatch(.*)*', redirect: '/knowledge-bases' },
 ], scrollBehavior: () => ({ top: 0 }) });

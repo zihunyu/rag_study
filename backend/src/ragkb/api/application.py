@@ -85,6 +85,12 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
         queries,
     )
     app.state.conversation_service = conversation_service
+    from ragkb.api.routers.qa_acceptance import build_acceptance_router
+    from ragkb.infrastructure.acceptance_service import AcceptanceService
+
+    acceptance_service = AcceptanceService(runtime, conversation_service)
+    app.state.acceptance_service = acceptance_service
+    app.router.add_event_handler("shutdown", acceptance_service.close)
     app.router.add_event_handler("shutdown", conversation_service.close)
     app.router.add_event_handler("shutdown", access_metrics.close)
     for provider_transport in runtime.provider_transports:
@@ -269,6 +275,7 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
         return _error(request, error.reason_code, "file was rejected by malware policy", 422)
 
     app.include_router(build_accounts_router(runtime, accounts))
+    app.include_router(build_acceptance_router(acceptance_service))
     app.include_router(build_health_router(runtime))
     app.include_router(build_workspace_router(runtime))
     app.include_router(build_conversations_router(runtime, conversation_service))

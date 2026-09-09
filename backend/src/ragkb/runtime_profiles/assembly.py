@@ -16,6 +16,7 @@ from ragkb.adapters.model_http import (
     HttpxJsonTransport,
 )
 from ragkb.adapters.mysql_governance import MySQLGovernanceRepository
+from ragkb.adapters.mysql_retrieval import MySQLRetrievalControlPlane
 from ragkb.adapters.mysql_upload import MySQLUploadRepository
 from ragkb.adapters.rag_stubs import (
     LifecycleAwareFinalPermission,
@@ -257,6 +258,10 @@ def build_runtime_components(
             visual_enricher = VisualEvidenceEnricher(
                 visual_store, visual_analyzer, settings.ocr_query_max_images
             )
+            if settings.qa_visual_dependency_planning:
+                from ragkb.adapters.visual_relevance import VisualRelevancePlanner
+
+                visual_enricher.planner = VisualRelevancePlanner(settings, model_transport)
     retrieval_release = profile_factory.build_retrieval_release(
         settings, retrieval, lifecycle_store, tenant_id, space_id
     )
@@ -410,6 +415,20 @@ def build_runtime_components(
         )
         qa_service.response_release_guard = lambda: account_release_guard(
             accounts, lifecycle_store.lock
+        )
+    if (
+        settings.qa_exact_result_cache_enabled
+        and persistence.redis_adapter is not None
+        and isinstance(control_plane, MySQLRetrievalControlPlane)
+    ):
+        from ragkb.infrastructure.exact_answer_reuse import ExactAnswerReuse
+        from ragkb.infrastructure.qa_snapshot import MySQLQASnapshot, configuration_revision
+
+        qa_service.result_reuse = ExactAnswerReuse(
+            persistence.redis_adapter,
+            MySQLQASnapshot(control_plane, retrieval_release, VisualAssetStore(storage), space_id),
+            config_revision=configuration_revision(settings),
+            ttl_seconds=settings.llm_generation_cache_ttl_seconds,
         )
     return RuntimeComponents(
         accounts=accounts,

@@ -61,12 +61,9 @@ def test_missing_condition_in_review_pool_is_promoted_with_valid_citation_and_sa
 
         def generate(self, question, evidence):
             self.calls += 1
-            if self.calls == 1:
-                assert [e.evidence_id for e in evidence] == ["E1"]
-                return _draft("设备支持上门维修。[E1]")
-            assert {e.evidence_id for e in evidence} == {"E1", "E2"}
-            assert evidence[1].locator["conditions_to_preserve"] == [condition.text]
-            return _draft("设备支持上门维修，仅限保修期内且位于城区的设备。[E1][E2]", ("E1", "E2"))
+            assert self.calls == 1  # Exact source completion needs no model rewrite.
+            assert [e.evidence_id for e in evidence] == ["E1"]
+            return _draft("设备支持上门维修。[E1]")
 
     class Verifier:
         revision = "verified-condition-fixture"
@@ -74,8 +71,13 @@ def test_missing_condition_in_review_pool_is_promoted_with_valid_citation_and_sa
 
         def verify(self, question, draft, evidence):
             self.calls += 1
+            if self.calls == 2:
+                assert condition.text + " [E2]" in draft.text
+                assert evidence[1].locator["conditions_to_preserve"] == [condition.text]
             return VerificationResult(
-                (ClaimVerdict(draft.text, draft.citation_ids, "SUPPORTED", "OK"),),
+                tuple(
+                    ClaimVerdict(c.text, c.evidence_ids, "SUPPORTED", "OK") for c in draft.claims
+                ),
                 self.revision,
                 condition_checks=checks
                 if self.calls == 1
@@ -89,7 +91,8 @@ def test_missing_condition_in_review_pool_is_promoted_with_valid_citation_and_sa
     service.verifier = Verifier()
     result = service.ask("能上门维修吗", "tenant", "user")
     assert result.status == AnswerStatus.ANSWERED and result.verified
-    assert generator.calls == 2 and [c.evidence_id for c in result.citations] == ["E1", "E2"]
+    assert generator.calls == 1 and [c.evidence_id for c in result.citations] == ["E1", "E2"]
+    assert service.verifier.calls == 2
     saved = repository.get_package(result.rag_run_id)
     assert {e.evidence_id for e in saved.generation_evidence} == {"E1", "E2"}
 
@@ -107,6 +110,30 @@ def test_condition_repair_does_not_truncate_mandatory_source_or_bypass_authoriza
             checks,
             cited_ids=("E1",),
         )
+
+
+def test_repair_keeps_previously_covered_constraints_alongside_new_omissions():
+    general = _evidence(text="保修期和免费保修除外情形按保修条款执行。")
+    exclusion = replace(
+        general,
+        evidence_id="E2",
+        chunk_id="exclusion",
+        text="进水和擅自拆机损坏不在免费保修范围内。",
+        source_role="conflict_context",
+    )
+    package = SyntheticEvidenceProvider((general, exclusion)).build_package(
+        "可免费维修吗？", "tenant", "user"
+    )
+    checks = (
+        {"evidence_id": "E1", "source_quote": general.text, "status": "covered"},
+        {"evidence_id": "E2", "source_quote": exclusion.text, "status": "missing"},
+    )
+    repaired = condition_repair_evidence(package, checks, cited_ids=("E1",))
+    assert [e.locator["conditions_to_preserve"] for e in repaired] == [
+        [general.text],
+        [exclusion.text],
+    ]
+    assert [e.text for e in repaired] == [general.text, exclusion.text]
 
 
 @pytest.mark.parametrize("text", ["检测成功：是→结束，否→更换设备", "检测成功 指向 更换设备；否"])
@@ -293,7 +320,12 @@ def test_partial_graph_coverage_is_verified_and_cannot_be_dismissed(tmp_path):
     )
     sent = json.loads(transport.calls[-1]["payload"]["messages"][1]["content"])
     assert sent["conflict_evidence"][0]["visual_context"]["graph_query_complete"] is False
-    assert sent["claims"][0]["evidence"][0]["visual_context"]["graph_query_truncated"] is True
+    assert (
+        sent["claim_evidence_sources"][sent["claims"][0]["evidence"][0]["source_ref"]][
+            "visual_context"
+        ]["graph_query_truncated"]
+        is True
+    )
 
 
 def test_model_output_cannot_award_human_status_or_certify_bounding_boxes():
@@ -476,7 +508,12 @@ def test_semantic_graph_review_receives_only_declared_facts(tmp_path):
     )
     sent = json.loads(transport.calls[-1]["payload"]["messages"][1]["content"])
     assert sent["claims"][0]["visual_fact_ids"] == ["GF-edge-1"]
-    assert "Database" not in sent["claims"][0]["evidence"][0]["text"]
+    assert (
+        "Database"
+        not in sent["claim_evidence_sources"][sent["claims"][0]["evidence"][0]["source_ref"]][
+            "text"
+        ]
+    )
     assert "Database" in sent["conflict_evidence"][0]["text"]
 
 
@@ -947,7 +984,7 @@ def test_reviewed_figure_title_preserves_scope_without_false_cross_graph_gap(tmp
     )
     assert verified.supported
     sent = json.loads(transport.calls[-1]["payload"]["messages"][1]["content"])
-    selected = sent["claims"][0]["evidence"][0]
+    selected = sent["claim_evidence_sources"][sent["claims"][0]["evidence"][0]["source_ref"]]
     assert "B架构图" not in selected["text"] and "Database" not in selected["text"]
     assert (
         selected["visual_context"]["visual_source_context"][assets[0]["id"]]["section_path"]

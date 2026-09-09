@@ -1,0 +1,483 @@
+{
+  "dataset_id": "synthetic-qa-v1",
+  "version": "1.0.0",
+  "language": "zh-CN",
+  "synthetic": true,
+  "knowledge_bases": [
+    {
+      "id": "main",
+      "suggested_name": "合成问答案例库 v1",
+      "published_documents": [
+        "D01",
+        "D02",
+        "D03",
+        "D04",
+        "D05",
+        "D06"
+      ],
+      "unpublished_documents": [
+        "D10"
+      ]
+    },
+    {
+      "id": "conflict",
+      "suggested_name": "合成退款冲突库 v1",
+      "published_documents": [
+        "D07",
+        "D08"
+      ],
+      "unpublished_documents": []
+    },
+    {
+      "id": "foreign",
+      "suggested_name": "合成外库隔离 v1",
+      "published_documents": [
+        "D09"
+      ],
+      "unpublished_documents": []
+    }
+  ],
+  "documents": [
+    {
+      "id": "D01",
+      "path": "sources/main/D01_设备参数.csv",
+      "knowledge_base": "main",
+      "publication_state": "published",
+      "format": "csv",
+      "version": "1",
+      "sha256": "ce1f535f43252385d73bbeac6e488389726e2f932f1c340c63e3625ac319f865",
+      "mime_type": "text/csv"
+    },
+    {
+      "id": "D02",
+      "path": "sources/main/D02_保修条款.md",
+      "knowledge_base": "main",
+      "publication_state": "published",
+      "format": "md",
+      "version": "1",
+      "sha256": "3f5c66db3dca73389289d99b740c1600183a0f12b5cbd6382ce74e792a4b7682",
+      "mime_type": "text/markdown"
+    },
+    {
+      "id": "D03",
+      "path": "sources/main/D03_服务合同.pdf",
+      "knowledge_base": "main",
+      "publication_state": "published",
+      "format": "pdf",
+      "version": "1",
+      "sha256": "c7d2337294fc9061e01438ae71cdd6d1a534db71b5867bb964dde0f23ae36c92",
+      "mime_type": "application/pdf"
+    },
+    {
+      "id": "D04",
+      "path": "sources/main/D04_维修预约规则.md",
+      "knowledge_base": "main",
+      "publication_state": "published",
+      "format": "md",
+      "version": "1",
+      "sha256": "4cf1542877d4b2112d9929f4dabcafdcb6fc8da557d0aada4ec2714d23ec4b59",
+      "mime_type": "text/markdown"
+    },
+    {
+      "id": "D05",
+      "path": "sources/main/D05_服务网点.csv",
+      "knowledge_base": "main",
+      "publication_state": "published",
+      "format": "csv",
+      "version": "1",
+      "sha256": "2330c246d9fa68e0efe019dc8804b975726f7a3306a5970274dd043254238405",
+      "mime_type": "text/csv"
+    },
+    {
+      "id": "D06",
+      "path": "sources/main/D06_设备订单与配送.txt",
+      "knowledge_base": "main",
+      "publication_state": "published",
+      "format": "txt",
+      "version": "1",
+      "sha256": "6c97994c7cf71bc65bd51a8eccd6b16e917212b7f1835ff8665a76a20fb7d051",
+      "mime_type": "text/plain"
+    },
+    {
+      "id": "D07",
+      "path": "sources/conflict/D07_退款政策甲.md",
+      "knowledge_base": "conflict",
+      "publication_state": "published",
+      "format": "md",
+      "version": "1",
+      "sha256": "7b19829b508e2828f5e2583b7ae8bedd662229c031bf9a6dd5aa085906f45230",
+      "mime_type": "text/markdown"
+    },
+    {
+      "id": "D08",
+      "path": "sources/conflict/D08_退款政策乙.md",
+      "knowledge_base": "conflict",
+      "publication_state": "published",
+      "format": "md",
+      "version": "1",
+      "sha256": "10da6c23b7cca6fabce4c8f62be583f74752b413cbfd27dba02f237ef5cf565a",
+      "mime_type": "text/markdown"
+    },
+    {
+      "id": "D09",
+      "path": "sources/foreign/D09_外库保修资料.md",
+      "knowledge_base": "foreign",
+      "publication_state": "published",
+      "format": "md",
+      "version": "1",
+      "sha256": "762c1b6c229d87325727dd30192b99526b8940c71ea66ea62301ea5e7dd712bb",
+      "mime_type": "text/markdown"
+    },
+    {
+      "id": "D10",
+      "path": "sources/draft_only/D10_未发布保修调整.md",
+      "knowledge_base": "main",
+      "publication_state": "draft",
+      "format": "md",
+      "version": "1",
+      "sha256": "4915957f78a26d1682e3c9e0951ff0b04e2ac61a71b973b70cc7fc817b920a2a",
+      "mime_type": "text/markdown"
+    }
+  ],
+  "facts": {
+    "P1": {
+      "doc_id": "D01",
+      "quote": "澄星 R9 | 常温 | 480 | 960 | IP54",
+      "locator": {
+        "kind": "csv_row",
+        "row": 2,
+        "columns": [
+          "型号",
+          "环境",
+          "额定功率(W)",
+          "电池容量(Wh)",
+          "防护等级"
+        ]
+      },
+      "values": [
+        "澄星 R9",
+        "常温",
+        "480",
+        "960",
+        "IP54"
+      ]
+    },
+    "P2": {
+      "doc_id": "D01",
+      "quote": "澄星 R9 | 低温 | 410 | 960 | IP54",
+      "locator": {
+        "kind": "csv_row",
+        "row": 3,
+        "columns": [
+          "型号",
+          "环境",
+          "额定功率(W)",
+          "电池容量(Wh)",
+          "防护等级"
+        ]
+      },
+      "values": [
+        "澄星 R9",
+        "低温",
+        "410",
+        "960",
+        "IP54"
+      ]
+    },
+    "P3": {
+      "doc_id": "D01",
+      "quote": "岚舟 S2 | 常温 | 300 | 600 | IP65",
+      "locator": {
+        "kind": "csv_row",
+        "row": 4,
+        "columns": [
+          "型号",
+          "环境",
+          "额定功率(W)",
+          "电池容量(Wh)",
+          "防护等级"
+        ]
+      },
+      "values": [
+        "岚舟 S2",
+        "常温",
+        "300",
+        "600",
+        "IP65"
+      ]
+    },
+    "P4": {
+      "doc_id": "D01",
+      "quote": "岚舟 S2 | 低温 | 260 | 600 | IP65",
+      "locator": {
+        "kind": "csv_row",
+        "row": 5,
+        "columns": [
+          "型号",
+          "环境",
+          "额定功率(W)",
+          "电池容量(Wh)",
+          "防护等级"
+        ]
+      },
+      "values": [
+        "岚舟 S2",
+        "低温",
+        "260",
+        "600",
+        "IP65"
+      ]
+    },
+    "W1": {
+      "doc_id": "D02",
+      "quote": "澄星 R9 整机保修期为三年，自购买凭证记载的购买日期起计算。",
+      "locator": {
+        "kind": "line",
+        "line": 5,
+        "section": "澄星 R9 保修期限"
+      }
+    },
+    "W2": {
+      "doc_id": "D02",
+      "quote": "岚舟 S2 整机保修期为两年，自购买凭证记载的购买日期起计算。",
+      "locator": {
+        "kind": "line",
+        "line": 9,
+        "section": "岚舟 S2 保修期限"
+      }
+    },
+    "W3": {
+      "doc_id": "D02",
+      "quote": "申请澄星 R9 或岚舟 S2 保修，均需要提供购买凭证和设备序列号。",
+      "locator": {
+        "kind": "line",
+        "line": 13,
+        "section": "申请材料"
+      }
+    },
+    "W4": {
+      "doc_id": "D02",
+      "quote": "进水损坏以及擅自拆机造成的损坏，不在澄星 R9 或岚舟 S2 的免费保修范围内。",
+      "locator": {
+        "kind": "line",
+        "line": 17,
+        "section": "免费保修除外情形"
+      }
+    },
+    "R1": {
+      "doc_id": "D03",
+      "quote": "澄星 R9 服务合同取消后，服务费应在取消申请受理之日起十五个自然日内退回原支付账户。",
+      "locator": {
+        "kind": "pdf_page",
+        "page": 1,
+        "section": "澄星 R9 服务费退款"
+      }
+    },
+    "R2": {
+      "doc_id": "D03",
+      "quote": "岚舟 S2 服务合同取消后，服务费应在取消申请受理之日起七个工作日内退回原支付账户。",
+      "locator": {
+        "kind": "pdf_page",
+        "page": 1,
+        "section": "岚舟 S2 服务费退款"
+      }
+    },
+    "R3": {
+      "doc_id": "D03",
+      "quote": "上述退款条款仅针对服务费，不包括设备购买价款。",
+      "locator": {
+        "kind": "pdf_page",
+        "page": 1,
+        "section": "退款对象"
+      }
+    },
+    "R4": {
+      "doc_id": "D03",
+      "quote": "取消服务合同不会自动取消设备订单，设备订单须单独提出取消申请。",
+      "locator": {
+        "kind": "pdf_page",
+        "page": 1,
+        "section": "与设备订单的关系"
+      }
+    },
+    "A1": {
+      "doc_id": "D04",
+      "quote": "澄星 R9 免费上门维修仅适用于仍在保修期内且设备位于城区的客户。保修期和免费保修除外情形按保修条款执行。",
+      "locator": {
+        "kind": "line",
+        "line": 5,
+        "section": "澄星 R9 服务范围"
+      }
+    },
+    "A2": {
+      "doc_id": "D04",
+      "quote": "澄星 R9 上门维修需要至少提前一个工作日预约，服务时段为周一至周五 09:00 至 18:00。",
+      "locator": {
+        "kind": "line",
+        "line": 9,
+        "section": "预约要求"
+      }
+    },
+    "A3": {
+      "doc_id": "D04",
+      "quote": "澄星 R9 预约上门维修需要提交客户编号；申请保修所需的其他材料按保修条款执行。",
+      "locator": {
+        "kind": "line",
+        "line": 13,
+        "section": "预约材料"
+      }
+    },
+    "A4": {
+      "doc_id": "D04",
+      "quote": "岚舟 S2 仅提供寄修，不提供上门维修。寄修应选择服务网点表中服务方式标记为寄修的站点。",
+      "locator": {
+        "kind": "line",
+        "line": 17,
+        "section": "岚舟 S2 维修方式"
+      }
+    },
+    "S1": {
+      "doc_id": "D05",
+      "quote": "CX-A | 青桐服务站 | 上门 | 城区 | 工作日 09:00-18:00",
+      "locator": {
+        "kind": "csv_row",
+        "row": 2,
+        "columns": [
+          "网点编码",
+          "网点名称",
+          "服务方式",
+          "服务区域",
+          "受理时段"
+        ]
+      },
+      "values": [
+        "CX-A",
+        "青桐服务站",
+        "上门",
+        "城区",
+        "工作日 09:00-18:00"
+      ]
+    },
+    "S2": {
+      "doc_id": "D05",
+      "quote": "CX-B | 白沙维修站 | 寄修 | 全域 | 工作日 10:00-17:00",
+      "locator": {
+        "kind": "csv_row",
+        "row": 3,
+        "columns": [
+          "网点编码",
+          "网点名称",
+          "服务方式",
+          "服务区域",
+          "受理时段"
+        ]
+      },
+      "values": [
+        "CX-B",
+        "白沙维修站",
+        "寄修",
+        "全域",
+        "工作日 10:00-17:00"
+      ]
+    },
+    "S3": {
+      "doc_id": "D05",
+      "quote": "CX-C | 远山咨询点 | 咨询 | 郊区 | 工作日 09:00-12:00",
+      "locator": {
+        "kind": "csv_row",
+        "row": 4,
+        "columns": [
+          "网点编码",
+          "网点名称",
+          "服务方式",
+          "服务区域",
+          "受理时段"
+        ]
+      },
+      "values": [
+        "CX-C",
+        "远山咨询点",
+        "咨询",
+        "郊区",
+        "工作日 09:00-12:00"
+      ]
+    },
+    "L1": {
+      "doc_id": "D06",
+      "quote": "澄星 R9 和岚舟 S2 的普通设备订单，均在付款确认后两个工作日内出库。",
+      "locator": {
+        "kind": "line",
+        "line": 5,
+        "section": "出库时间"
+      }
+    },
+    "L2": {
+      "doc_id": "D06",
+      "quote": "设备出库后，城区预计三个自然日送达，郊区预计五个自然日送达。运输时间为预计值，具体到货日期以承运方通知为准。",
+      "locator": {
+        "kind": "line",
+        "line": 9,
+        "section": "预计运输时间"
+      }
+    },
+    "L3": {
+      "doc_id": "D06",
+      "quote": "设备订单在出库前可以申请取消；出库后不能直接取消，需要按退货流程处理。",
+      "locator": {
+        "kind": "line",
+        "line": 13,
+        "section": "取消设备订单"
+      }
+    },
+    "C1": {
+      "doc_id": "D07",
+      "quote": "澄星 R9 服务费退款期限为十五天。退款原路退回支付账户。",
+      "locator": {
+        "kind": "line",
+        "line": 5,
+        "section": "服务费退款期限"
+      }
+    },
+    "C2": {
+      "doc_id": "D08",
+      "quote": "澄星 R9 服务费退款期限为三十天。退款原路退回支付账户。",
+      "locator": {
+        "kind": "line",
+        "line": 5,
+        "section": "服务费退款期限"
+      }
+    },
+    "F1": {
+      "doc_id": "D09",
+      "quote": "澄星 R9 整机保修期为九十九年。资料识别词为北辰档案。",
+      "locator": {
+        "kind": "line",
+        "line": 5,
+        "section": "保修期限"
+      }
+    },
+    "U1": {
+      "doc_id": "D10",
+      "quote": "澄星 R9 整机保修期拟调整为八年。草稿识别词为远帆草案。",
+      "locator": {
+        "kind": "line",
+        "line": 5,
+        "section": "待定保修期限"
+      }
+    }
+  },
+  "excluded_from_knowledge_base": [
+    "cases.json",
+    "案例清单.md",
+    "manifest.json",
+    "README.md",
+    "validation.json"
+  ],
+  "deliberately_missing_fields": {
+    "main": [
+      "额定电压",
+      "客服电话",
+      "退货运费"
+    ]
+  }
+}

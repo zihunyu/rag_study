@@ -9,6 +9,7 @@ import TasksPage from './pages/TasksPage.vue';
 import ChatPage from './pages/ChatPage.vue';
 import DocumentPage from './pages/DocumentPage.vue';
 import SystemPage from './pages/SystemPage.vue';
+import AcceptancePage from './pages/AcceptancePage.vue';
 import { confirmPublication } from './api.js';
 import MarkdownContent from './components/MarkdownContent.vue';
 import { useWorkspace } from './stores/workspace.js';
@@ -47,7 +48,7 @@ async function app(path = '/knowledge-bases') {
     { path: '/knowledge-bases', component: LibrariesPage, meta: { section: '知识库' } },
     { path: '/knowledge-bases/:spaceId/documents/:documentId', component: DocumentPage, meta: { section: '知识库' } },
     { path: '/knowledge-bases/:spaceId/:view?', component: LibraryPage, meta: { section: '知识库' } },
-    { path: '/tasks', component: TasksPage, meta: { section: '任务中心' } },
+    { path: '/acceptance/:spaceId?', component: AcceptancePage }, { path: '/tasks', component: TasksPage, meta: { section: '任务中心' } },
     { path: '/chat/:conversationId?', component: ChatPage, meta: { section: '知识问答' } },
     { path: '/system', component: SystemPage },
     { path: '/admin/users', component: { template: '<div />' } },
@@ -60,7 +61,7 @@ async function app(path = '/knowledge-bases') {
 describe('knowledge workspace', () => {
   it('shows real counts and administrator navigation after identity initialization', async () => {
     await app(); expect(wrapper.text()).toContain('产品手册'); expect(wrapper.findAll('.metric-number').map(el => el.text())).toEqual(['2', '3', '1READY', '2']);
-    expect(wrapper.text()).not.toMatch(/登录|退出|OIDC/); expect(wrapper.findAll('.nav-item')).toHaveLength(6);
+    expect(wrapper.text()).not.toMatch(/登录|退出|OIDC/); expect(wrapper.findAll('.nav-item')).toHaveLength(7);
     await wrapper.get('input[aria-label="搜索知识库"]').setValue('制度'); expect(wrapper.findAll('.library-card')).toHaveLength(1);
   });
   it('creates a knowledge base and persists its description before navigation', async () => {
@@ -192,11 +193,72 @@ describe('upload persistence and isolation', () => {
   });
 });
 describe('conversation result gating', () => {
+  it.each([
+    ['MODEL_PROVIDER_RATE_LIMITED', 429, '上游模型返回 HTTP 429'],
+    ['MODEL_PROVIDER_TIMEOUT', undefined, '解析本轮问题时超时'],
+    ['MODEL_ACCOUNT_REQUEST_EXCEEDS_TOKEN_BUDGET', undefined, '超过账户单次可用预算'],
+  ])('explains a failure before retrieval with its request reference (%s)', async (code, http_status, message) => {
+    const result = { status: 'system_error', verified: false, answer: 'PRIVATE DRAFT', citations: [], warnings: [code], coverage_report: { execution_failure: { stage: 'conversation_context', code, http_status, request_id: 'context-request' }, performance: { elapsed_seconds: 1, events: [{ kind: 'stage', name: 'conversation.resolve', seconds: 1, status: 'failed' }] } } };
+    routes.set('/api/conversations/c', () => json({ conversation: { id: 'c', space_id: 'a', title: '会话失败' }, turns: [{ id: 't', sequence_number: 1, original_question: '问题', state: 'failed', error_code: code, result }], next_before: null }));
+    await app('/chat/c'); await flushPromises();
+    expect(wrapper.get('.answer-notice').text()).toContain(message);
+    expect(wrapper.get('.answer-notice').text()).toContain('尚未开始知识检索');
+    expect(wrapper.text()).toContain('context-request');
+    expect(wrapper.text()).not.toContain('PRIVATE DRAFT');
+  });
+  it('explains a legacy context rate limit even without a RAG result', async () => {
+    routes.set('/api/conversations/c', () => json({ conversation: { id: 'c', space_id: 'a', title: '旧记录' }, turns: [{ id: 't', sequence_number: 1, original_question: '问题', state: 'failed', error_code: 'ProviderRateLimited', result: null }], next_before: null }));
+    await app('/chat/c'); await flushPromises();
+    expect(wrapper.get('.answer-notice').text()).toContain('限流或额度限制');
+    expect(wrapper.get('.answer-notice').text()).not.toContain('资料不足');
+  });
+  it.each([
+    [['CLAIM_VERIFIER_PROTOCOL_INVALID', 'VERIFIER_CONDITION_BUDGET_EXCEEDED'], '超过本轮处理容量'],
+    [['CLAIM_VERIFIER_UNAVAILABLE', 'CLAIM_VERIFIER_TIMEOUT'], '答案核验超时'],
+    [['CLAIM_VERIFIER_UNAVAILABLE'], '答案核验服务暂时不可用'],
+    [['CLAIM_VERIFIER_PROTOCOL_INVALID', 'VERIFIER_VERDICT_COUNT_INVALID'], '结论数量或编号'],
+    [['CLAIM_VERIFIER_PROTOCOL_INVALID', 'VERIFIER_CONDITION_REPAIR_BUDGET_EXCEEDED'], '补全所需资料超过本轮预算'],
+    [['CLAIM_VERIFIER_PROTOCOL_INVALID', 'MODEL_PROVIDER_MODEL_UNSUPPORTED'], '不支持配置的模型'],
+    [['CLAIM_VERIFIER_PROTOCOL_INVALID', 'MODEL_PROVIDER_HTTP_ERROR'], '核验接口拒绝了请求'],
+    [['ANSWER_NOT_SUPPORTED'], '有内容未通过原文核验'],
+    [['ANSWER_NOT_SUPPORTED', 'ANSWER_CITATION_COVERAGE_INVALID'], '事实与引用未能完整对应'],
+  ])('prioritizes the specific verification failure over generic state (%s)', async (warnings, message) => {
+    routes.set('/api/conversations/c', () => json({ conversation: { id: 'c', space_id: 'a', title: '容量测试' }, turns: [{ id: 't', sequence_number: 1, original_question: '问题', state: 'failed', result: { rag_run_id: 'failed-batch', status: 'system_error', verified: false, answer: 'PRIVATE DRAFT', citations: [], warnings } }], next_before: null }));
+    await app('/chat/c'); await flushPromises();
+    expect(wrapper.get('.answer-notice').text()).toContain(message);
+    expect(wrapper.get('.technical').text()).toContain('failed-batch');
+    expect(wrapper.text()).not.toContain('PRIVATE DRAFT');
+  });
+  it('shows a verifier failure and run reference even when the turn has no error_code', async () => {
+    routes.set('/api/conversations/c', () => json({ conversation: { id: 'c', space_id: 'a', title: '跨文件测试' }, turns: [{ id: 't', sequence_number: 1, original_question: '综合三份资料', state: 'completed', result: { rag_run_id: 'qa-failed-run', status: 'system_error', verified: false, answer: 'NEVER RELEASE DRAFT', citations: [], warnings: ['CLAIM_VERIFIER_PROTOCOL_INVALID', 'VERIFIER_CONDITION_WITNESS_INVALID'] } }], next_before: null }));
+    await app('/chat/c'); await flushPromises();
+    expect(wrapper.get('.answer-notice').text()).toContain('已找到相关资料，但答案核验未完成');
+    expect(wrapper.get('.technical').text()).toContain('qa-failed-run');
+    expect(wrapper.get('.technical').text()).toContain('VERIFIER_CONDITION_WITNESS_INVALID');
+    expect(wrapper.text()).not.toContain('NEVER RELEASE DRAFT');
+    expect(wrapper.find('.verified-label').exists()).toBe(false);
+  });
+  it('shows the failed condition batch without revealing diagnostic content', async () => {
+    routes.set('/api/conversations/c', () => json({ conversation: { id: 'c', space_id: 'a', title: '分批核验' }, turns: [{ id: 't', sequence_number: 1, original_question: '问题', state: 'completed', result: { rag_run_id: 'batch-timeout', status: 'system_error', verified: false, answer: null, citations: [], warnings: ['CLAIM_VERIFIER_TIMEOUT'], coverage_report: { verification_failure: { stage: 'conditions', batch_number: 3, batch_count: 6, completed_batches: 2, condition_count: 93 } } } }], next_before: null }));
+    await app('/chat/c'); await flushPromises();
+    expect(wrapper.get('.technical').text()).toContain('第 3 / 6 批');
+    expect(wrapper.get('.technical').text()).toContain('已完成 2 批，共 93 条条件');
+    expect(wrapper.find('.verified-label').exists()).toBe(false);
+  });
   it('explains unrelated images even when abstention itself passed verification', async () => {
     routes.set('/api/conversations/c', () => json({ conversation: { id: 'c', space_id: 'a', title: '产品 B' }, turns: [{ id: 't', sequence_number: 1, original_question: '产品 B 功率', state: 'completed', result: { status: 'insufficient_evidence', verified: true, answer: null, citations: [], warnings: ['VISUAL_EVIDENCE_EXCLUDED:not_relevant'] } }], next_before: null }));
     await app('/chat/c'); await flushPromises();
     expect(wrapper.get('.answer-notice').text()).toContain('找到的图片未提供问题所需的信息');
     expect(wrapper.find('.verified-label').exists()).toBe(false);
+  });
+  it.each([false, true])('explains current and older saved upstream rate limits (legacy=%s)', async legacy => {
+    const result = { status: 'system_error', verified: false, answer: 'PRIVATE DRAFT', citations: [],
+      warnings: legacy ? ['CLAIM_VERIFIER_UNAVAILABLE'] : ['MODEL_PROVIDER_RATE_LIMITED'],
+      coverage_report: legacy ? { performance: { events: [{ kind: 'model_http', outcome: '429' }] } } : {} };
+    routes.set('/api/conversations/c', () => json({ conversation: { id: 'c', space_id: 'a', title: '限流诊断' }, turns: [{ id: 't', sequence_number: 1, original_question: '问题', state: 'failed', result }], next_before: null }));
+    await app('/chat/c'); await flushPromises();
+    expect(wrapper.get('.answer-notice').text()).toContain('上游模型服务触发限流（HTTP 429）');
+    expect(wrapper.text()).not.toContain('PRIVATE DRAFT');
   });
   it('explains rejected image evidence without displaying the rejected answer', async () => {
     routes.set('/api/conversations/c', () => json({ conversation: { id: 'c', space_id: 'a', title: '图片参数' }, turns: [{ id: 't', conversation_id: 'c', sequence_number: 1, original_question: '功率多少', state: 'completed', result: { status: 'INSUFFICIENT_EVIDENCE', verified: false, answer: '错误的旧文字 999 W', citations: [], warnings: ['VISUAL_EVIDENCE_EXCLUDED:conflict'] } }], next_before: null }));

@@ -140,6 +140,13 @@ def test_mysql_run_reference_feedback_round_trip(tmp_path):
     service, original, _ = _service(tmp_path, SyntheticEvidenceProvider((_evidence(),)))
     answer = service.ask("保修期多久？", "tenant-1", "user-1")
     package = original.get_package(answer.rag_run_id)
+    package = replace(
+        package,
+        diagnostics={
+            "failure": {"stage": "verification", "detail": {"condition_id": "K3"}},
+            "calls": [{"response": {"choices": []}}],
+        },
+    )
     repository.save_run(package, answer)
     assert repository.get_result(answer.rag_run_id) == answer
     assert repository.get_package(answer.rag_run_id) == package

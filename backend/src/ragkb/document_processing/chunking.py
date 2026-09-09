@@ -12,6 +12,7 @@ from typing import Protocol
 
 from ragkb.application.cancellation import check_cancelled
 from ragkb.contracts.ports import EmbeddingPort
+from ragkb.document_processing.qa_structure import condition_anchors
 from ragkb.document_processing.visual_tables import table_windows
 from ragkb.domain.documents import CanonicalDocument, CanonicalNode, NodeType, SourceLocator
 from ragkb.domain.entities import Chunk
@@ -290,6 +291,7 @@ class TokenAwareChunker:
                                 else {}
                             ),
                             **window_metadata,
+                            **condition_anchors(text),
                         },
                     )
                 )
@@ -327,7 +329,19 @@ class TokenAwareChunker:
                 chunking_revision=self.revision,
                 tokenizer_id=self.tokenizer_id,
                 metadata={
+                    **condition_anchors(text),
                     "child_chunk_ids": [item.id for item in grouped],
+                    "nonvisual_source_spans": [
+                        {
+                            "chunk_id": item.id,
+                            "text": item.display_text,
+                            "locator": item.locator.to_dict(),
+                        }
+                        for item in grouped
+                        if not visual_ids(item.metadata)
+                    ]
+                    if any(visual_ids(item.metadata) for item in grouped)
+                    else [],
                     "visual_asset_ids": list(
                         dict.fromkeys(
                             identity for item in grouped for identity in visual_ids(item.metadata)

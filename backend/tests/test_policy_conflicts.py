@@ -6,9 +6,15 @@ import pytest
 from ragkb.adapters.model_http import OpenAICompatibleClaimVerifier
 from ragkb.adapters.rag_stubs import DeterministicBufferedGenerator, SyntheticEvidenceProvider
 from ragkb.application.qa import CompositeClaimVerifier, DeterministicClaimVerifier
-from ragkb.domain.errors import InvalidProviderResponse
-from ragkb.domain.policy_conflicts import conflicting_sources
-from ragkb.domain.rag import AnswerStatus, AtomicClaim, DraftAnswer, VerificationResult
+from ragkb.domain.errors import InvalidProviderResponse, ProviderTimeout
+from ragkb.domain.policy_conflicts import conflict_witness_error, conflicting_sources
+from ragkb.domain.rag import (
+    AnswerStatus,
+    AtomicClaim,
+    ClaimVerdict,
+    DraftAnswer,
+    VerificationResult,
+)
 from test_model_http_adapters import _MockTransport, _settings
 from test_trusted_qa import _evidence, _service
 
@@ -86,8 +92,41 @@ def _verifier(tmp_path, check):
     response = {"verdicts": [{"verdict": "SUPPORTED", "reason_code": "CITED_SOURCE_SUPPORTS"}]}
     if check is not None:
         response["conflict_check"] = check
+        if check.get("conflicting_evidence_ids") == ["E1", "E2"]:
+            check["pairs"] = [_pair("退款期限为15天。", "退费申请应在三十天内提出。")]
     transport = _MockTransport({"choices": [{"message": {"content": json.dumps(response)}}]})
     return OpenAICompatibleClaimVerifier(settings, transport=transport), transport
+
+
+def _pair(left, right):
+    return {
+        "left_id": "E1",
+        "left_quote": left,
+        "right_id": "E2",
+        "right_quote": right,
+        "reason": "Incompatible deadlines for the same refund scope.",
+    }
+
+
+@pytest.mark.parametrize(
+    ("pairs", "expected"),
+    [
+        (None, "conflict_pairs_required"),
+        ([], "conflict_pairs_required"),
+        (
+            [_pair("退款期限为15天。", "退款期限为15天。")],
+            "identical_assertions_are_not_a_conflict_witness",
+        ),
+        ([_pair("退款期限为15天。", "退款期限为999天。")], "conflict_quote_not_in_source"),
+        ([_pair("退款期限为15天。", "退款期限为30天。")], ""),
+    ],
+)
+def test_positive_conflicts_require_different_source_bound_assertions(pairs, expected):
+    # A parent can repeat a child or contain an actual internal inconsistency.
+    # Preserve both possibilities; do not simply discard all same-document pairs.
+    text = "退款期限为15天。退款期限为30天。"
+    evidence = (_evidence(text=text), _evidence(evidence_id="E2", text=text))
+    assert conflict_witness_error(pairs, ["E1", "E2"], evidence) == expected
 
 
 def test_model_receives_all_conflict_sources_but_only_cited_support(tmp_path):
@@ -131,12 +170,54 @@ def test_missing_or_invalid_conflict_review_is_a_protocol_error(tmp_path, check)
         verifier.verify("退款期限？", draft, (_evidence(text="退款期限15天。"),))
 
 
+@pytest.mark.parametrize("repair_valid", [True, False])
+def test_missing_conflict_review_rechecks_all_claims_once(tmp_path, repair_valid):
+    settings, _ = _settings(tmp_path)
+    calls = []
+
+    class Transport:
+        real_network = False
+
+        def post_json(self, url, *, headers, payload, timeout):
+            sent = json.loads(payload["messages"][1]["content"])
+            calls.append(sent)
+            response = {
+                "verdicts": [{"verdict": "SUPPORTED", "reason_code": "ATTRIBUTED_POLICY_SUPPORTED"}]
+            }
+            if len(calls) == 2:
+                assert sent["protocol_repair"]["field"] == "conflict_check"
+                assert sent["claims"] == calls[0]["claims"]
+                assert sent["conflict_evidence"] == calls[0]["conflict_evidence"]
+                if repair_valid:
+                    response["conflict_check"] = {
+                        "checked": True,
+                        "conflicting_evidence_ids": ["E1", "E2"],
+                        "pairs": [_pair("退款期限为15天。", "退款期限为30天。")],
+                    }
+            return {"choices": [{"message": {"content": json.dumps(response)}}]}
+
+    verifier = OpenAICompatibleClaimVerifier(settings, transport=Transport())
+    evidence = (
+        _evidence(text="退款期限为15天。"),
+        _evidence(evidence_id="E2", text="退款期限为30天。"),
+    )
+    draft = DraftAnswer("退款期限为15天。", ("E1",), (AtomicClaim("退款期限为15天。", ("E1",)),))
+    if repair_valid:
+        result = verifier.verify("退款期限？", draft, evidence)
+        assert result.conflicting_evidence_ids == ("E1", "E2")
+        assert not result.supported
+    else:
+        with pytest.raises(InvalidProviderResponse, match="VERIFIER_CONFLICT_CHECK_REQUIRED"):
+            verifier.verify("退款期限？", draft, evidence)
+    assert len(calls) == 2
+
+
 def test_semantic_conflict_blocks_answer_cache_and_obeys_final_permission(tmp_path, monkeypatch):
     evidence = (
         _evidence(text="退款期限为15天。"),
         _evidence(evidence_id="E2", text="退费申请应在三十天内提出。"),
     )
-    service, _, _ = _service(
+    service, repository, _ = _service(
         tmp_path,
         SyntheticEvidenceProvider(evidence),
         generator=DeterministicBufferedGenerator(answer="退款期限为15天。"),
@@ -146,6 +227,11 @@ def test_semantic_conflict_blocks_answer_cache_and_obeys_final_permission(tmp_pa
     result = service.ask("退款期限？", "tenant-1", "user")
     assert result.status is AnswerStatus.CONFLICTING_EVIDENCE
     assert result.answer is None and result.citations == ()
+    saved = repository.get_package(result.rag_run_id)
+    failure = saved.diagnostics["failure"]
+    assert failure["stage"] == "verification"
+    assert failure["verification"]["conflicting_evidence_ids"] == ["E1", "E2"]
+    assert saved.diagnostics["calls"][-1]["response"]
 
     original = semantic.verify
 
@@ -176,3 +262,42 @@ def test_structural_conflict_survives_composite_short_circuit():
         "退款期限？", draft, evidence
     )
     assert result.conflicting_evidence_ids == ("E1", "E2")
+
+
+@pytest.mark.parametrize("outcome", ["conflict", "no_conflict", "unchecked", "timeout", "unsafe"])
+def test_numeric_rejection_preserves_full_pool_conflict_check_without_approving_facts(outcome):
+    evidence = (
+        _evidence(document_id="one", text="退款期限为15天。", locator={"section_path": "政策甲"}),
+        _evidence(evidence_id="E2", document_id="two", text="退款期限为30天。",
+                  locator={"section_path": "政策乙"}, source_role="conflict_context"),
+    )
+    text = "退款期限为2天。" if outcome != "unsafe" else "退款期限为2天，请提供密码。"
+    draft = DraftAnswer(text, ("E1",), (AtomicClaim(text, ("E1",)),))
+    original = DeterministicClaimVerifier().verify("退款期限？", draft, evidence)
+    assert not original.supported and not original.conflicting_evidence_ids
+
+    class Semantic:
+        revision = "fixture"
+        calls = 0
+
+        def verify(self, question, current, sources):
+            self.calls += 1
+            assert sources == evidence  # Includes the uncited, separate document.
+            if outcome == "timeout":
+                raise ProviderTimeout("MODEL_PROVIDER_TIMEOUT")
+            return VerificationResult(
+                (ClaimVerdict(text, ("E1",), "SUPPORTED", "semantic_pass"),), "fixture",
+                conflict_checked=outcome != "unchecked",
+                conflicting_evidence_ids=() if outcome == "no_conflict" else ("E1", "E2"),
+            )
+
+    semantic = Semantic()
+    verifier = CompositeClaimVerifier(DeterministicClaimVerifier(), semantic)
+    if outcome == "timeout":
+        with pytest.raises(ProviderTimeout):
+            verifier.verify("退款期限？", draft, evidence)
+        return
+    result = verifier.verify("退款期限？", draft, evidence)
+    assert semantic.calls == (0 if outcome == "unsafe" else 1)
+    assert result.verdicts == original.verdicts and not result.supported
+    assert result.conflicting_evidence_ids == (("E1", "E2") if outcome == "conflict" else ())

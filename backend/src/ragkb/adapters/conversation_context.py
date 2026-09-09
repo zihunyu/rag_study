@@ -81,6 +81,23 @@ class ModelContextResolver(_GuardedModelAdapter):
     def resolve(self, question: str, history: list[dict[str, Any]]) -> ContextResolution:
         if not history:
             return ContextResolution(question)
+        # Only an immediately repeated, already answered standalone resolution is
+        # reusable. New questions and context-dependent wording retain model review.
+        prior = history[-1]
+        if (
+            prior.get("answer")
+            and question == prior.get("question") == prior.get("resolved_question")
+            and not re.search(
+                r"它|其|该|这|那|上述|前者|后者|两者|之前|刚才|同样|一样|继续|再|也|还|呢|"
+                r"\b(?:it|its|this|that|these|those|same|previous|above|again|also|other)\b",
+                question,
+                re.I,
+            )
+        ):
+            from ragkb.application.qa_performance import record_event
+
+            record_event("context_resolution", outcome="reused_identical_standalone")
+            return ContextResolution(question)
         self._guard()
         key = self.settings.llm_api_key
         response = self._post_json(

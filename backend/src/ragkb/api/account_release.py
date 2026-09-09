@@ -20,6 +20,7 @@ class AccountReleaseMiddleware:
             scope.get("method") == "GET"
             or path.startswith(("/api/ask", "/api/conversations", "/api/rag-runs"))
             or path.endswith(":read")
+            or "/acceptance/" in path
         )
         if (
             scope["type"] != "http"

@@ -8,7 +8,7 @@
     "build": "vite build",
     "test:api": "node --test src/api.test.mjs src/fileHash.test.mjs",
     "test:config": "node --test src/playwrightConfig.test.mjs",
-    "test:unit": "vitest run src/App.test.js src/visuals.test.js src/accounts.test.js",
+    "test:unit": "vitest run src/App.test.js src/visuals.test.js src/accounts.test.js src/acceptance.test.js src/answer-performance.test.js",
     "test:e2e": "playwright test",
     "test": "npm run test:api && npm run test:config && npm run test:unit",
     "check": "npm run test && vite build"

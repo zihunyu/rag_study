@@ -271,7 +271,11 @@ def test_missing_fabricated_or_incomplete_condition_reviews_are_rejected(tmp_pat
 
 
 @pytest.mark.parametrize("repair_succeeds", [True, False])
-def test_omission_repair_is_bounded_and_verified_before_release(tmp_path, repair_succeeds):
+def test_omission_repair_is_bounded_and_verified_before_release(
+    tmp_path, repair_succeeds, monkeypatch
+):
+    # Exercise the model fallback when exact text completion is unavailable.
+    monkeypatch.setattr("ragkb.application.qa.append_missing_text_conditions", lambda *_: None)
     settings, _ = _settings(tmp_path)
 
     class Generator:
@@ -329,9 +333,8 @@ def test_table_condition_rows_and_branches_are_not_reduced_to_headings():
 
 
 def test_existing_published_image_and_its_parent_cannot_bypass_new_binding_checks(tmp_path):
-    from types import SimpleNamespace
-
     from ragkb.adapters.local_storage import LocalFileStorage
+    from ragkb.config import EnvSettings
     from ragkb.infrastructure.visual_assets import VisualAssetStore
     from ragkb.infrastructure.visual_evidence import VisualEvidenceEnricher
     from test_visual_pipeline import png
@@ -350,7 +353,7 @@ def test_existing_published_image_and_its_parent_cannot_bypass_new_binding_check
 
     class Analyzer:
         revision = "fixture"
-        settings = SimpleNamespace(ocr_local_check_enabled=True)
+        settings = EnvSettings(ocr_local_check_enabled=True)
 
         def query(self, *args):
             pytest.fail("Mismatched table reached the model")
@@ -362,7 +365,7 @@ def test_existing_published_image_and_its_parent_cannot_bypass_new_binding_check
         (replace(child, chunk_id="parent", locator={**child.locator, "is_parent": True}),)
     )
     assert (
-        session.attempted == 1
+        session.attempted == 0
         and "VISUAL_EVIDENCE_EXCLUDED:verification_failed" in session.warnings
     )
     assert store.get("v", asset["id"])["local_check"]["revision"] == "old"

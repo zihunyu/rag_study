@@ -10,14 +10,23 @@ import time
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import asdict, replace
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from ragkb.contracts.rag import ExactAnswerReusePort
 from urllib.parse import urlparse
 
 from ragkb.application.provider_budget import ConservativeTokenCounter
+from ragkb.application.qa_diagnostics import (
+    diagnostic_scope,
+    failure_diagnostics,
+    record_failure,
+)
 from ragkb.application.tracing import InMemoryTracer, TracerPort
 from ragkb.contracts.rag import (
     BufferedGenerationPort,
     CitationReferencePort,
+    CitationRepairPort,
     ClaimVerifierPort,
     EvidenceProviderPort,
     FinalPermissionPort,
@@ -25,15 +34,28 @@ from ragkb.contracts.rag import (
     VerifiedAnswerCachePort,
 )
 from ragkb.domain.answer_conditions import condition_report
+from ragkb.domain.citation_repair import (
+    append_missing_text_conditions,
+    rebuild_from_supported_claims,
+    repairable_citations,
+    repairable_surface,
+    validate_citation_only_change,
+)
 from ragkb.domain.claim_coverage import render_verified_claims, verify_answer_claim_coverage
 from ragkb.domain.errors import (
     InvalidProviderResponse,
+    ProviderRateLimited,
+    ProviderTimeout,
     QuestionAssessmentFailed,
     RetrievalFailClosed,
     TransientProviderError,
 )
 from ragkb.domain.ids import new_uuid7
-from ragkb.domain.numeric_facts import check_numeric_facts, normalize_numeric_text
+from ragkb.domain.numeric_facts import (
+    check_numeric_facts,
+    explicit_calculation_requires_review,
+    normalize_numeric_text,
+)
 from ragkb.domain.policy_conflicts import conflicting_sources
 from ragkb.domain.rag import (
     AnswerStatus,
@@ -49,6 +71,8 @@ from ragkb.domain.rag import (
     VerificationResult,
 )
 from ragkb.domain.retrieval import RetrievalHealth, SecurityWatermarkNotReady
+from ragkb.domain.source_lists import REVISION as SOURCE_LIST_REVISION
+from ragkb.domain.source_lists import source_list_plan
 from ragkb.domain.visual_claims import used_visual_fact_ids, visual_claim_evidence
 
 _URL_PATTERN = re.compile(r"https?://[^\s)\]}>]+", re.IGNORECASE)
@@ -70,13 +94,14 @@ def condition_repair_evidence(
 ) -> tuple[Evidence, ...]:
     """Promote original, authorized condition sources from the review pool within budget.
 
-    Missing sources and already cited sources are indivisible: dropping either would
-    repeat the omission or remove the facts that the repair is meant to qualify.
+    Already covered conditions remain mandatory alongside missing conditions: a
+    repair must not fix one omission by dropping an earlier, correct qualification.
+    Their sources and already cited sources are indivisible.
     """
-    missing = [c for c in checks if c["status"] == "missing"]
+    applicable = [c for c in checks if c["status"] in {"missing", "covered"}]
     by_id = {e.evidence_id: e for e in package.evidence}
     quotes: dict[str, list[str]] = {}
-    for check in missing:
+    for check in applicable:
         source = by_id.get(check["evidence_id"])
         quote = check["source_quote"]
         if (
@@ -108,7 +133,16 @@ def condition_repair_evidence(
         )
         if used + size > max_tokens:
             if source.evidence_id in mandatory:
-                raise InvalidProviderResponse("VERIFIER_CONDITION_REPAIR_BUDGET_EXCEEDED")
+                raise InvalidProviderResponse(
+                    "VERIFIER_CONDITION_REPAIR_BUDGET_EXCEEDED",
+                    diagnostic={
+                        "verification_stage": "condition_repair",
+                        "reason": "condition_repair_sources_exceed_budget",
+                        "evidence_id": source.evidence_id,
+                        "required_tokens": used + size,
+                        "token_limit": max_tokens,
+                    },
+                )
             continue
         result.append(item)
         used += size
@@ -122,7 +156,7 @@ def _normalized_fact_text(value: str) -> str:
 class DeterministicClaimVerifier:
     """Fail-closed structural checks that run before any answer is marked verified."""
 
-    revision = "deterministic-claim-verifier:surface-numeric-and-graph-facts-v3"
+    revision = "deterministic-claim-verifier:surface-numeric-and-graph-facts-v4-calculations"
 
     def __init__(self, allowed_output_domains: tuple[str, ...] = ()) -> None:
         self.allowed_output_domains = frozenset(
@@ -251,6 +285,10 @@ class DeterministicClaimVerifier:
                 verdict, reason = "INSUFFICIENT", "OUTPUT_URL_DOMAIN_NOT_ALLOWED"
             elif asks_for_credentials:
                 verdict, reason = "INSUFFICIENT", "UNSUPPORTED_CREDENTIAL_REQUEST"
+            elif numeric_check == "mismatch" and explicit_calculation_requires_review(
+                claim.text, tuple(e.text for e in cited_evidence)
+            ):
+                verdict, reason = "INSUFFICIENT", _NUMERIC_REVIEW_REQUIRED
             elif numeric_check == "mismatch":
                 verdict, reason = "CONTRADICTED", "EXACT_FACT_NOT_IN_EVIDENCE"
             elif numeric_check == "uncertain":
@@ -275,7 +313,10 @@ class CompositeClaimVerifier:
     def __init__(self, structural: ClaimVerifierPort, semantic: ClaimVerifierPort) -> None:
         self.structural = structural
         self.semantic = semantic
-        self.revision = f"claim-verifier-chain:{structural.revision}+{semantic.revision}"
+        self.revision = (
+            f"claim-verifier-chain:v2-conflict-on-numeric-rejection:"
+            f"{structural.revision}+{semantic.revision}"
+        )
 
     def verify(
         self, question: str, draft: DraftAnswer, evidence: tuple[Evidence, ...]
@@ -304,6 +345,31 @@ class CompositeClaimVerifier:
             )
         )
         if not structural.supported and not semantic_review:
+            # A numeric rejection of a comparison must not hide a cross-source
+            # conflict. Only retrieve the conflict finding: even a semantic pass
+            # cannot override the original hard factual rejection.
+            conflict_review = (
+                structural.citation_ids_valid
+                and structural.policy_checked
+                and structural.conflict_checked
+                and not structural.conflicting_evidence_ids
+                and len({e.document_id for e in evidence}) > 1
+                and any(v.reason_code == "EXACT_FACT_NOT_IN_EVIDENCE" for v in structural.verdicts)
+                and all(
+                    v.verdict == "SUPPORTED"
+                    or v.reason_code in {*review_reasons, "EXACT_FACT_NOT_IN_EVIDENCE"}
+                    for v in structural.verdicts
+                )
+            )
+            if conflict_review:
+                semantic = self.semantic.verify(question, draft, evidence)
+                checked = semantic.conflict_checked and semantic.policy_checked
+                return replace(
+                    structural,
+                    revision=self.revision,
+                    conflict_checked=checked,
+                    conflicting_evidence_ids=semantic.conflicting_evidence_ids if checked else (),
+                )
             return VerificationResult(
                 structural.verdicts,
                 self.revision,
@@ -356,6 +422,7 @@ class TrustedQAService:
         self.repository = repository
         self.verifier = verifier or DeterministicClaimVerifier()
         self.cache = cache
+        self.result_reuse: ExactAnswerReusePort | None = None
         self.tracer = tracer or InMemoryTracer()
         self.response_release_guard = response_release_guard or nullcontext
 
@@ -371,7 +438,66 @@ class TrustedQAService:
         retryable: bool = False,
         condition_checks: tuple[dict[str, str], ...] = (),
     ) -> AskResult:
+        if status in {AnswerStatus.SYSTEM_ERROR, AnswerStatus.CONFLICTING_EVIDENCE} or (
+            status is AnswerStatus.INSUFFICIENT_EVIDENCE and not verified
+        ):
+            if not failure_diagnostics():
+                record_failure("answer_validation", warnings[0] if warnings else status.value)
+            package = replace(package, diagnostics=failure_diagnostics())
         report = dict(package.coverage_report)
+        from ragkb.application.qa_performance import performance_report
+
+        performance = performance_report()
+        if performance:
+            package = replace(
+                package, diagnostics={**package.diagnostics, "performance": performance}
+            )
+            report["performance"] = performance
+            model_calls = [
+                e for e in performance.get("events", []) if e.get("kind") == "model_http"
+            ]
+            if (
+                status is AnswerStatus.SYSTEM_ERROR
+                and model_calls
+                and model_calls[-1].get("outcome") == "429"
+            ):
+                warnings = (*warnings, "MODEL_PROVIDER_RATE_LIMITED")
+        failure = package.diagnostics.get("failure", {})
+        if failure.get("stage") == "verification" and status is AnswerStatus.SYSTEM_ERROR:
+            detail = failure.get("detail", {})
+            summary = {
+                key: detail[key]
+                for key in (
+                    "batch_number",
+                    "batch_count",
+                    "completed_batches",
+                    "condition_count",
+                    "http_status",
+                )
+                if type(detail.get(key)) is int
+            }
+            if detail.get("verification_stage") in {
+                "claims_and_conflicts",
+                "conditions",
+                "condition_repair",
+            }:
+                summary["stage"] = detail["verification_stage"]
+            if detail.get("provider_code") in {
+                "MODEL_ACCOUNT_QUOTA_WAIT_TIMEOUT",
+                "MODEL_PROVIDER_DEADLINE_EXCEEDED",
+                "MODEL_PROVIDER_TIMEOUT",
+            }:
+                summary["provider_code"] = detail["provider_code"]
+            # Only bounded operational metadata is public; drafts, source snippets,
+            # model messages and free-form failure explanations remain private.
+            if summary:
+                report["verification_failure"] = summary
+            if failure.get("code") == "MODEL_PROVIDER_RATE_LIMITED":
+                report["verification_failure"] = {
+                    **summary,
+                    "http_status": 429,
+                    "provider_code": "MODEL_PROVIDER_RATE_LIMITED",
+                }
         if condition_checks:
             report["conditions"] = condition_report(condition_checks)
             if not report["conditions"]["complete"]:
@@ -386,17 +512,17 @@ class TrustedQAService:
                 for e in package.evidence
                 if e.evidence_id in cited_ids
             }
-            missing = [
-                s["section"]
+            uncited = [
+                {"version_id": s["version_id"], "section": s["section"]}
                 for s in report.get("sections", [])
                 if (s["version_id"], s["section"]) not in cited_sections
             ]
             report["answer_sections"] = len(cited_sections)
-            if missing:
-                report["complete"] = False
-                report["gaps"] = list(report.get("gaps", [])) + [
-                    "最终回答未引用以下章节：" + "、".join(missing)
-                ]
+            # Reading coverage measures visited/usable source content. A title
+            # or a chapter outside this question need not be cited. Preserve the
+            # citation inventory separately; claim and condition verification
+            # remain responsible for the answer's factual completeness.
+            report["uncited_sections"] = uncited
         result = AskResult(
             rag_run_id=package.rag_run_id,
             status=status,
@@ -413,7 +539,9 @@ class TrustedQAService:
                 package.clarification_fields if status is AnswerStatus.NEEDS_CLARIFICATION else ()
             ),
             clarification_question=package.clarification_question,
-            coverage=package.coverage,
+            coverage="partial"
+            if package.coverage == "complete" and report.get("complete") is False
+            else package.coverage,
             coverage_report=report,
         )
         self.repository.save_run(package, result)
@@ -465,8 +593,12 @@ class TrustedQAService:
                         clearance_level=clearance_level,
                         space_id=space_id,
                     )
-            package = replace(package, subject_authorization_revision="|".join(
-                t for t in subject_scope_tokens if t.startswith("auth-revision:")))
+            package = replace(
+                package,
+                subject_authorization_revision="|".join(
+                    t for t in subject_scope_tokens if t.startswith("auth-revision:")
+                ),
+            )
         except (RetrievalFailClosed, TransientProviderError, QuestionAssessmentFailed) as error:
             package = EvidencePackage(
                 rag_run_id=new_uuid7(),
@@ -564,16 +696,45 @@ class TrustedQAService:
                     warnings=("UNRESOLVED_POLICY_CONFLICT",),
                     verified=True,
                 )
-        draft = self.cache.get(package) if self.cache is not None else None
+        from ragkb.application.acceptance_budget import fresh_answer_required
+
+        list_plan = source_list_plan(question, package.evidence)
+        if list_plan is not None:
+            package = replace(
+                package,
+                model_revision=SOURCE_LIST_REVISION,
+                prompt_revision=SOURCE_LIST_REVISION,
+                evidence=tuple(
+                    replace(e, source_role="hit")
+                    if e.evidence_id in list_plan.draft.citation_ids
+                    else e
+                    for e in package.evidence
+                ),
+                coverage_report={
+                    **package.coverage_report,
+                    "source_list": {
+                        "revision": SOURCE_LIST_REVISION,
+                        "expected_items": len(list_plan.draft.claims),
+                    },
+                },
+            )
+        use_cache = self.cache is not None and not fresh_answer_required()
+        draft = self.cache.get(package) if self.cache is not None and use_cache else None
         try:
             if draft is None:
-                with self.tracer.span("rag.ask.llm.generate"):
-                    draft = self.generator.generate(question, package.generation_evidence)
-        except InvalidProviderResponse:
+                if list_plan is not None:
+                    with self.tracer.span("rag.ask.source_list.compose"):
+                        draft = list_plan.draft
+                else:
+                    with self.tracer.span("rag.ask.llm.generate"):
+                        draft = self.generator.generate(question, package.generation_evidence)
+        except InvalidProviderResponse as error:
+            record_failure("generation", error.code, error.diagnostic)
             return self._save(
                 package, AnswerStatus.SYSTEM_ERROR, warnings=("GENERATION_PROTOCOL_INVALID",)
             )
-        except TransientProviderError:
+        except TransientProviderError as error:
+            record_failure("generation", error.code)
             return self._save(
                 package,
                 AnswerStatus.SYSTEM_ERROR,
@@ -644,9 +805,50 @@ class TrustedQAService:
                 AnswerStatus.SYSTEM_ERROR,
                 warnings=("PRE_VERIFIER_PERMISSION_RECHECK_FAILED",),
             )
+        surface_repair_attempted = False
+        verification_phase = "claims_and_conflicts"
+
+        def repair_surface_once(
+            current: DraftAnswer, checked: VerificationResult
+        ) -> tuple[DraftAnswer, VerificationResult]:
+            nonlocal surface_repair_attempted, verification_phase
+            rebuild = repairable_surface(current, checked)
+            if surface_repair_attempted or not (
+                rebuild
+                or (
+                    isinstance(self.generator, CitationRepairPort)
+                    and repairable_citations(current, checked)
+                )
+            ):
+                return current, checked
+            surface_repair_attempted = True
+            verification_phase = "answer_surface_repair" if rebuild else "citation_repair"
+            if not self._permission_recheck(package, subject_scope_tokens, clearance_level):
+                raise InvalidProviderResponse("CITATION_REPAIR_SOURCE_INVALID")
+            if rebuild:
+                with self.tracer.span("rag.ask.answer_surface.rebuild"):
+                    patched = (
+                        list_plan.draft
+                        if list_plan is not None and current.claims == list_plan.draft.claims
+                        else rebuild_from_supported_claims(current)
+                    )
+            else:
+                assert isinstance(self.generator, CitationRepairPort)
+                with self.tracer.span("rag.ask.citations.repair"):
+                    patched = self.generator.repair_citations(question, current, package.evidence)
+                    validate_citation_only_change(current, patched)
+            if patched == current:
+                return current, checked
+            verification_phase = "claims_and_conflicts"
+            with self.tracer.span(
+                "rag.ask.answer_surface.reverify" if rebuild else "rag.ask.citations.reverify"
+            ):
+                return patched, self.verifier.verify(question, patched, package.evidence)
+
         try:
             with self.tracer.span("rag.ask.claim.verify"):
                 verification = self.verifier.verify(question, draft, package.evidence)
+            draft, verification = repair_surface_once(draft, verification)
             if (
                 any(c["status"] == "missing" for c in verification.condition_checks)
                 and not verification.conflicting_evidence_ids
@@ -670,8 +872,11 @@ class TrustedQAService:
                     if package.coverage_report.get("mode") == "overview"
                     else 8000,
                 )
+                verification_phase = "condition_repair"
                 with self.tracer.span("rag.ask.conditions.repair"):
-                    repaired = self.generator.generate(question, repair_evidence)
+                    repaired = append_missing_text_conditions(draft, verification, repair_evidence)
+                    if repaired is None:
+                        repaired = self.generator.generate(question, repair_evidence)
                 if repaired.status is DraftAnswerStatus.ANSWERED:
                     available = {e.evidence_id: e for e in repair_evidence}
                     repaired_ids = tuple(
@@ -704,23 +909,74 @@ class TrustedQAService:
                             for e in package.evidence
                         ),
                     )
-                    verification = self.verifier.verify(question, draft, package.evidence)
-        except TransientProviderError:
+                    verification_phase = "claims_and_conflicts"
+                    with self.tracer.span("rag.ask.claim.reverify"):
+                        verification = self.verifier.verify(question, draft, package.evidence)
+                    draft, verification = repair_surface_once(draft, verification)
+        except TransientProviderError as error:
+            record_failure(
+                "verification",
+                error.code,
+                {
+                    "draft": asdict(draft),
+                    "detail": {
+                        "verification_stage": verification_phase,
+                        **getattr(error, "diagnostic", {}),
+                    },
+                },
+            )
             return self._save(
                 package,
                 AnswerStatus.SYSTEM_ERROR,
-                warnings=("CLAIM_VERIFIER_UNAVAILABLE",),
+                warnings=("CLAIM_VERIFIER_UNAVAILABLE",)
+                + (("CLAIM_VERIFIER_TIMEOUT",) if isinstance(error, ProviderTimeout) else ())
+                + (
+                    (error.code,)
+                    if isinstance(error, ProviderRateLimited)
+                    and error.code
+                    in {"MODEL_PROVIDER_RATE_LIMITED", "MODEL_ACCOUNT_REQUEST_EXCEEDS_TOKEN_BUDGET"}
+                    else ()
+                ),
                 retryable=True,
             )
         except (InvalidProviderResponse, ValueError) as error:
+            record_failure(
+                "verification",
+                error.code
+                if isinstance(error, InvalidProviderResponse)
+                else "VERIFIER_PROTOCOL_INVALID",
+                {
+                    "detail": {
+                        "verification_stage": verification_phase,
+                        **getattr(error, "diagnostic", {}),
+                    },
+                    "draft": asdict(draft),
+                },
+            )
             return self._save(
                 package,
                 AnswerStatus.SYSTEM_ERROR,
                 warnings=("CLAIM_VERIFIER_PROTOCOL_INVALID", str(error))
-                if str(error).startswith("VERIFIER_CONDITION_")
+                if str(error).startswith(("VERIFIER_CONDITION_", "CITATION_REPAIR_"))
+                or str(error)
+                in {
+                    "VERIFIER_VERDICT_COUNT_INVALID",
+                    "VERIFIER_CLAIM_ID_INVALID",
+                    "VERIFIER_CONTENT_NOT_JSON",
+                    "VERIFIER_ANSWER_CHECK_REQUIRED",
+                    "VERIFIER_CONFLICT_CHECK_REQUIRED",
+                    "VERIFIER_CONFLICT_WITNESS_INVALID",
+                    "MODEL_PROVIDER_HTTP_ERROR",
+                    "MODEL_PROVIDER_MODEL_UNSUPPORTED",
+                }
                 else ("CLAIM_VERIFIER_PROTOCOL_INVALID",),
             )
         if verification.conflicting_evidence_ids:
+            record_failure(
+                "verification",
+                "UNRESOLVED_POLICY_CONFLICT",
+                {"draft": asdict(draft), "verification": asdict(verification)},
+            )
             with self.response_release_guard():
                 if not self._permission_recheck(package, subject_scope_tokens, clearance_level):
                     return self._save(
@@ -735,11 +991,63 @@ class TrustedQAService:
                     verified=True,
                 )
         if not verification.supported:
+            record_failure(
+                "verification",
+                "ANSWER_NOT_SUPPORTED",
+                {"draft": asdict(draft), "verification": asdict(verification)},
+            )
             return self._save(
                 package,
-                AnswerStatus.INSUFFICIENT_EVIDENCE,
-                warnings=tuple(item.reason_code for item in verification.verdicts),
+                AnswerStatus.SYSTEM_ERROR
+                if not verification.citation_ids_valid
+                else AnswerStatus.INSUFFICIENT_EVIDENCE,
+                warnings=tuple(
+                    dict.fromkeys(
+                        (
+                            "ANSWER_NOT_SUPPORTED",
+                            *(
+                                item.reason_code
+                                for item in verification.verdicts
+                                if item.verdict != "SUPPORTED"
+                            ),
+                            *(
+                                ("ANSWER_KEY_CONDITION_MISSING",)
+                                if any(
+                                    c["status"] == "missing" for c in verification.condition_checks
+                                )
+                                else ()
+                            ),
+                            *(
+                                ("ANSWER_CITATION_COVERAGE_INVALID",)
+                                if (
+                                    not verification.citation_ids_valid
+                                    or not verification.answer_claims_covered
+                                )
+                                else ()
+                            ),
+                        )
+                    )
+                ),
                 condition_checks=verification.condition_checks,
+            )
+        if list_plan is not None:
+            if not list_plan.preserves_items(draft):
+                record_failure("answer_validation", "SOURCE_LIST_COVERAGE_INCOMPLETE")
+                return self._save(
+                    package,
+                    AnswerStatus.SYSTEM_ERROR,
+                    warnings=("SOURCE_LIST_COVERAGE_INCOMPLETE",),
+                )
+            package = replace(
+                package,
+                coverage_report={
+                    **package.coverage_report,
+                    "source_list": {
+                        **package.coverage_report["source_list"],
+                        "rendered_items": len(list_plan.draft.claims),
+                        "complete": True,
+                    },
+                },
             )
         verified_draft = DraftAnswer(
             draft.text if draft.synthesized else render_verified_claims(draft.claims),
@@ -796,7 +1104,7 @@ class TrustedQAService:
                     )
                     for evidence in cited
                 )
-            if self.cache is not None:
+            if self.cache is not None and use_cache:
                 self.cache.put(package, verified_draft)
             return self._save(
                 package,
@@ -817,10 +1125,21 @@ class TrustedQAService:
         clearance_level: int = 0,
         space_id: str | None = None,
     ) -> AskResult:
-        with self.tracer.span(
-            "rag.ask", {"tenant_id": tenant_id, "space_id": space_id or "default"}
+        from ragkb.application.qa_performance import performance_scope
+
+        with (
+            performance_scope(),
+            diagnostic_scope(),
+            self.tracer.span(
+                "rag.ask", {"tenant_id": tenant_id, "space_id": space_id or "default"}
+            ),
         ):
-            return self._ask(
+            ask = (
+                self._ask
+                if self.result_reuse is None
+                else lambda *args, **kwargs: self.result_reuse.execute(self, *args, **kwargs)
+            )
+            return ask(
                 question,
                 tenant_id,
                 user_id,

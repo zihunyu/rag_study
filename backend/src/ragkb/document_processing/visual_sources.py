@@ -202,6 +202,8 @@ def mineru_images(payload: bytes, max_bytes: int) -> list[SourceImage]:
         content = json.loads(archive.read(name))
         for item in content:
             check_cancelled()
+            if str(item.get("type", "")).casefold() not in {"image", "chart", "table"}:
+                continue
             image_path = item.get("img_path") or item.get("image_path")
             if not image_path:
                 continue

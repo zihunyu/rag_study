@@ -379,6 +379,7 @@ class MinerUExecutionRunner:
                     "node_id": node_id,
                     "anonymous_sample_id": anonymous_id,
                     "type": item_type,
+                    "text_level": item.get("text_level"),
                     "original_text": display_text,
                     "display_text": display_text,
                     "content": structured_content,

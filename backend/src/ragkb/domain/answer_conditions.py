@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import unicodedata
 from typing import Any
@@ -23,6 +24,19 @@ _BRANCH = re.compile(
     r"(?:指向|双向连接|相连|→|->).+[；;]\s*(?:条件[：:]\s*)?(?:是|否|成功|失败|通过|未通过|正常|异常|yes|no|true|false)(?:[。.]|$)",
     re.I,
 )
+
+
+class ConditionCheckError(ValueError):
+    """Stable public code with private, source-bound failure details."""
+
+    def __init__(self, code: str, reason: str, expected: dict[str, Any] | None = None) -> None:
+        super().__init__(code)
+        self.diagnostic = {
+            "code": code,
+            "reason": reason,
+            "condition_id": (expected or {}).get("id"),
+            "evidence_id": (expected or {}).get("evidence_id"),
+        }
 
 
 def _terms(text: str) -> set[str]:
@@ -199,6 +213,10 @@ def condition_requirements(evidence: tuple[Evidence, ...]) -> list[dict[str, Any
     result: list[dict[str, Any]] = []
     seen: dict[tuple[str, str, str], dict[str, Any]] = {}
     for item in evidence:
+        # Retrieval text repeats titles/section paths for ranking. Only the
+        # displayed source (including verified visual additions) states rules.
+        # A heading named "Exceptions" is not itself an exception to preserve.
+        source_text = item.display_text or item.text
         structured = {
             fact["text"]: fact
             for fact in item.locator.get("visual_facts", [])
@@ -213,9 +231,21 @@ def condition_requirements(evidence: tuple[Evidence, ...]) -> list[dict[str, Any
             if isinstance(coverage_quote, str) and coverage_quote and coverage_quote in item.text
             else []
         )
-        for quote in dict.fromkeys([*condition_quotes(item.text), *structured, *coverage]):
+        anchors = item.locator.get("condition_anchors", {})
+        saved = anchors.get("quotes") if isinstance(anchors, dict) else None
+        quotes = (
+            saved
+            if (
+                anchors.get("revision") == "qa-source-anchors-v1"
+                and anchors.get("text_sha256") == hashlib.sha256(source_text.encode()).hexdigest()
+                and isinstance(saved, list)
+                and all(isinstance(q, str) and q in source_text for q in saved)
+            )
+            else condition_quotes(source_text)
+        )
+        for quote in dict.fromkeys([*quotes, *structured, *coverage]):
             preceding = re.split(
-                r"[。！？!?\n]", item.text[: item.text.find(quote)].rstrip("。！？!?\n ")
+                r"[。！？!?\n]", source_text[: source_text.find(quote)].rstrip("。！？!?\n ")
             )[-1]
             applicability = (
                 str(item.locator.get("section_path", "")) + " " + preceding[-180:] + " " + quote
@@ -236,6 +266,18 @@ def condition_requirements(evidence: tuple[Evidence, ...]) -> list[dict[str, Any
                 "source_quote": quote,
                 "equivalent_evidence_ids": [item.evidence_id],
                 "applicability_context": applicability,
+                # A shared section title / product name does not establish that
+                # two rules concern the same topic. Retain preceding text only
+                # for an elliptical restriction such as 'only within the city'.
+                "rule_context": (
+                    preceding[-180:] + " " + quote
+                    if re.match(
+                        r"仅|必须|不得|禁止|不包括|不包含|除外|除非|\b(?:only|unless|except|must)\b",
+                        quote,
+                        re.I,
+                    )
+                    else quote
+                ),
             }
             if quote in structured:
                 fact = structured[quote]
@@ -257,44 +299,119 @@ def condition_requirements(evidence: tuple[Evidence, ...]) -> list[dict[str, Any
     return result
 
 
+def _local_constraint_text(source: str) -> str:
+    """References to another rule need semantic checking across its actual sources.
+
+    'Exclusions follow the warranty terms' does not itself negate an entitlement.
+    Keep the complete original requirement for the verifier; omit only a pure
+    reference clause from the local conjunction/negation word checks.
+    """
+    clauses = []
+    for clause in re.split(r"[；;]", source):
+        reference = re.fullmatch(
+            r"[^，,；;。!?！？]*(?:按|依照|参照|以)[^，,；;。!?！？]{1,80}"
+            r"(?:条款|规定|规则|政策|要求)(?:执行|处理|办理|为准)[。.]?",
+            clause.strip(),
+        )
+        if reference and not re.search(r"仅限|不得|禁止|必须|不允许", clause):
+            continue
+        clauses.append(clause)
+    return "；".join(clauses)
+
+
+def answer_witness_spans(answer: str) -> dict[str, str]:
+    """Stable paragraph choices avoid asking a model to reconstruct exact prose."""
+    return {
+        f"A{i}": paragraph
+        for i, paragraph in enumerate((p for p in re.split(r"\n\s*\n", answer) if p.strip()), 1)
+    }
+
+
 def validate_condition_checks(
     raw: Any,
     required: list[dict[str, Any]],
     draft: DraftAnswer,
     question: str = "",
+    *,
+    witness_requirements: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, str], ...]:
     if not required:
         return ()
     if not isinstance(raw, list) or len(raw) != len(required):
-        raise ValueError("VERIFIER_CONDITION_CHECK_REQUIRED")
+        raise ConditionCheckError("VERIFIER_CONDITION_CHECK_REQUIRED", "check_count_mismatch")
     checks = []
     for expected, check in zip(required, raw, strict=True):
         if not isinstance(check, dict) or check.get("id") != expected["id"]:
-            raise ValueError("VERIFIER_CONDITION_ID_INVALID")
+            raise ConditionCheckError(
+                "VERIFIER_CONDITION_ID_INVALID", "id_or_order_mismatch", expected
+            )
         status = check.get("status")
         quote, reason = check.get("answer_quote"), check.get("reason")
+        if "applicable" in check and (
+            not isinstance(check["applicable"], bool)
+            or (check["applicable"] is False and status != "not_applicable")
+            or (check["applicable"] is True and status == "not_applicable")
+        ):
+            raise ConditionCheckError(
+                "VERIFIER_CONDITION_VERDICT_INVALID", "applicability_status_mismatch", expected
+            )
+        span_id = check.get("answer_span_id")
+        if span_id:
+            spans = answer_witness_spans(draft.text)
+            if status != "covered" or not isinstance(span_id, str) or span_id not in spans:
+                raise ConditionCheckError(
+                    "VERIFIER_CONDITION_WITNESS_INVALID", "answer_span_id_invalid", expected
+                )
+            quote = spans[span_id]
         if status == "covered" and isinstance(quote, str):
-            quote = resolve_condition_witness(quote, draft, expected, required)
+            quote = resolve_condition_witness(
+                quote,
+                draft,
+                expected,
+                required if witness_requirements is None else witness_requirements,
+            )
         if (
             status not in {"covered", "missing", "not_applicable"}
             or not isinstance(reason, str)
             or not reason.strip()
         ):
-            raise ValueError("VERIFIER_CONDITION_VERDICT_INVALID")
-        if (
-            not isinstance(quote, str)
-            or (
-                status == "covered"
-                and (
-                    not quote.strip()
-                    or quote not in draft.text
-                    or not _has_condition_witness(expected["source_quote"], quote)
-                    or not set(expected["equivalent_evidence_ids"]).intersection(draft.citation_ids)
-                )
+            raise ConditionCheckError(
+                "VERIFIER_CONDITION_VERDICT_INVALID", "invalid_status_or_reason", expected
             )
-            or (status != "covered" and quote)
+        if status in {"covered", "missing"} and re.search(
+            r"(?<!not )\b(?:is|are|falls) outside (?:that |this |the )?scope[.,;。]|"
+            r"\b(?:this|the|that) (?:rule|condition|restriction) (?:is|does) "
+            r"(?:not (?:apply|relate|pertain)|not relevant|not applicable|irrelevant|unrelated)\b|"
+            r"(?:该|此|本条)(?:规则|条件|限制).{0,12}(?:与(?:本题|问题|提问)无关|"
+            r"不适用于(?:本题|问题|提问)|不属于(?:本题|问题|提问)(?:的)?范围)[，。；;,.]|"
+            r"\b(?:rule|condition|restriction) (?:concerns|describes) .{1,100}, "
+            r"(?:which is |and is )?(?:outside|unrelated to) (?:the |this )?(?:question|request)\b",
+            reason,
+            re.I,
         ):
-            raise ValueError("VERIFIER_CONDITION_WITNESS_INVALID")
+            # Contradictory provider verdicts require correction, never a local pass.
+            raise ConditionCheckError(
+                "VERIFIER_CONDITION_VERDICT_INVALID", "applicability_reason_mismatch", expected
+            )
+        witness_failure = ""
+        if not isinstance(quote, str):
+            witness_failure = "quote_not_string"
+        elif status == "covered":
+            if not quote.strip():
+                witness_failure = "covered_quote_empty"
+            elif quote not in draft.text:
+                witness_failure = "quote_not_in_answer"
+            elif not _has_condition_witness(expected["source_quote"], quote):
+                witness_failure = "quote_does_not_address_condition"
+            elif not set(expected["equivalent_evidence_ids"]).intersection(draft.citation_ids):
+                witness_failure = "condition_source_not_cited"
+        elif quote:
+            witness_failure = "noncovered_quote_not_empty"
+        if witness_failure:
+            raise ConditionCheckError(
+                "VERIFIER_CONDITION_WITNESS_INVALID", witness_failure, expected
+            )
+        assert isinstance(quote, str)
         # A verifier must not use a true fragment as a witness for an omitted conjunct.
         # Full semantic verification remains mandatory; these checks catch common
         # internally inconsistent provider verdicts rather than claiming equivalence.
@@ -310,7 +427,7 @@ def validate_condition_checks(
         ):
             status, quote, reason = "missing", "", "回答没有说明已知的图关系覆盖缺口"
         if status == "covered":
-            source_quote = expected["source_quote"]
+            source_quote = _local_constraint_text(expected["source_quote"])
             restriction = re.search(r"仅限|仅在|仅当|\bonly\b", source_quote, re.I)
             condition_body = source_quote[restriction.start() :] if restriction else source_quote
             parts = re.split(r"且|并且|以及|\band\b|[；;]", condition_body, flags=re.I)
@@ -351,8 +468,21 @@ def validate_condition_checks(
                 ):
                     status, quote, reason = "missing", "", "回答遗漏了否定或失败分支的前提"
         if status == "not_applicable" and question:
-            topics = _terms(question).intersection(
-                _terms(str(expected.get("applicability_context", expected["source_quote"])))
+            # Semantic applicability is about the particular rule being asked,
+            # not lexical overlap with the product or policy family. E.g. a
+            # warranty-duration lookup does not ask for application materials.
+            # Retain the high-confidence contradiction check: absence from the
+            # answer alone can never justify declaring a rule irrelevant.
+            omission_only = bool(
+                re.search(
+                    r"未在(?:回答|答案).*提及|(?:回答|答案).*(?:未提及|未涉及|没有提到)|"
+                    r"not (?:mentioned|addressed|included) in (?:the )?answer|"
+                    r"(?:the )?answer does not (?:mention|address|include)",
+                    reason,
+                    re.I,
+                )
+            ) and not re.search(
+                r"问题|提问|询问|问的是|\b(?:question|request|asks?)\b", reason, re.I
             )
             overview = bool(
                 re.search(
@@ -365,7 +495,7 @@ def validate_condition_checks(
                 r"条件|限制|维修|流程|分支|\b(?:condition|repair|branch|limit)\b", question, re.I
             )
             if not identity_only and (
-                topics
+                omission_only
                 or (overview and expected.get("kind") in {"workflow_branch", "coverage_limit"})
                 or (
                     expected.get("kind") == "coverage_limit"

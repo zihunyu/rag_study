@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 
 class RAGError(RuntimeError):
     """Base class for expected RAG failures with a stable, non-secret code."""
@@ -16,7 +18,9 @@ class TransientProviderError(RAGError):
 
 
 class ProviderTimeout(TransientProviderError):
-    pass
+    def __init__(self, code: str, *, diagnostic: dict[str, Any] | None = None) -> None:
+        super().__init__(code)
+        self.diagnostic = diagnostic or {}
 
 
 class ProviderRateLimited(TransientProviderError):
@@ -33,6 +37,10 @@ class ProviderCircuitOpen(TransientProviderError):
 
 class InvalidProviderResponse(RAGError):
     """The provider replied, but violated the configured response contract."""
+
+    def __init__(self, code: str, *, diagnostic: dict[str, Any] | None = None) -> None:
+        super().__init__(code)
+        self.diagnostic = diagnostic or {}
 
 
 class QuestionAssessmentFailed(RAGError):
