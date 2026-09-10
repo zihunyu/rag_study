@@ -268,11 +268,26 @@ class AcceptanceRepository:
                     "SELECT * FROM acceptance_reviews WHERE attempt_id=? ORDER BY created_at,id",
                     (item["id"],),
                 )
+                for review in item["reviews"]:
+                    detail = self.db.one(
+                        c,
+                        "SELECT payload_json FROM acceptance_review_details WHERE review_id=?",
+                        (review["id"],),
+                    )
+                    if detail:
+                        review.update(json.loads(detail["payload_json"]))
                 item["verdict"] = (
                     item["reviews"][-1]["verdict"]
                     if item["reviews"]
                     else "failed"
                     if item["state"] == "failed"
+                    or (
+                        item["state"] == "completed"
+                        and any(
+                            p["status"] in {"missing", "incorrect"}
+                            for p in item["payload"].get("point_results", [])
+                        )
+                    )
                     else "pending_review"
                     if item["state"] == "completed"
                     else item["state"]
@@ -371,7 +386,15 @@ class AcceptanceRepository:
                 (state, encode(payload), time.time(), attempt, identity),
             )
 
-    def review(self, run: str, attempt: str, actor: str, verdict: str, note: str) -> dict[str, Any]:
+    def review(
+        self,
+        run: str,
+        attempt: str,
+        actor: str,
+        verdict: str,
+        note: str,
+        point_reviews: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         with self.db.transaction() as c:
             row = self.db.one(
                 c, "SELECT * FROM acceptance_attempts WHERE id=? AND run_id=?", (attempt, run)
@@ -394,4 +417,12 @@ class AcceptanceRepository:
                 "(id,attempt_id,actor_id,verdict,note,created_at) VALUES(?,?,?,?,?,?)",
                 tuple(record.values()),
             )
+            if point_reviews is not None:
+                detail = {"point_reviews": point_reviews}
+                self.db.execute(
+                    c,
+                    "INSERT INTO acceptance_review_details(review_id,payload_json) VALUES(?,?)",
+                    (record["id"], encode(detail)),
+                )
+                record.update(detail)
         return record

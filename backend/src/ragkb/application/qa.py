@@ -72,7 +72,7 @@ from ragkb.domain.rag import (
 )
 from ragkb.domain.retrieval import RetrievalHealth, SecurityWatermarkNotReady
 from ragkb.domain.source_lists import REVISION as SOURCE_LIST_REVISION
-from ragkb.domain.source_lists import source_list_plan
+from ragkb.domain.source_lists import requests_source_list, source_list_plan
 from ragkb.domain.visual_claims import used_visual_fact_ids, visual_claim_evidence
 
 _URL_PATTERN = re.compile(r"https?://[^\s)\]}>]+", re.IGNORECASE)
@@ -397,6 +397,7 @@ class CompositeClaimVerifier:
             policy_checked=structural.policy_checked and semantic.policy_checked,
             conflicting_evidence_ids=semantic.conflicting_evidence_ids,
             condition_checks=semantic.condition_checks,
+            answer_projection=semantic.answer_projection,
         )
 
 
@@ -664,6 +665,9 @@ class TrustedQAService:
                     retryable=True,
                 )
             return self._save(package, AnswerStatus.INSUFFICIENT_EVIDENCE, verified=True)
+        from ragkb.application.acceptance_trace import content_stage, evidence_rows
+
+        content_stage("retrieval", evidence_rows(package.evidence))
         if not all(
             evidence.authorized
             and evidence.current_version
@@ -725,6 +729,11 @@ class TrustedQAService:
                 if list_plan is not None:
                     with self.tracer.span("rag.ask.source_list.compose"):
                         draft = list_plan.draft
+                        content_stage(
+                            "model_input",
+                            evidence_rows(package.generation_evidence),
+                            mode="source_list_composition",
+                        )
                 else:
                     with self.tracer.span("rag.ask.llm.generate"):
                         draft = self.generator.generate(question, package.generation_evidence)
@@ -741,6 +750,7 @@ class TrustedQAService:
                 warnings=("GENERATION_UNAVAILABLE_AUTHORIZED_EVIDENCE_ONLY",),
                 retryable=True,
             )
+        content_stage("draft", [{"text": draft.text}])
         if draft.status is DraftAnswerStatus.INSUFFICIENT_EVIDENCE:
             if draft.text != "" or draft.citation_ids or draft.claims:
                 return self._save(
@@ -806,13 +816,17 @@ class TrustedQAService:
                 warnings=("PRE_VERIFIER_PERMISSION_RECHECK_FAILED",),
             )
         surface_repair_attempted = False
+        list_claim_count: int | None = None
         verification_phase = "claims_and_conflicts"
 
         def repair_surface_once(
             current: DraftAnswer, checked: VerificationResult
         ) -> tuple[DraftAnswer, VerificationResult]:
             nonlocal surface_repair_attempted, verification_phase
-            rebuild = repairable_surface(current, checked)
+            rebuild = repairable_surface(current, checked) or (
+                requests_source_list(question, package.evidence)
+                and repairable_citations(current, checked)
+            )
             if surface_repair_attempted or not (
                 rebuild
                 or (
@@ -830,13 +844,34 @@ class TrustedQAService:
                     patched = (
                         list_plan.draft
                         if list_plan is not None and current.claims == list_plan.draft.claims
-                        else rebuild_from_supported_claims(current)
+                        else rebuild_from_supported_claims(
+                            current,
+                            numbered=requests_source_list(question, package.evidence),
+                            list_claim_count=list_claim_count,
+                        )
                     )
             else:
                 assert isinstance(self.generator, CitationRepairPort)
                 with self.tracer.span("rag.ask.citations.repair"):
                     patched = self.generator.repair_citations(question, current, package.evidence)
                     validate_citation_only_change(current, patched)
+                if patched == current:
+                    # A citation-only editor cannot repair an unsupported wrapper
+                    # when no atomic claim supplies that wrapper's asserted scope.
+                    # Every claim already passed repairable_citations; reconstruct
+                    # their surface without inventing a citation or dropping a claim.
+                    # The result still crosses the complete verifier below.
+                    rebuild = True
+                    with self.tracer.span("rag.ask.answer_surface.rebuild"):
+                        patched = (
+                            list_plan.draft
+                            if list_plan is not None and current.claims == list_plan.draft.claims
+                            else rebuild_from_supported_claims(
+                                current,
+                                numbered=requests_source_list(question, package.evidence),
+                                list_claim_count=list_claim_count,
+                            )
+                        )
             if patched == current:
                 return current, checked
             verification_phase = "claims_and_conflicts"
@@ -875,6 +910,11 @@ class TrustedQAService:
                 verification_phase = "condition_repair"
                 with self.tracer.span("rag.ask.conditions.repair"):
                     repaired = append_missing_text_conditions(draft, verification, repair_evidence)
+                    # Exact appended conditions are supplementary facts, never new
+                    # numbered items of the original list. A generated replacement
+                    # has no guaranteed prefix and must not inherit this boundary.
+                    if repaired is not None:
+                        list_claim_count = len(draft.claims)
                     if repaired is None:
                         repaired = self.generator.generate(question, repair_evidence)
                 if repaired.status is DraftAnswerStatus.ANSWERED:
@@ -1049,6 +1089,14 @@ class TrustedQAService:
                     },
                 },
             )
+        from ragkb.domain.answer_projection import verified_projection
+
+        projected = verified_projection(question, draft, verification) if list_plan is None else ""
+        if projected:
+            from ragkb.application.qa_performance import record_event
+
+            record_event("answer_projection", outcome="removed_verified_duplicate_table")
+            draft = replace(draft, text=projected)
         verified_draft = DraftAnswer(
             draft.text if draft.synthesized else render_verified_claims(draft.claims),
             claim_citation_ids,

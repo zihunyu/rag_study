@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,7 @@ from ragkb.infrastructure.visual_assets import VisualAssetStore
 
 
 class VisualDocumentParser:
-    revision = "visual-document-v6:provider-layout-first"
+    revision = "visual-document-v7:preserve-provider-tables"
 
     def __init__(
         self,
@@ -276,7 +277,7 @@ class VisualDocumentParser:
                             },
                         )
                     )
-        nodes = _insert_visual_nodes(nodes, visual_nodes)
+        nodes = _insert_visual_nodes(nodes, visual_nodes, preserve_tables=provider_layout)
         from ragkb.document_processing.qa_structure import prepare_nodes
 
         if provider_layout:
@@ -297,7 +298,7 @@ class VisualDocumentParser:
 
 
 def _insert_visual_nodes(
-    base: list[CanonicalNode], pictures: list[CanonicalNode]
+    base: list[CanonicalNode], pictures: list[CanonicalNode], *, preserve_tables: bool = False
 ) -> list[CanonicalNode]:
     """Merge by real DOCX paragraph; keep exact provider placeholders or page anchors."""
     if not base or any(node.locator.paragraph is not None for node in base):
@@ -308,8 +309,8 @@ def _insert_visual_nodes(
                 1 if node.metadata.get("visual_asset_ids") else 0,
             ),
         )
-    # Replace a provider image/table placeholder with ALL recognized components.
-    # Keeping its old flattened OCR would bypass both table slicing and rechecks.
+    # Image placeholders are replaced. Independently parsed provider tables stay
+    # available as text; supplementary image facts keep their own verification.
     anchored: dict[int, list[CanonicalNode]] = {}
     unanchored: list[CanonicalNode] = []
     for picture in pictures:
@@ -330,7 +331,20 @@ def _insert_visual_nodes(
             anchored.setdefault(exact, []).append(picture)
         else:
             unanchored.append(picture)
-    merged = [child for index, node in enumerate(base) for child in anchored.get(index, [node])]
+    merged = []
+    for index, node in enumerate(base):
+        replacements = anchored.get(index)
+        if (
+            replacements
+            and preserve_tables
+            and node.node_type is NodeType.TABLE
+            and re.search(
+                r"<tr\b[^>]*>.*?<t[dh]\b[^>]*>.*?</t[dh]>.*?</tr>", node.original_text, re.I | re.S
+            )
+        ):
+            merged.extend([node, *replacements])
+        else:
+            merged.extend(replacements if replacements else [node])
     for picture in unanchored:
         locator = picture.locator
         if locator.slide is not None or locator.sheet is not None:

@@ -125,6 +125,28 @@ describe('knowledge workspace', () => {
     expect(requests.some(r => r.path.includes('/new/chunks'))).toBe(false);
   });
 
+  it('refreshes completed parsing until delayed chunks and quality are ready for review', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    let ready = false;
+    routes.set('/api/spaces/a/documents/sheet/workspace', () => json({ ...documentRow('sheet'), versions: [{ id: 'v-sheet', version_no: 1 }], unavailability_reasons: [] }));
+    routes.set('/api/document-versions/v-sheet/chunks/preview', () => json(ready ? [{ chunk_id: 'row1', text: '武器名称：长剑；攻击力：110', locator: { sheet: '武器', row: 2 } }] : []));
+    routes.set('/api/document-versions/v-sheet/quality-report', () => ready ? json({ source_format: 'xlsx', node_count: 1824, locator_coverage: 1, issue_codes: [], disposition: 'READY_FOR_REVIEW' }) : json({ detail: 'NOT_FOUND' }, 404));
+    await app('/knowledge-bases/a/documents/sheet');
+    await wrapper.findAll('button').find(b => b.text().startsWith('解析内容')).trigger('click');
+    expect(wrapper.text()).toContain('正在准备解析内容');
+    expect(wrapper.text()).not.toContain('还没有解析内容');
+    ready = true;
+    await vi.advanceTimersByTimeAsync(4000); await flushPromises();
+    expect(wrapper.text()).toContain('武器名称：长剑；攻击力：110');
+    await wrapper.findAll('button').find(b => b.text() === '质量检查').trigger('click');
+    expect(wrapper.text()).toContain('工作表是否齐全');
+    expect(wrapper.text()).toContain('未发现质量问题');
+    const reads = requests.filter(r => r.path.endsWith('/chunks/preview')).length;
+    await vi.advanceTimersByTimeAsync(8000); await flushPromises();
+    expect(requests.filter(r => r.path.endsWith('/chunks/preview'))).toHaveLength(reads);
+    expect(requests.some(r => r.path.endsWith(':review-and-publish'))).toBe(false);
+  });
+
   it('passes an AbortSignal when the system refresh button supplies a DOM event', async () => {
     routes.set('/api/system/status', (_, options) => {
       expect(options.signal).toBeInstanceOf(AbortSignal);

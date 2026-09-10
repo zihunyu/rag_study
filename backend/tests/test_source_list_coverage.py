@@ -80,6 +80,34 @@ def test_same_scope_duplicate_with_different_number_adds_citation_without_extra_
     assert "14." not in plan.draft.text and "[E3]" not in plan.draft.text
 
 
+@pytest.mark.parametrize(
+    "heading", ["设备检查步骤", "设备检查步骤（续）", "设备检查步骤 (continued)"]
+)
+def test_continuation_never_projects_a_complete_looking_prefix(heading):
+    full = long_list()
+    first = source("\n".join(full.text.splitlines()[:5]))
+    continuation = replace(
+        source("\n".join(full.text.splitlines()[5:]), evidence_id="E2"),
+        locator={"section_path": heading, "page": 2},
+    )
+    # Fall back to synthesis and the existing full condition/conflict verifier.
+    assert source_list_plan("设备检查步骤", (first, continuation)) is None
+
+
+def test_list_surface_rebuild_keeps_one_claim_per_number_even_with_shared_citations():
+    from ragkb.domain.citation_repair import rebuild_from_supported_claims
+    from ragkb.domain.source_lists import requests_source_list
+
+    evidence = (long_list(),)
+    plan = source_list_plan("设备检查步骤", evidence)
+    assert plan and requests_source_list("设备检查步骤", evidence)
+    rebuilt = rebuild_from_supported_claims(plan.draft, numbered=True)
+    assert rebuilt.claims == plan.draft.claims
+    assert rebuilt.citation_ids == plan.draft.citation_ids
+    assert [n for n, _ in numbered_items(rebuilt.text)] == list(range(1, 11))
+    assert not requests_source_list("第4条检查步骤是什么？", evidence)
+
+
 @pytest.mark.parametrize("change", ["-1.5", "15", "≤1.5", "1.50"])
 def test_numeric_differences_never_merge_as_typographic_variations(change):
     original = source("1. 设备甲的阈值为1.5。\n2. 完成检查。")

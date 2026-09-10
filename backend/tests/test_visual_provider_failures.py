@@ -108,3 +108,31 @@ def test_pdf_body_is_preserved_but_failed_visual_evidence_cannot_be_published(tm
 def test_unexpected_errors_and_cancellation_still_propagate(error):
     with pytest.raises(type(error), match=str(error)):
         VisualAnalyzer(settings(), Transport(error)).analyze(png())
+
+
+def test_provider_table_survives_supplementary_visual_rejection():
+    from ragkb.document_processing.visual_parser import _insert_visual_nodes
+    from ragkb.domain.documents import CanonicalNode, SourceLocator
+
+    position = SourceLocator(page=3, bbox=(10, 20, 200, 100))
+    table = CanonicalNode(
+        "table",
+        None,
+        NodeType.TABLE,
+        "<table><tr><td>华北</td><td>600</td></tr></table>",
+        "<table><tr><td>华北</td><td>600</td></tr></table>",
+        position,
+    )
+    rejected = CanonicalNode(
+        "image",
+        None,
+        NodeType.IMAGE,
+        "图片尚未通过原图核对，不能用于问答。",
+        "图片尚未通过原图核对，不能用于问答。",
+        position,
+        {"visual_asset_ids": ["crop"], "visual_status": "needs_review"},
+    )
+    nodes = _insert_visual_nodes([table], [rejected], preserve_tables=True)
+    assert nodes == [table, rejected]
+    assert not nodes[0].metadata.get("visual_asset_ids")
+    assert nodes[1].metadata["visual_asset_ids"] == ["crop"]

@@ -54,7 +54,10 @@ class InMemoryTracer:
         started = time.perf_counter()
         status = "OK"
         try:
-            yield
+            from ragkb.application.qa_performance import performance_stage
+
+            with performance_stage(name):
+                yield
         except BaseException:
             status = "ERROR"
             raise

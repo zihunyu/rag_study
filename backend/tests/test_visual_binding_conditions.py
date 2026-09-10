@@ -217,8 +217,12 @@ class ConditionTransport(_MockTransport):
         ]
         payload = {
             "verdicts": [
-                {"claim_id": c["claim_id"], "verdict": "SUPPORTED", "reason_code": "SUPPORTED"}
-                for c in sent["claims"]
+                {
+                    "claim_id": c.get("claim_id", f"C{i}"),
+                    "verdict": "SUPPORTED",
+                    "reason_code": "SUPPORTED",
+                }
+                for i, c in enumerate(sent["claims"], 1)
             ],
             "conflict_check": {"checked": True, "conflicting_evidence_ids": []},
             "answer_check": {

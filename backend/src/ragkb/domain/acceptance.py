@@ -9,6 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from ragkb.application.reading_scope import ReadingOptions
+from ragkb.domain.acceptance_points import PointSpec, list_check_results
 
 
 class HistoryQuestion(BaseModel):
@@ -17,7 +18,7 @@ class HistoryQuestion(BaseModel):
     reading: ReadingOptions = Field(default_factory=ReadingOptions)
 
 
-class AcceptanceCase(BaseModel):
+class AcceptanceCase(PointSpec):
     model_config = ConfigDict(extra="forbid")
     key: str = Field(min_length=1, max_length=80, pattern=r".*\S.*")
     question: str = Field(min_length=1, max_length=4000, pattern=r".*\S.*")
@@ -98,4 +99,4 @@ def mechanical_checks(
             "detail": "有答案须通过系统核验；预期拒答时不能发布正文或引用",
         }
     )
-    return checks
+    return checks + list_check_results(case, result.get("answer") or "")

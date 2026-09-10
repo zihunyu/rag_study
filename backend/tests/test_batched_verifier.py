@@ -71,6 +71,92 @@ class ReviewTransport:
         return {"choices": [{"message": {"content": json.dumps(response)}}]}
 
 
+@pytest.mark.parametrize("failure", ["claim", "citation", "surface", "none"])
+def test_combined_condition_repair_retains_prior_fact_and_surface_verdicts(tmp_path, failure):
+    settings, _ = _settings(tmp_path)
+    draft, sources = sample(3)
+
+    def partial(data, response, kwargs):
+        if "conflict_evidence" in data:
+            response["condition_checks"][1].update(
+                applicable=True, status="covered", answer_quote="invented witness"
+            )
+            if failure == "claim":
+                response["verdicts"][0]["verdict"] = "CONTRADICTED"
+            if failure == "citation":
+                response["answer_check"]["citations_valid"] = False
+            if failure == "surface":
+                response["answer_check"]["covered"] = False
+        else:
+            # Extra fields from a condition reviewer cannot override the first receipt.
+            response["answer_check"] = {"covered": True, "citations_valid": True}
+            response["verdicts"] = [{"verdict": "SUPPORTED"}]
+
+    transport = ReviewTransport(partial)
+    result = OpenAICompatibleClaimVerifier(settings, transport=transport).verify(
+        "保修期多久？", draft, sources
+    )
+    assert result.supported is (failure == "none")
+    assert result.conflict_checked and len(result.condition_checks) == 3
+    assert len(transport.calls) == 2
+    initial, repair = transport.calls
+    assert len(initial["conflict_evidence"]) == len(sources)
+    assert "conflict_evidence" not in repair
+    assert repair["answer"] == initial["answer"]
+    assert [r["id"] for r in repair["condition_requirements"]] == ["K2"]
+
+
+def test_combined_condition_repair_failure_is_not_followed_by_full_retry(tmp_path):
+    settings, _ = _settings(tmp_path)
+    draft, sources = sample(3)
+
+    def invalid(data, response, kwargs):
+        for check in response["condition_checks"]:
+            if check["id"] == "K2":
+                check.update(applicable=True, status="covered", answer_quote="invented witness")
+
+    transport = ReviewTransport(invalid)
+    with pytest.raises(InvalidProviderResponse) as caught:
+        OpenAICompatibleClaimVerifier(settings, transport=transport).verify(
+            "保修期多久？", draft, sources
+        )
+    assert len(transport.calls) == 2
+    assert caught.value.diagnostic["condition_only_repair_attempted"]
+
+
+def test_condition_repair_cannot_clear_a_confirmed_full_pool_conflict(tmp_path):
+    settings, _ = _settings(tmp_path)
+    draft, sources = sample(2)
+    sources = (sources[0], replace(sources[1], text="设备保修期为一年。"), sources[2])
+
+    def conflict(data, response, kwargs):
+        if "conflict_evidence" in data:
+            response["conflict_check"].update(
+                conflicting_evidence_ids=["E1", "E2"],
+                pairs=[
+                    {
+                        "left_id": "E1",
+                        "left_quote": sources[0].text,
+                        "right_id": "E2",
+                        "right_quote": sources[1].text,
+                        "reason": "Same device and scope have incompatible warranty periods.",
+                    }
+                ],
+            )
+            response["condition_checks"][0].update(
+                applicable=True, status="covered", answer_quote="invented witness"
+            )
+        else:
+            response["conflict_check"] = {"checked": True, "conflicting_evidence_ids": []}
+
+    transport = ReviewTransport(conflict)
+    result = OpenAICompatibleClaimVerifier(settings, transport=transport).verify(
+        "保修期多久？", draft, sources
+    )
+    assert not result.supported and result.conflicting_evidence_ids == ("E1", "E2")
+    assert result.conflict_checked and len(transport.calls) == 2
+
+
 @pytest.mark.parametrize("count", [60, 86, 93])
 def test_large_pool_reviews_every_condition_and_all_conflict_sources(tmp_path, count):
     settings, _ = _settings(tmp_path)
@@ -287,7 +373,7 @@ def test_batch_repair_only_rechecks_invalid_rows_and_preserves_missing_rules(tmp
     assert result.condition_checks[0]["status"] == "missing"
     repair = transport.calls[2]
     assert [r["id"] for r in repair["condition_requirements"]] == ["K3"]
-    assert [r["evidence_id"] for r in repair["sources"]] == ["E4"]
+    assert [r["evidence_id"] for r in repair["sources"]] == ["E4", "E1"]
     assert result.condition_checks[2]["status"] == "not_applicable"
 
 

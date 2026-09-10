@@ -158,6 +158,15 @@ def _table_windows(
 ) -> tuple[tuple[str, int, int], ...]:
     """Keep complete rows together; header context is attached separately."""
     rows = text.splitlines(keepends=True)
+    html_rows = list(re.finditer(r"<tr\b[^>]*>.*?</tr\s*>", text, re.I | re.S))
+    if html_rows:
+        # MinerU often emits an entire HTML table on one line. Preserve real
+        # row boundaries and original character offsets rather than splitting
+        # the serialized table as a paragraph.
+        boundaries = [0, *(row.end() for row in html_rows[:-1]), len(text)]
+        rows = [
+            text[left:right] for left, right in zip(boundaries[:-1], boundaries[1:], strict=True)
+        ]
     result: list[tuple[str, int, int]] = []
     start = end = tokens = 0
     for row in rows:
@@ -195,7 +204,7 @@ class TokenAwareChunker:
         self.tokenizer = tokenizer or _DEFAULT_TOKENIZER
         self.tokenizer_id = self.tokenizer.revision
         self.revision = (
-            f"token-aware:v4:{self.config.strategy}:"
+            f"token-aware:v5-html-rows:{self.config.strategy}:"
             f"{self.config.target_tokens}:{self.config.overlap_tokens}"
         )
 
@@ -395,6 +404,15 @@ class TokenAwareChunker:
         if heading:
             context.append(heading)
         table_header = str(node.metadata.get("table_header", "")).strip()
+        if node.node_type is NodeType.TABLE and not table_header:
+            header = re.search(r"<thead\b[^>]*>.*?</thead\s*>", node.original_text, re.I | re.S)
+            if header is None:
+                candidate = re.search(r"<tr\b[^>]*>.*?</tr\s*>", node.original_text, re.I | re.S)
+                header = (
+                    candidate if candidate and re.search(r"<th\b", candidate[0], re.I) else None
+                )
+            if header:
+                table_header = header[0]
         if node.node_type is NodeType.TABLE and not table_header and "|" in node.original_text:
             table_header = node.original_text.splitlines()[0].strip()
         if (

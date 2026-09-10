@@ -117,7 +117,9 @@ def test_generator_returns_explicit_refusal_status_and_prompts_for_it(tmp_path):
     prompt = transport.calls[0]["payload"]["messages"][0]["content"]
     assert '"status":"insufficient_evidence"' in prompt
     assert "status (exactly answered or insufficient_evidence)" in prompt
-    assert generator.revision.endswith(":synthesized-markdown-v15-citation-only-repair")
+    assert generator.revision.endswith(
+        ":synthesized-markdown-v21-shared-condition-scope"
+    )
 
 
 @pytest.fixture

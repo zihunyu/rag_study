@@ -27,8 +27,27 @@ from ragkb.domain.answer_conditions import (
 from ragkb.domain.errors import InvalidProviderResponse
 from ragkb.domain.rag import AtomicClaim, DraftAnswer, Evidence
 from ragkb.runtime_components import build_runtime_components
-from test_model_http_adapters import _MockTransport, _settings
+from test_model_http_adapters import _MockTransport as BaseTransport
+from test_model_http_adapters import _settings
 from test_trusted_qa import _service
+
+
+def condition_response(response, sent):
+    if "conflict_evidence" in sent:
+        return response
+    response = copy.deepcopy(response)
+    loaded = json.loads(response["choices"][0]["message"]["content"])
+    ids = {r["id"] for r in sent["condition_requirements"]}
+    loaded = {"condition_checks": [c for c in loaded["condition_checks"] if c["id"] in ids]}
+    response["choices"][0]["message"]["content"] = json.dumps(loaded)
+    return response
+
+
+class _MockTransport(BaseTransport):
+    def post_json(self, url, **kwargs):
+        response = super().post_json(url, **kwargs)
+        sent = json.loads(kwargs["payload"]["messages"][1]["content"])
+        return condition_response(response, sent)
 
 
 def case():
@@ -75,6 +94,7 @@ def test_captured_failure_identifies_exact_condition_and_reason(tmp_path):
         "condition_id": "K3",
         "evidence_id": "E7",
         "verification_stage": "claims_and_conflicts",
+        "condition_only_repair_attempted": True,
     }
     assert "虚构" not in str(caught.value)
 
@@ -392,7 +412,7 @@ def test_failed_model_output_is_persisted_privately_and_can_be_replayed(tmp_path
 
 
 @pytest.mark.parametrize("valid_repair", [True, False])
-def test_protocol_repair_is_bounded_and_rechecks_the_entire_response(tmp_path, valid_repair):
+def test_protocol_repair_is_bounded_and_only_rechecks_invalid_conditions(tmp_path, valid_repair):
     value, draft, evidence = case()
     settings, _ = _settings(tmp_path)
 
@@ -403,12 +423,16 @@ def test_protocol_repair_is_bounded_and_rechecks_the_entire_response(tmp_path, v
                 sent = json.loads(kwargs["payload"]["messages"][1]["content"])
                 assert sent["protocol_repair"]["condition_id"] == "K3"
                 assert sent["answer"] == draft.text
+                assert "conflict_evidence" not in sent
+                assert [r["id"] for r in sent["condition_requirements"]] == ["K3"]
                 fixed = corrected_response(value)
                 if not valid_repair:
                     loaded = json.loads(fixed["choices"][0]["message"]["content"])
-                    loaded["verdicts"][0]["verdict"] = "CONTRADICTED"
+                    loaded["condition_checks"][2].update(
+                        status="missing", reason="Required scope absent."
+                    )
                     fixed["choices"][0]["message"]["content"] = json.dumps(loaded)
-                return fixed
+                return condition_response(fixed, sent)
             return result
 
     transport = Transport(value["verifier_response"])
@@ -468,7 +492,8 @@ def test_protocol_repair_shares_the_original_timeout(tmp_path, monkeypatch):
                 clock[0] += 20
                 return result
             assert kwargs["timeout"] <= 10
-            return corrected_response(value)
+            sent = json.loads(kwargs["payload"]["messages"][1]["content"])
+            return condition_response(corrected_response(value), sent)
 
     transport = Transport(value["verifier_response"])
     assert (

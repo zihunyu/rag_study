@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from ragkb.adapters.auth import AuthorizationError
 from ragkb.api.support import principal, require_role
 from ragkb.application.reading_scope import ReadingOptions
 from ragkb.domain.acceptance import AcceptanceCase, HistoryQuestion
+from ragkb.domain.acceptance_points import PointReview, SourceBinding, criteria_for
+from ragkb.domain.parsing_acceptance import ParsingStandard
 from ragkb.domain.uploads import ResourceNotFoundError
 from ragkb.infrastructure.acceptance_service import AcceptanceService
 
@@ -18,6 +20,16 @@ from ragkb.infrastructure.acceptance_service import AcceptanceService
 class SaveCase(BaseModel):
     case: AcceptanceCase
     revision: int = Field(default=0, ge=0)
+
+
+class SaveParsingStandard(BaseModel):
+    standard: ParsingStandard
+    revision: int = Field(default=0, ge=0)
+
+
+class RunParsing(BaseModel):
+    standard_id: str = Field(min_length=1, max_length=191)
+    version_id: str = Field(min_length=1, max_length=191)
 
 
 class ImportCases(BaseModel):
@@ -28,6 +40,13 @@ class CreateRun(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     case_ids: list[str] = Field(min_length=1, max_length=100)
     call_limit: int = Field(default=100, ge=1, le=2000)
+    review_mode: Literal["manual", "assisted"] = "manual"
+
+
+class GenerateCandidates(BaseModel):
+    sources: list[SourceBinding] = Field(min_length=1, max_length=20)
+    count: int = Field(default=3, ge=1, le=10)
+    call_limit: int = Field(default=3, ge=1, le=30)
 
 
 class Budget(BaseModel):
@@ -39,6 +58,7 @@ class Review(BaseModel):
     note: str = Field(min_length=1, max_length=4000, pattern=r".*\S.*")
     checked_points: list[int] = Field(default_factory=list, max_length=60)
     sources_checked: bool = False
+    point_reviews: list[PointReview] = Field(default_factory=list, max_length=61)
 
 
 class FromTurn(BaseModel):
@@ -50,6 +70,104 @@ class FromTurn(BaseModel):
 def build_acceptance_router(service: AcceptanceService) -> APIRouter:
     router = APIRouter(prefix="/api/spaces/{space_id}/acceptance", tags=["acceptance"])
     repo = service.repository
+
+    @router.get("/parsing/standards")
+    def parsing_standards(space_id: str, request: Request) -> list[dict[str, Any]]:
+        return service.parsing.records(principal(request), space_id, "standard")
+
+    @router.post("/parsing/standards")
+    def save_parsing_standard(
+        space_id: str, body: SaveParsingStandard, request: Request
+    ) -> dict[str, Any]:
+        try:
+            return service.parsing.save(principal(request), space_id, body.standard, body.revision)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+
+    @router.get("/parsing/standards/{identity}/revisions")
+    def parsing_revisions(space_id: str, identity: str, request: Request) -> list[dict[str, Any]]:
+        standard = service.parsing.record(principal(request), space_id, identity)
+        return [
+            service.parsing.record(principal(request), space_id, f"{identity}:{i}")
+            for i in range(standard["revision"], 0, -1)
+        ]
+
+    @router.get("/parsing/versions/{identity}")
+    def parsing_version(
+        space_id: str,
+        identity: str,
+        request: Request,
+        pages: str = Query(default="1", max_length=200),
+    ) -> dict[str, Any]:
+        try:
+            selected = {int(p.strip()) for p in pages.split(",")}
+            if not selected or len(selected) > 20 or min(selected) < 1 or max(selected) > 100000:
+                raise ValueError("SELECT_UP_TO_20_ORIGINAL_PAGES")
+            subject = principal(request)
+            version = service.parsing.version(subject, space_id, identity)
+            return service.parsing.snapshot(subject, space_id, identity, selected) | {
+                "mime_type": version["mime_type"],
+                "document_id": version["document_id"],
+            }
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+
+    @router.get("/parsing/runs")
+    def parsing_runs(space_id: str, request: Request) -> list[dict[str, Any]]:
+        return service.parsing.records(principal(request), space_id, "run")
+
+    @router.post("/parsing/runs")
+    def run_parsing(
+        space_id: str,
+        body: RunParsing,
+        request: Request,
+        key: str = Header(alias="Idempotency-Key", min_length=1, max_length=191),
+    ) -> dict[str, Any]:
+        try:
+            return service.parsing.run(
+                principal(request), space_id, body.standard_id, body.version_id, key
+            )
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+
+    @router.get("/parsing/compare")
+    def compare_parsing(
+        space_id: str, request: Request, baseline: str, candidate: str
+    ) -> dict[str, Any]:
+        return service.parsing.compare(principal(request), space_id, baseline, candidate)
+
+    @router.get("/sources/{document_id}")
+    def sources(
+        space_id: str,
+        document_id: str,
+        request: Request,
+        offset: int = Query(default=0, ge=0, le=100000),
+    ) -> dict[str, Any]:
+        subject = principal(request)
+        service.authorize(subject, space_id)
+        try:
+            return service.assistance.source_page(subject, space_id, document_id, offset)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+
+    @router.post("/candidates:runs")
+    def generate(
+        space_id: str,
+        body: GenerateCandidates,
+        request: Request,
+        key: str = Header(alias="Idempotency-Key", min_length=1, max_length=191),
+    ) -> dict[str, Any]:
+        try:
+            return service.create_generation(
+                principal(request),
+                space_id,
+                [s.model_dump() for s in body.sources],
+                body.count,
+                key,
+                body.call_limit,
+            )
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
 
     @router.get("/cases")
     def cases(space_id: str, request: Request) -> list[dict[str, Any]]:
@@ -168,7 +286,11 @@ def build_acceptance_router(service: AcceptanceService) -> APIRouter:
         service.authorize(principal(request), space_id)
         return [
             {k: v for k, v in r.items() if k not in {"payload", "execution_token", "request_key"}}
-            | {"name": r["payload"]["name"], "case_count": len(r["payload"]["cases"])}
+            | {
+                "name": r["payload"]["name"],
+                "case_count": len(r["payload"]["cases"]),
+                "kind": r["payload"].get("kind", "qa"),
+            }
             for r in repo.runs(space_id)
         ]
 
@@ -181,7 +303,13 @@ def build_acceptance_router(service: AcceptanceService) -> APIRouter:
     ) -> dict[str, Any]:
         try:
             return service.create_run(
-                principal(request), space_id, body.case_ids, key, body.name, body.call_limit
+                principal(request),
+                space_id,
+                body.case_ids,
+                key,
+                body.name,
+                body.call_limit,
+                body.review_mode,
             )
         except ValueError as error:
             raise HTTPException(422, str(error)) from error
@@ -216,17 +344,53 @@ def build_acceptance_router(service: AcceptanceService) -> APIRouter:
         if not attempt:
             raise ResourceNotFoundError(attempt_id)
         case = next(c["payload"] for c in run["payload"]["cases"] if c["id"] == attempt["case_id"])
-        count = len(case["required_points"]) + len(case["forbidden_claims"])
+        points = criteria_for(case)
+        count = len(points)
+        structured = [p.model_dump() for p in body.point_reviews]
+        if structured:
+            if len(structured) != count or {p["point_id"] for p in structured} != {
+                p["id"] for p in points
+            }:
+                raise HTTPException(422, "REVIEW_EVERY_POINT_ONCE")
+            answer = (attempt["payload"].get("steps") or [{}])[-1].get("result", {}).get(
+                "answer"
+            ) or ""
+            kinds = {p["id"]: p["kind"] for p in points}
+            for point in structured:
+                quote = point["answer_quote"]
+                if (
+                    (quote and quote not in answer)
+                    or (
+                        point["status"] == "covered"
+                        and kinds[point["point_id"]] not in {"forbidden", "relevance"}
+                        and not quote.strip()
+                    )
+                    or (
+                        kinds[point["point_id"]] == "relevance"
+                        and point["status"] == "incorrect"
+                        and not quote.strip()
+                    )
+                ):
+                    raise HTTPException(422, "REVIEW_ANSWER_QUOTE_REQUIRED")
+        if (case.get("criteria") or case.get("check_relevance")) and not structured:
+            raise HTTPException(422, "REVIEW_EVERY_POINT_ONCE")
         if body.verdict == "passed" and (
             not body.sources_checked
-            or set(body.checked_points) != set(range(count))
+            or (
+                any(p["status"] != "covered" for p in structured)
+                if structured
+                else set(body.checked_points) != set(range(count))
+            )
+            or attempt["payload"].get("sources_unavailable", False)
             or any(
                 s["result"]["status"] == "sources_unavailable"
                 for s in attempt["payload"].get("steps", [])
             )
         ):
             raise HTTPException(422, "REVIEW_ALL_POINTS_AND_SOURCES")
-        record = repo.review(run_id, attempt_id, subject.user_id, body.verdict, body.note)
+        record = repo.review(
+            run_id, attempt_id, subject.user_id, body.verdict, body.note, structured or None
+        )
         return {"reviewed": True, "review": record}
 
     @router.get("/runs/{run_id}/attempts/{attempt_id}/diagnostics")
@@ -247,6 +411,9 @@ def build_acceptance_router(service: AcceptanceService) -> APIRouter:
 
     @router.get("/compare")
     def compare(space_id: str, baseline: str, candidate: str, request: Request) -> dict[str, Any]:
-        return service.compare(principal(request), space_id, baseline, candidate)
+        try:
+            return service.compare(principal(request), space_id, baseline, candidate)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
 
     return router

@@ -63,8 +63,26 @@ def repairable_surface(draft: DraftAnswer, result: VerificationResult) -> bool:
     )
 
 
-def rebuild_from_supported_claims(draft: DraftAnswer) -> DraftAnswer:
+def rebuild_from_supported_claims(
+    draft: DraftAnswer, *, numbered: bool = False, list_claim_count: int | None = None
+) -> DraftAnswer:
     """Preserve every claim verbatim with its own citations; still requires full review."""
+    if numbered:
+        count = len(draft.claims) if list_claim_count is None else list_claim_count
+        if not 0 < count <= len(draft.claims):
+            raise ValueError("INVALID_LIST_CLAIM_COUNT")
+        main = "\n\n".join(
+            f"{index}. {claim.text} " + "".join(f"[{identity}]" for identity in claim.evidence_ids)
+            for index, claim in enumerate(draft.claims[:count], 1)
+        )
+        supplement = "\n\n".join(
+            claim.text + " " + "".join(f"[{identity}]" for identity in claim.evidence_ids)
+            for claim in draft.claims[count:]
+        )
+        return replace(
+            draft,
+            text=main + ("\n\n相关限制：\n\n" + supplement if supplement else ""),
+        )
     return replace(
         draft,
         text="\n\n".join(
@@ -141,7 +159,7 @@ def citation_targets(text: str) -> dict[str, str]:
         value = line.strip()
         if value.startswith(("```", "~~~")):
             fenced = not fenced
-        elif value and not fenced and not re.search(r"\[E\d+\]", value):
+        elif value and not fenced:
             if re.fullmatch(r"[|\s:\-]+", value):
                 continue
             if (
@@ -181,6 +199,10 @@ def apply_citation_additions(draft: DraftAnswer, additions: Any) -> DraftAnswer:
             raise ValueError("CITATION_REPAIR_INVALID")
         index = int(identity[1:]) - 1
         line = lines[index]
+        existing = set(re.findall(r"\[(E\d+)\]", line))
+        sources = tuple(source for source in sources if source not in existing)
+        if not sources:
+            raise ValueError("CITATION_REPAIR_INVALID")
         at = len(line.rstrip("\r\n"))
         if line.lstrip().startswith("|") and line[:at].rstrip().endswith("|"):
             at = line.rfind("|", 0, at)

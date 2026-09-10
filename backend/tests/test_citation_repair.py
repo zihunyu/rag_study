@@ -44,13 +44,50 @@ def test_patch_preserves_all_facts_table_and_existing_sources():
         )
 
 
+def test_rebuilding_list_keeps_appended_conditions_outside_numbering():
+    from ragkb.domain.citation_repair import rebuild_from_supported_claims
+
+    original = DraftAnswer(
+        "",
+        ("E1", "E2"),
+        (
+            AtomicClaim("检查第一项。", ("E1",)),
+            AtomicClaim("检查第二项。", ("E1",)),
+            AtomicClaim("操作前必须断电。", ("E2",)),
+        ),
+        synthesized=True,
+    )
+    rebuilt = rebuild_from_supported_claims(original, numbered=True, list_claim_count=2)
+    assert "1. 检查第一项。" in rebuilt.text and "2. 检查第二项。" in rebuilt.text
+    assert "3." not in rebuilt.text
+    assert "相关限制：\n\n操作前必须断电。 [E2]" in rebuilt.text
+    assert rebuilt.claims == original.claims and rebuilt.citation_ids == original.citation_ids
+    with pytest.raises(ValueError, match="INVALID_LIST_CLAIM_COUNT"):
+        rebuild_from_supported_claims(original, numbered=True, list_claim_count=4)
+
+
+def test_partially_cited_line_gets_missing_support_without_changing_existing_citations():
+    before = DraftAnswer(
+        "按每人每晚计算，单位为元/晚。[E1]",
+        ("E1", "E2"),
+        (AtomicClaim("按每人每晚计算。", ("E1",)), AtomicClaim("单位为元/晚。", ("E2",))),
+        synthesized=True,
+    )
+    after = apply_citation_additions(before, [{"line_id": "L1", "claim_ids": ["C1", "C2"]}])
+    validate_citation_only_change(before, after)
+    assert after.text == before.text + " [E2]"
+    assert after.claims is before.claims
+    with pytest.raises(ValueError, match="CHANGED_SOURCES"):
+        validate_citation_only_change(before, replace(after, text=after.text.replace("[E1]", "")))
+
+
 @pytest.mark.parametrize(
     "additions",
     [
         [{"line_id": "L1", "claim_ids": ["C9"]}],
         [
-            {"line_id": "L5", "claim_ids": ["C2"]}
-        ],  # Already cited; do not disguise a wrong citation.
+            {"line_id": "L5", "claim_ids": ["C1"]}
+        ],  # Repeating an existing marker does not add missing support.
         [{"line_id": "L1", "claim_ids": ["C1"], "text": "invented"}],
         [{"line_id": "L1", "claim_ids": ["C1"]}] * 2,
         [{"line_id": [], "claim_ids": ["C1"]}],
@@ -221,3 +258,61 @@ def test_full_reverification_is_required_and_citation_repair_is_bounded(tmp_path
             if recheck == "condition_missing"
             else "system_error"
         )
+
+
+@pytest.mark.parametrize("recheck", ["pass", "conflict", "bad_citation", "timeout"])
+@pytest.mark.parametrize("source_list", [False, True])
+def test_empty_citation_patch_rebuilds_supported_claims_and_rechecks_every_gate(
+    tmp_path, recheck, source_list
+):
+    value = replace(draft(), text="以下是全部规则：\n保修三年。 [E1]\n服务仅限城区。 [E2]")
+    sources = (
+        replace(_evidence(text="设备保修三年。"), locator={"section_path": "服务规则"}),
+        replace(_evidence(), evidence_id="E2", text="服务仅限城区。"),
+        replace(
+            _evidence(), evidence_id="E3", text="外区另行付费。", source_role="conflict_context"
+        ),
+    )
+
+    class Generator:
+        revision = "fixture"
+        repairs = 0
+
+        def generate(self, question, evidence):
+            return value
+
+        def repair_citations(self, question, current, evidence):
+            self.repairs += 1
+            return current
+
+    class Verifier:
+        revision = "fixture"
+        calls = 0
+
+        def verify(self, question, current, evidence):
+            self.calls += 1
+            assert evidence == sources
+            if self.calls == 1:
+                return verification(current, citation_ids_valid=False)
+            assert current.claims == value.claims and current.citation_ids == value.citation_ids
+            assert "全部规则" not in current.text
+            assert all(c.text in current.text for c in value.claims)
+            if source_list:
+                assert current.text.startswith("1. ") and "\n\n2. " in current.text
+            if recheck == "timeout":
+                raise ProviderTimeout("MODEL_PROVIDER_TIMEOUT")
+            return verification(
+                current,
+                citation_ids_valid=recheck != "bad_citation",
+                conflicting_evidence_ids=("E1", "E3") if recheck == "conflict" else (),
+            )
+
+    generator = Generator()
+    service, _, _ = _service(tmp_path, SyntheticEvidenceProvider(sources), generator=generator)
+    service.verifier = Verifier()
+    result = service.ask("完整列出服务规则" if source_list else "介绍规则", "tenant", "user")
+    assert generator.repairs == (0 if source_list else 1) and service.verifier.calls == 2
+    if recheck == "pass":
+        assert result.verified and result.answer
+    else:
+        assert result.answer is None and not result.citations

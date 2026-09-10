@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 from ragkb.domain.rag import AtomicClaim, DraftAnswer, Evidence
 
-REVISION = "source-list-compose-v3-citation-aliases"
+REVISION = "source-list-compose-v4-continuation-guard"
 SOURCE_LIST_INTRO = "按所引资料的章节编号逐条整理如下："
 _ITEM = re.compile(r"^\s*(?:[（(](\d{1,2})[)）]\s*|(\d{1,2})[、.)．](?!\d)\s*|(\d{1,2})\s+)(\S.*)$")
 _LIST_TOPIC = re.compile(
@@ -23,6 +23,12 @@ def _plain(value: str) -> str:
 def _heading(value: str) -> str:
     leaf = re.split(r"\s/\s| > ", value)[-1]
     return _plain(re.sub(r"^\s*[#*\\\s]*\d*[.、\s]*", "", leaf))
+
+
+def _continued_heading(value: str) -> str:
+    leaf = re.split(r"\s/\s| > ", value)[-1]
+    base = re.sub(r"\s*[（(](?:续|续页|续表|continued)[)）]\s*$", "", leaf, flags=re.I)
+    return _heading(base) if base != leaf else ""
 
 
 def _body_key(value: str) -> str:
@@ -76,6 +82,22 @@ def numbered_items(text: str) -> tuple[tuple[int, str], ...]:
     return tuple(result)
 
 
+def requests_source_list(question: str, evidence: tuple[Evidence, ...]) -> bool:
+    requested = _requested_heading(question)
+    return bool(requested) and any(
+        e.authorized
+        and e.current_version
+        and requested
+        in {
+            _heading(str(e.locator.get("section_path") or e.locator.get("heading") or "")),
+            _continued_heading(
+                str(e.locator.get("section_path") or e.locator.get("heading") or "")
+            ),
+        }
+        for e in evidence
+    )
+
+
 @dataclass(frozen=True)
 class SourceListPlan:
     title: str
@@ -114,6 +136,21 @@ def source_list_plan(question: str, evidence: tuple[Evidence, ...]) -> SourceLis
     if not complete or len({(e.document_id, e.document_version_id) for e, _ in complete}) != 1:
         return None
     primary, base = max(complete, key=lambda pair: len(pair[1]))
+    # A 1..N prefix is not a complete list when the authorized source also
+    # contains later items. Let ordinary synthesis read the whole evidence pool
+    # instead of projecting a partial prefix and making repair preserve it.
+    bodies = {_body_key(body) for _, body in base}
+    for item in evidence:
+        if not item.authorized or not item.current_version or item.locator.get("visual_facts"):
+            continue
+        scope = str(item.locator.get("section_path") or item.locator.get("heading") or "")
+        if requested not in {_heading(scope), _continued_heading(scope)}:
+            continue
+        if any(
+            number > len(base) and _body_key(body) not in bodies
+            for number, body in numbered_items(item.display_text or item.text)
+        ):
+            return None
     peers = [
         (e, items)
         for e, items in parsed

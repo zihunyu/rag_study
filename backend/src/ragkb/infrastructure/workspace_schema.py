@@ -156,6 +156,15 @@ WORKSPACE_TABLES.update(
         attempt_id VARCHAR(191) NOT NULL, payload_json TEXT NOT NULL,
         created_at DOUBLE NOT NULL
     """,
+        "acceptance_review_details": """
+        review_id VARCHAR(191) PRIMARY KEY, payload_json LONGTEXT NOT NULL
+    """,
+        "acceptance_parsing_records": """
+        id VARCHAR(191) PRIMARY KEY, tenant_id VARCHAR(191) NOT NULL,
+        space_id VARCHAR(191) NOT NULL, kind VARCHAR(32) NOT NULL,
+        revision INTEGER NOT NULL, actor_id VARCHAR(191) NOT NULL,
+        payload_json LONGTEXT NOT NULL, updated_at DOUBLE NOT NULL
+    """,
     }
 )
 WORKSPACE_INDEXES.update(
@@ -165,6 +174,9 @@ WORKSPACE_INDEXES.update(
         "idx_acceptance_attempts_run": "acceptance_attempts(run_id, created_at)",
         "idx_acceptance_reviews_attempt": "acceptance_reviews(attempt_id, created_at)",
         "idx_acceptance_calls_run": "acceptance_calls(run_id, created_at)",
+        "idx_acceptance_parsing_space": (
+            "acceptance_parsing_records(tenant_id, space_id, kind, updated_at)"
+        ),
     }
 )
 

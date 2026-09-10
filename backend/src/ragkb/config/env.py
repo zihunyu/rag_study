@@ -229,6 +229,7 @@ class EnvSettings(BaseModel):
     ocr_max_repair_attempts: int = Field(default=1, ge=0, le=2)
     ocr_query_recheck: bool = True
     ocr_query_max_images: int = Field(default=4, gt=0, le=16)
+    ocr_query_parallelism: int = Field(default=2, ge=1, le=2)
     ocr_verify_enabled: bool = False
     ocr_verify_base_url: str = ""
     ocr_verify_api_key: SecretStr | None = None

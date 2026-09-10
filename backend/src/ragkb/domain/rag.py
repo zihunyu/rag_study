@@ -171,6 +171,8 @@ class VerificationResult:
     policy_checked: bool = True
     conflicting_evidence_ids: tuple[str, ...] = ()
     condition_checks: tuple[dict[str, str], ...] = ()
+    # Optional exact existing paragraph, independently checked in the same receipt.
+    answer_projection: str = ""
 
     @property
     def supported(self) -> bool:

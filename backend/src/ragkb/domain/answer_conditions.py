@@ -315,6 +315,16 @@ def _local_constraint_text(source: str) -> str:
         )
         if reference and not re.search(r"仅限|不得|禁止|必须|不允许", clause):
             continue
+        if re.fullmatch(
+            r"[^，,；;。!?！？]{1,100}(?:条款|规定|规则|政策|要求)"
+            r"(?:仅|只)在满足(?:其中|其)(?:全部|所有)条件时适用[。.]?",
+            clause.strip(),
+        ):
+            # A pure reference to another policy's full conditions has no new
+            # concrete conjunct to match by keywords. Keep the original rule in
+            # the semantic review: its cited, actual conditions must be checked.
+            # Never demand the words '满足全部' in an otherwise complete witness.
+            continue
         clauses.append(clause)
     return "；".join(clauses)
 
@@ -325,6 +335,35 @@ def answer_witness_spans(answer: str) -> dict[str, str]:
         f"A{i}": paragraph
         for i, paragraph in enumerate((p for p in re.split(r"\n\s*\n", answer) if p.strip()), 1)
     }
+
+
+def _selected_witness(check: dict[str, Any], answer: str, expected: dict[str, Any]) -> str | None:
+    """Resolve multiple real paragraphs without accepting model-reconstructed quotations."""
+    ids = check.get("answer_span_ids")
+    if ids is None:
+        return None
+    spans = answer_witness_spans(answer)
+    if (
+        check.get("status") != "covered"
+        or not isinstance(ids, list)
+        or not 1 <= len(ids) <= len(spans)
+        or any(not isinstance(i, str) or i not in spans for i in ids)
+        or len(set(ids)) != len(ids)
+        or (check.get("answer_span_id") and check["answer_span_id"] not in ids)
+    ):
+        raise ConditionCheckError(
+            "VERIFIER_CONDITION_WITNESS_INVALID", "answer_span_ids_invalid", expected
+        )
+    # Keep the exact continuous range, including intervening paragraphs. Semantic
+    # review still must check entity, scope and branch bindings across the selection.
+    selected = set(ids)
+    offset, bounds = 0, []
+    for identity, paragraph in spans.items():
+        start = answer.index(paragraph, offset)
+        offset = start + len(paragraph)
+        if identity in selected:
+            bounds.append((start, offset))
+    return answer[bounds[0][0] : bounds[-1][1]]
 
 
 def validate_condition_checks(
@@ -355,8 +394,11 @@ def validate_condition_checks(
             raise ConditionCheckError(
                 "VERIFIER_CONDITION_VERDICT_INVALID", "applicability_status_mismatch", expected
             )
+        selected_quote = _selected_witness(check, draft.text, expected)
         span_id = check.get("answer_span_id")
-        if span_id:
+        if selected_quote is not None:
+            quote = selected_quote
+        elif span_id:
             spans = answer_witness_spans(draft.text)
             if status != "covered" or not isinstance(span_id, str) or span_id not in spans:
                 raise ConditionCheckError(

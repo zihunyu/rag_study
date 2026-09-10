@@ -170,6 +170,29 @@ def test_table_chunks_repeat_the_reviewed_header_context() -> None:
     assert "TABLE_HEADER: 地区 | 住宿上限" in result.chunks[0].retrieval_text
 
 
+def test_html_tables_keep_each_row_and_its_header_on_both_pages() -> None:
+    header = "<tr><th>地区</th><th>上限（元/晚）</th></tr>"
+    nodes = []
+    expected = []
+    for page in (1, 2):
+        rows = [f"<tr><td>地区{page}-{i}</td><td>{page * 100 + i}</td></tr>" for i in range(6)]
+        expected.extend(rows)
+        text = "<table>" + header + "".join(rows) + "</table>"
+        nodes.append(
+            CanonicalNode(
+                f"page-{page}", None, NodeType.TABLE, text, text, SourceLocator(page=page)
+            )
+        )
+    document = replace(_document("table"), nodes=tuple(nodes))
+    result = TokenAwareChunker(
+        ChunkingConfig(target_tokens=90, max_tokens=110, min_tokens=1, overlap_tokens=0)
+    ).chunk(document, tenant_id="tenant")
+    for row in expected:
+        matched = [c for c in result.chunks if row in c.original_text]
+        assert matched, f"row split across chunks: {row}"
+        assert header in matched[0].retrieval_text
+
+
 def test_semantic_chunker_preserves_types_spans_table_context_and_tokenizer() -> None:
     class _Tokenizer:
         revision = "pinned-test-tokenizer:sha256"
