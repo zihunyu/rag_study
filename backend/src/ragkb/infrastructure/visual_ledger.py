@@ -55,11 +55,11 @@ class VisualLedger:
                 db.execute("PRAGMA user_version=2")
 
     @contextmanager
-    def connect(self) -> Iterator[sqlite3.Connection]:
-        with closing(sqlite3.connect(self.path, timeout=20)) as db:
+    def connect(self, *, timeout: float = 20) -> Iterator[sqlite3.Connection]:
+        with closing(sqlite3.connect(self.path, timeout=timeout)) as db:
             db.row_factory = sqlite3.Row
             db.execute("PRAGMA journal_mode=WAL")
-            db.execute("PRAGMA busy_timeout=20000")
+            db.execute(f"PRAGMA busy_timeout={int(timeout * 1000)}")
             with db:
                 yield db
 
@@ -171,7 +171,8 @@ class VisualLedger:
         cost: float | None = None,
         cached: bool = False,
     ) -> None:
-        with self.connect() as db:
+        # Metering must not spend the remaining answer deadline waiting for a writer.
+        with self.connect(timeout=0.2) as db:
             db.execute(
                 "INSERT INTO visual_usage(version_id,asset_id,role,model,started,elapsed,"
                 "outcome,usage,cost,cached) VALUES(?,?,?,?,?,?,?,?,?,?)",

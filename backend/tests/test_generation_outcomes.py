@@ -117,7 +117,7 @@ def test_generator_returns_explicit_refusal_status_and_prompts_for_it(tmp_path):
     prompt = transport.calls[0]["payload"]["messages"][0]["content"]
     assert '"status":"insufficient_evidence"' in prompt
     assert "status (exactly answered or insufficient_evidence)" in prompt
-    assert generator.revision.endswith(":synthesized-markdown-v33-source-binding-repair")
+    assert generator.revision.endswith(":synthesized-markdown-v34-required-aspects")
 
 
 def test_condition_recomposition_keeps_previous_facts_and_source_quotes_as_data(tmp_path):

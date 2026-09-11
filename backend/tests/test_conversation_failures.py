@@ -11,6 +11,35 @@ from test_workspace_redesign import workspace as workspace_fixture
 workspace = workspace_fixture
 
 
+def test_context_budget_stop_is_durable_and_does_not_start_retrieval(workspace, monkeypatch):
+    from ragkb.application.qa_budget import current
+
+    client, runtime, service, space = workspace
+    conversation = client.post(
+        "/api/conversations", headers={"Idempotency-Key": "budget-case"}, json={"space_id": space}
+    ).json()["id"]
+
+    def exhaust(question, history):
+        budget = current.get()
+        assert budget is not None
+        for _ in range(100):
+            budget.reserve({"input": "synthetic"})
+
+    monkeypatch.setattr(service.resolver, "resolve", exhaust)
+    monkeypatch.setattr(
+        runtime.qa_service, "ask", lambda *a, **kw: pytest.fail("must not retrieve")
+    )
+    turn = stream_result(client, conversation, "明确的问题", "budget-turn")
+    assert turn["state"] == "completed"
+    assert turn["result"]["status"] == "budget_exhausted"
+    assert not turn["result"]["retryable"] and turn["result"]["answer"] is None
+    assert turn["result"]["coverage_report"]["budget"]["model_calls"] == 12
+    assert (
+        client.get(f"/api/conversations/{conversation}/turns/{turn['id']}").json()["result"]
+        == turn["result"]
+    )
+
+
 @pytest.mark.parametrize(
     "error,code,status",
     [

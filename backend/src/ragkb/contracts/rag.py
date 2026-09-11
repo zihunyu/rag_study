@@ -23,6 +23,9 @@ class EvidenceSelection:
     coverage: str = "sufficient"
     queries: tuple[str, ...] = ()
     clarification: str | None = None
+    missing_aspects: tuple[str, ...] = ()
+    blocking_missing: bool = False
+    aspect_sources: tuple[dict[str, Any], ...] = ()
 
 
 class EvidenceSelectorPort(Protocol):

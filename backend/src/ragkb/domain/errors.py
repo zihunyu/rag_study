@@ -17,6 +17,10 @@ class TransientProviderError(RAGError):
     """A timeout, rate limit, or temporary upstream outage that may be degraded."""
 
 
+class QABudgetExceeded(RAGError):
+    """An intentional per-question limit; never retry as a provider outage."""
+
+
 class ProviderTimeout(TransientProviderError):
     def __init__(self, code: str, *, diagnostic: dict[str, Any] | None = None) -> None:
         super().__init__(code)

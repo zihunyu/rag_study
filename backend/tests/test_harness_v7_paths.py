@@ -86,7 +86,7 @@ def test_identical_selection_input_reused_but_conflict_pool_retained(tmp_path):
         "保修期多久？", runtime.tenant_id, "local-admin", clearance_level=3
     )
     assert len(calls) == 1
-    assert len(result.retrieval_queries) == 3
+    assert len(result.retrieval_queries) == 2  # Simple profile stops on unchanged evidence.
     assert result.evidence and all(e.source_role == "conflict_context" for e in result.evidence)
     provider.build_package("保修期多久？", runtime.tenant_id, "local-admin", clearance_level=3)
     assert len(calls) == 2  # This reuse never crosses a QA request boundary.

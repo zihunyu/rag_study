@@ -262,6 +262,18 @@ class EnvSettings(BaseModel):
     overview_max_images: int = Field(default=24, ge=1, le=200)
     overview_timeout_seconds: int = Field(default=900, ge=120, le=3600)
     qa_fact_timeout_seconds: int = Field(default=300, ge=30, le=3600)
+    qa_budget_simple_max_model_calls: int = Field(default=16, ge=1, le=200)
+    qa_budget_simple_max_input_tokens: int = Field(default=100000, ge=1)
+    qa_budget_simple_max_output_tokens: int = Field(default=16384, ge=1)
+    qa_budget_simple_timeout_seconds: int = Field(default=180, ge=1, le=3600)
+    qa_budget_standard_max_model_calls: int = Field(default=24, ge=1, le=200)
+    qa_budget_standard_max_input_tokens: int = Field(default=200000, ge=1)
+    qa_budget_standard_max_output_tokens: int = Field(default=32768, ge=1)
+    qa_budget_standard_timeout_seconds: int = Field(default=300, ge=1, le=3600)
+    qa_budget_deep_max_model_calls: int = Field(default=48, ge=1, le=200)
+    qa_budget_deep_max_input_tokens: int = Field(default=400000, ge=1)
+    qa_budget_deep_max_output_tokens: int = Field(default=65536, ge=1)
+    qa_budget_deep_timeout_seconds: int = Field(default=600, ge=1, le=3600)
     overview_evidence_tokens: int = Field(default=18000, ge=2000, le=64000)
     verifier_base_url: str = ""
     verifier_api_key: SecretStr | None = None
@@ -287,6 +299,7 @@ class EnvSettings(BaseModel):
     embedding_base_url: str = ""
     embedding_api_key: SecretStr | None = None
     embedding_model: str = ""
+    embedding_model_revision: str = ""
     embedding_dimension: int = Field(default=1024, gt=0)
     embedding_normalize: bool = True
     embedding_batch_size: int = Field(default=32, gt=0)
@@ -335,6 +348,7 @@ class EnvSettings(BaseModel):
     retrieval_max_chunks_per_section: int = Field(default=2, gt=0)
     retrieval_query_planning_enabled: bool = True
     retrieval_max_subqueries: int = Field(default=4, ge=1, le=8)
+    retrieval_deep_max_subqueries: int = Field(default=8, ge=1, le=8)
     directory_sync_max_files: int = Field(default=10000, ge=1, le=1000000)
     directory_sync_contract_revision: str = "v1"
 

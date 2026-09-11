@@ -118,6 +118,7 @@ class SearchSource:
     valid_to_epoch: int
     permission_revision: int
     current_version: bool
+    retrieval_queries: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -141,6 +142,7 @@ class SearchHit:
     generation_context: str = ""
     parent_source: SearchSource | None = None
     duplicate_sources: tuple[SearchSource, ...] = ()
+    retrieval_queries: tuple[str, ...] = ()
 
 
 class RetrievalHealth(StrEnum):
@@ -159,6 +161,8 @@ class SearchResult:
     retrieval_health: RetrievalHealth = RetrievalHealth.HEALTHY
     # Authorized reranking pool, retained for conflict review despite display quotas.
     review_sources: tuple[SearchSource, ...] = ()
+    # Actual query attempts, including facets and degraded/empty retrievals.
+    retrieval_queries: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

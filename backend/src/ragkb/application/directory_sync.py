@@ -119,6 +119,14 @@ class DirectorySync:
                 return ""
             job = self.queue.get(record["job_id"])
             if job is None:
+                if self.repository.ingestion_complete(record["document_version_id"]):
+                    return "SUCCEEDED"
+                if version.get("processing_state") in {"FAILED", "CANCELLED", "QUARANTINED"}:
+                    return (
+                        "CANCELLED"
+                        if version["processing_state"] == "CANCELLED"
+                        else "FAILED_FINAL"
+                    )
                 return ""
             return str(job.state.value)
         except KeyError:

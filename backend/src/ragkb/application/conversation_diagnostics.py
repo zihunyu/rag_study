@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from ragkb.domain.errors import TransientProviderError
+from ragkb.domain.errors import QABudgetExceeded, TransientProviderError
 
 PUBLIC_CONVERSATION_CODES = frozenset(
     {
@@ -22,6 +22,12 @@ PUBLIC_CONVERSATION_CODES = frozenset(
         "MODEL_PROVIDER_CIRCUIT_OPEN",
         "CONVERSATION_CONTEXT_INVALID",
         "CONVERSATION_EXECUTION_FAILED",
+        "QA_MODEL_CALL_BUDGET_EXHAUSTED",
+        "QA_INPUT_BUDGET_EXHAUSTED",
+        "QA_OUTPUT_BUDGET_EXHAUSTED",
+        "QA_TIME_BUDGET_EXHAUSTED",
+        "QA_OUTPUT_LIMIT_REQUIRED",
+        "QA_RETRIEVAL_BUDGET_EXHAUSTED",
     }
 )
 
@@ -38,7 +44,7 @@ def conversation_failure(
     elif type(status) is int and 400 <= status <= 599:
         detail["http_status"] = status
     return {
-        "status": "system_error",
+        "status": "budget_exhausted" if isinstance(error, QABudgetExceeded) else "system_error",
         "rag_run_id": None,
         "answer": None,
         "citations": [],

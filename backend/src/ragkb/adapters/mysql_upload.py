@@ -875,6 +875,20 @@ class MySQLUploadRepository:
             raise ResourceNotFoundError(version_id)
         return dict(item)
 
+    def ingestion_complete(self, version_id: str) -> bool:
+        state = self._read()
+        version = state["versions"].get(version_id, {})
+        candidate = state["candidates"].get(version_id, {})
+        return bool(
+            version.get("processing_state") == "VALIDATED"
+            and state["quality"].get(version_id)
+            and candidate.get("projection_state") in {"STAGED", "ACTIVE"}
+            and candidate.get("expected_checksum") == version.get("content_sha256")
+            and candidate.get("observed_checksum") == version.get("content_sha256")
+            and int(candidate.get("observed_watermark", -1))
+            >= int(candidate.get("required_watermark", 0))
+        )
+
     def save_document_review(
         self,
         *,

@@ -16,6 +16,7 @@ class AnswerStatus(StrEnum):
     CONFLICTING_EVIDENCE = "conflicting_evidence"
     OUT_OF_SCOPE = "out_of_scope"
     SYSTEM_ERROR = "system_error"
+    BUDGET_EXHAUSTED = "budget_exhausted"
 
 
 class QuestionDisposition(StrEnum):
@@ -72,8 +73,14 @@ class Evidence:
     source_role: Literal["hit", "parent_context", "conflict_context"] = "hit"
     parent_chunk_id: str | None = None
     display_text: str = ""
+    retrieval_queries: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        if isinstance(self.retrieval_queries, str) or any(
+            not isinstance(q, str) for q in self.retrieval_queries
+        ):
+            raise ValueError("evidence retrieval queries must be strings")
+        object.__setattr__(self, "retrieval_queries", tuple(self.retrieval_queries))
         if not self.evidence_id.startswith("E") or not self.evidence_id[1:].isdigit():
             raise ValueError("evidence IDs must use E1...En")
         if not self.text.strip() or not self.locator:
@@ -173,6 +180,7 @@ class VerificationResult:
     condition_checks: tuple[dict[str, str], ...] = ()
     # Optional verbatim retained text, independently checked in the same receipt.
     answer_projection: str = ""
+    aspect_checks: tuple[dict[str, Any], ...] = ()
 
     @property
     def supported(self) -> bool:

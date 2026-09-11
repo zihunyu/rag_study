@@ -15,6 +15,7 @@ from pymilvus.exceptions import (
     SchemaMismatchRetryableException,
 )
 
+from ragkb.adapters.embedding_contracts import EmbeddingContractRegistry, vector_target
 from ragkb.adapters.vector_indexing import (
     ZillizChunkIndexingSink,
     ZillizSafeProjectionWriter,
@@ -119,12 +120,37 @@ class MilvusHybridAdapter:
         *,
         client_factory: Callable[..., Any] = MilvusClient,
         watermark_provider: Callable[[SearchContext], int] | None = None,
+        embedding_contracts: EmbeddingContractRegistry | None = None,
     ) -> None:
         self._settings = settings
         self._client_factory = client_factory
         self._client: Any | None = None
         self._real_connection_attempted = False
         self._watermark_provider = watermark_provider
+        self.embedding_contracts = embedding_contracts
+
+    def validate_embedding_contract(self, generation: str) -> None:
+        if self.embedding_contracts is not None:
+            self.embedding_contracts.require(self._settings, generation)
+
+    def prepare_generation(self, generation: str) -> None:
+        registry = self.embedding_contracts
+        if registry is None:
+            return
+        if registry.get(vector_target(self._settings), generation) is None:
+            rows = self._connected().query(
+                collection_name=vector_collection_name(self._settings),
+                filter="index_generation_id == " + json.dumps(generation),
+                output_fields=["zilliz_pk"],
+                limit=1,
+                timeout=vector_timeout(self._settings),
+            )
+            if rows:
+                raise SchemaMismatch("EMBEDDING_CONTRACT_UNREGISTERED")
+            registry.bind(
+                self._settings, generation, provenance="empty-generation-before-first-embedding"
+            )
+        self.validate_embedding_contract(generation)
 
     def connect(self, *, database: str | None = None) -> Any:
         connection = vector_connection_kwargs(self._settings, database=database)
@@ -215,6 +241,14 @@ class MilvusHybridAdapter:
             and analyzer_enabled
             and bm25_function
         )
+        contract_compatible: bool | None = None
+        contract_error: str | None = None
+        if self.embedding_contracts is not None:
+            try:
+                self.validate_embedding_contract(self._settings.retrieval_active_generation_id)
+                contract_compatible = True
+            except SchemaMismatch as error:
+                contract_compatible, contract_error = False, str(error)
         return {
             "inspection_mode": "read_only",
             "database_exists": True,
@@ -224,7 +258,9 @@ class MilvusHybridAdapter:
             "collection_count": len(collections),
             "capacity_available_under_last_observed_limit": True,
             "collection_exists": True,
-            "schema_compatible": compatible,
+            "schema_compatible": compatible and contract_compatible is not False,
+            "embedding_contract_compatible": contract_compatible,
+            "embedding_contract_error": contract_error,
             "missing_fields": missing,
             "dense_dimension_matches": dimension == vector_dimension(self._settings),
             "analyzer_enabled": analyzer_enabled,
@@ -262,10 +298,33 @@ class MilvusHybridAdapter:
     def search_bm25(
         self, query: str, context: SearchContext, limit: int
     ) -> Sequence[IndexCandidate]:
+        return self.search_bm25_many([query], context, limit)[0]
+
+    @classmethod
+    def _candidate_groups(
+        cls, results: Any, count: int, channel: str
+    ) -> tuple[tuple[IndexCandidate, ...], ...]:
+        if (
+            not isinstance(results, Sequence)
+            or isinstance(results, (str, bytes))
+            or len(results) != count
+            or any(
+                not isinstance(row, Sequence) or isinstance(row, (str, bytes)) for row in results
+            )
+        ):
+            raise ValueError("VECTOR_BATCH_RESPONSE_COUNT_INVALID")
+        return tuple(cls._candidates([row], channel) for row in results)
+
+    def search_bm25_many(
+        self, queries: Sequence[str], context: SearchContext, limit: int
+    ) -> tuple[tuple[IndexCandidate, ...], ...]:
+        if not queries:
+            return ()
+        self.validate_embedding_contract(context.active_generation_id)
         try:
             results = self._connected().search(
                 collection_name=vector_collection_name(self._settings),
-                data=[query],
+                data=list(queries),
                 anns_field=vector_sparse_field(self._settings),
                 timeout=vector_timeout(self._settings),
                 filter=build_zilliz_filter(context),
@@ -277,15 +336,23 @@ class MilvusHybridAdapter:
             raise ProviderUnavailable("VECTOR_BM25_UNAVAILABLE") from error
         except MilvusException as error:
             raise self._provider_error(error) from error
-        return self._candidates(results, "bm25")
+        return self._candidate_groups(results, len(queries), "bm25")
 
     def search_dense(
         self, vector: Sequence[float], context: SearchContext, limit: int
     ) -> Sequence[IndexCandidate]:
+        return self.search_dense_many([vector], context, limit)[0]
+
+    def search_dense_many(
+        self, vectors: Sequence[Sequence[float]], context: SearchContext, limit: int
+    ) -> tuple[tuple[IndexCandidate, ...], ...]:
+        if not vectors:
+            return ()
+        self.validate_embedding_contract(context.active_generation_id)
         try:
             results = self._connected().search(
                 collection_name=vector_collection_name(self._settings),
-                data=[list(vector)],
+                data=[list(vector) for vector in vectors],
                 anns_field=vector_dense_field(self._settings),
                 timeout=vector_timeout(self._settings),
                 filter=build_zilliz_filter(context),
@@ -298,7 +365,7 @@ class MilvusHybridAdapter:
             raise ProviderUnavailable("VECTOR_DENSE_UNAVAILABLE") from error
         except MilvusException as error:
             raise self._provider_error(error) from error
-        return self._candidates(results, "dense")
+        return self._candidate_groups(results, len(vectors), "dense")
 
     def set_document_projection(
         self,

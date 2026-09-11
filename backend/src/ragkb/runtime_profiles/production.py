@@ -10,6 +10,7 @@ from ragkb.adapters.auth import (
     OIDCDiscoveryJWTDecoder,
     OIDCJWTAuthenticator,
 )
+from ragkb.adapters.embedding_contracts import EmbeddingContractRegistry
 from ragkb.adapters.evidence_selection import ModelEvidenceSelector
 from ragkb.adapters.external_cleanup import (
     ExternalProjectionCleanupExecutor,
@@ -131,6 +132,7 @@ class ProductionRuntimeFactory:
         )
         index = index_factory(
             settings,
+            embedding_contracts=EmbeddingContractRegistry(mysql=mysql),
             watermark_provider=lambda context: (
                 cast(RetrievalReleasePort, control_plane)
                 .current_release(context.tenant_id, context.space_ids[0])
@@ -316,6 +318,7 @@ class ProductionRuntimeFactory:
         self._guard(settings)
         if settings.auth_mode == "password":
             from ragkb.adapters.auth import PasswordCookieAuthenticator
+
             return PasswordCookieAuthenticator()
         if settings.auth_mode == "local_single_user":
             return LocalSingleUserAuthenticator(settings, tenant_id=tenant_id)

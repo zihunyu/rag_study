@@ -14,10 +14,12 @@ from ragkb.adapters.conversation_context import ContextResolverPort, bounded_his
 from ragkb.application.cancellation import cancellation_scope, check_cancelled
 from ragkb.application.conversation_diagnostics import conversation_failure
 from ragkb.application.deadlines import request_deadline
+from ragkb.application.qa_budget import question_budget
 from ragkb.application.qa_performance import performance_report, performance_scope, timed_stage
 from ragkb.application.reading_scope import ReadingOptions, reading_scope
+from ragkb.application.reuse_statistics import task_usage
 from ragkb.domain.auth import RequestPrincipal
-from ragkb.domain.errors import IngestionCancelled
+from ragkb.domain.errors import IngestionCancelled, QABudgetExceeded
 from ragkb.domain.ids import new_uuid7
 from ragkb.infrastructure.conversations import ACTIVE_STATES, ConversationRepository
 from ragkb.infrastructure.model_account import provider_operation
@@ -106,7 +108,10 @@ class ConversationService:
         if not result:
             return item
         if not result.get("verified"):
+            from ragkb.api.citation_projection import withheld_answer_report
+
             result.update(answer=None, citations=[])
+            result["coverage_report"] = withheld_answer_report(result.get("coverage_report") or {})
             return item
         citations = result.get("citations", [])
         if not citations:
@@ -148,9 +153,12 @@ class ConversationService:
             except Exception:
                 valid = False
         if not valid:
+            from ragkb.api.citation_projection import withheld_answer_report
+
             result.update(
                 answer=None, citations=[], verified=False, sources_stale=True, retryable=True
             )
+            result["coverage_report"] = withheld_answer_report(result.get("coverage_report") or {})
             return item
         if references:
             details: dict[str, dict[str, Any]] = {}
@@ -198,6 +206,7 @@ class ConversationService:
         done = threading.Event()
         lost_lease = threading.Event()
         heartbeat_thread: threading.Thread | None = None
+        usage = None
 
         def heartbeat() -> None:
             while not done.wait(5):
@@ -244,14 +253,24 @@ class ConversationService:
                 ledger.put("reading", identity, report)
 
             with (
+                task_usage(
+                    self.runtime.reuse_ledger,
+                    identity,
+                    kind="qa",
+                    tenant_id=subject.tenant_id,
+                    user_id=subject.user_id,
+                    space_id=conversation["space_id"],
+                ) as usage,
                 cancellation_scope(cancellation),
                 provider_operation("space:" + conversation["space_id"], "", "qa"),
                 reading_scope(reading, save_reading),
                 request_deadline(
                     self.runtime.settings.overview_timeout_seconds
                     if reading.mode != "fact"
-                    else self.runtime.settings.qa_fact_timeout_seconds
+                    else self.runtime.settings.qa_fact_timeout_seconds,
+                    check_on_exit=False,
                 ),
+                question_budget(self.runtime.settings, turn["original_question"]) as turn_budget,
             ):
                 rows = self.repository.turns(
                     conversation["id"], before=turn["sequence_number"], limit=6
@@ -273,6 +292,9 @@ class ConversationService:
                     )
                 check_cancelled()
                 if resolved.question is None:
+                    if usage:
+                        usage.state = "needs_clarification"
+                        usage.finish()
                     self.repository.finish(
                         identity,
                         token,
@@ -287,6 +309,9 @@ class ConversationService:
                             "clarification_question": resolved.clarification,
                             "clarification_fields": ["subject"],
                             "warnings": [],
+                            "coverage_report": {"reuse_statistics": usage.report()}
+                            if usage
+                            else {},
                         },
                     )
                     return
@@ -322,8 +347,16 @@ class ConversationService:
                 )
         except IngestionCancelled:
             self.repository.finish(identity, token, "cancelled")
+        except QABudgetExceeded as error:
+            failure = conversation_failure(error, phase, identity, performance_report())
+            failure["coverage_report"]["budget"] = turn_budget.report()
+            if usage:
+                failure["coverage_report"]["reuse_statistics"] = usage.report()
+            self.repository.finish(identity, token, "completed", failure)
         except Exception as error:
             failure = conversation_failure(error, phase, identity, performance_report())
+            if usage:
+                failure["coverage_report"]["reuse_statistics"] = usage.report()
             self.repository.finish(identity, token, "failed", failure, error=failure["warnings"][0])
         finally:
             done.set()

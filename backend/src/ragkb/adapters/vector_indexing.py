@@ -256,6 +256,9 @@ class ZillizChunkIndexingSink:
         security_projection: SecurityProjection | None = None,
         cancel_check: Callable[[], bool] | None = None,
     ) -> bool:
+        prepare = getattr(self.adapter, "prepare_generation", None)
+        if callable(prepare):
+            prepare(self.generation_id)
         vectors: list[Sequence[float]] = []
         for start in range(0, len(result.chunks), self.settings.embedding_batch_size):
             if cancel_check is not None and cancel_check():

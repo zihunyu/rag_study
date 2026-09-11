@@ -22,11 +22,12 @@ def remaining_timeout(timeout: float) -> float:
 
 
 @contextmanager
-def request_deadline(seconds: float = 120) -> Iterator[None]:
+def request_deadline(seconds: float = 120, *, check_on_exit: bool = True) -> Iterator[None]:
     token = _deadline.set(time.monotonic() + remaining_timeout(seconds))
     try:
         yield
-        remaining_timeout(seconds)
+        if check_on_exit:
+            remaining_timeout(seconds)
     finally:
         _deadline.reset(token)
 

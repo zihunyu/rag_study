@@ -54,6 +54,27 @@ OPENAPI_VERSION = "1.0.0"
 def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
     router = APIRouter()
 
+    @router.get("/api/rag-runs/{rag_run_id}/reuse-statistics", tags=["rag"])
+    def reuse_statistics(rag_run_id: str, request: Request) -> dict[str, Any]:
+        principal = _principal(request)
+        _require_role(principal, "reader", "knowledge_maintainer", "admin")
+        _require_local_tenant(runtime, principal)
+        package = runtime.rag_repository.get_package(rag_run_id)
+        if (
+            package is None
+            or package.tenant_id != principal.tenant_id
+            or package.user_id != principal.user_id
+        ):
+            raise ResourceNotFoundError(rag_run_id)
+        result = runtime.rag_repository.get_result(rag_run_id)
+        receipt = result.coverage_report.get("reuse_statistics", {}) if result else {}
+        task_id = receipt.get("task_id")
+        return (
+            runtime.reuse_ledger.report(task_id)
+            if task_id and runtime.reuse_ledger
+            else {"available": False}
+        )
+
     def selected_space(tenant_id: str, requested_space_id: str | None) -> str:
         space_id = requested_space_id or runtime.space_id
         if runtime.repository.get_space(space_id)["tenant_id"] != tenant_id:
@@ -152,7 +173,8 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
             request_deadline(
                 runtime.settings.overview_timeout_seconds
                 if body.reading.mode != "fact"
-                else runtime.settings.qa_fact_timeout_seconds
+                else runtime.settings.qa_fact_timeout_seconds,
+                check_on_exit=False,
             ),
         ):
             result = runtime.qa_service.ask(
@@ -192,7 +214,8 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
                 request_deadline(
                     runtime.settings.overview_timeout_seconds
                     if body.reading.mode != "fact"
-                    else runtime.settings.qa_fact_timeout_seconds
+                    else runtime.settings.qa_fact_timeout_seconds,
+                    check_on_exit=False,
                 ),
             ):
                 result = runtime.qa_service.ask(

@@ -59,16 +59,34 @@ class SQLiteEmbeddingCache:
             raise ProviderTimeout("EMBEDDING_CACHE_WAIT_TIMEOUT") from error
 
     def get(self, namespace: str, key: str, dimension: int) -> list[float] | None:
+        return self.get_many(namespace, [key], dimension).get(key)
+
+    def get_many(
+        self, namespace: str, keys: Sequence[str], dimension: int
+    ) -> dict[str, list[float]]:
+        """Read warm entries without acquiring provider single-flight locks."""
+        unique = list(dict.fromkeys(keys))
+        result = {}
         with closing(self._connect()) as db:
-            row = db.execute(
-                "SELECT vector, checksum FROM vectors WHERE namespace=? AND input_hash=? "
-                "AND dimension=?",
-                (namespace, key, dimension),
-            ).fetchone()
-        if row is None or self.key(row[0]) != row[1]:
+            for start in range(0, len(unique), 900):
+                batch = unique[start : start + 900]
+                placeholders = ",".join("?" for _ in batch)
+                rows = db.execute(
+                    "SELECT input_hash, vector, checksum FROM vectors WHERE namespace=? "  # noqa: S608 -- only placeholder counts are interpolated
+                    "AND dimension=? AND input_hash IN (" + placeholders + ")",
+                    (namespace, dimension, *batch),
+                ).fetchall()
+                for key, encoded, checksum in rows:
+                    value = self._decode(encoded, checksum, dimension)
+                    if value is not None:
+                        result[key] = value
+        return result
+
+    def _decode(self, encoded: str, checksum: str, dimension: int) -> list[float] | None:
+        if self.key(encoded) != checksum:
             return None
         try:
-            value = json.loads(row[0])
+            value = json.loads(encoded)
             if not isinstance(value, list) or len(value) != dimension:
                 return None
             if any(type(x) not in (float, int) or not math.isfinite(x) for x in value):

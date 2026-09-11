@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, Response, status
 
@@ -66,6 +67,24 @@ OPENAPI_VERSION = "1.0.0"
 
 def build_documents_router(runtime: RuntimeComponents) -> APIRouter:
     router = APIRouter()
+
+    @router.get("/api/ingestion-jobs/{job_id}/reuse-statistics", tags=["jobs"])
+    def reuse_statistics(job_id: str, request: Request) -> dict[str, Any]:
+        principal = _principal(request)
+        _require_role(principal, "knowledge_maintainer", "admin")
+        _require_local_tenant(runtime, principal)
+        ledger = runtime.reuse_ledger
+        identity = ledger.identity(job_id) if ledger else None
+        if identity is None:
+            job = runtime.queue.get(job_id)
+            if job is None:
+                raise ResourceNotFoundError(job_id)
+            require_document_manager(runtime, principal, str(job.payload.get("document_id", "")))
+            return {"available": False, "task_id": job_id}
+        if identity.get("kind") != "ingestion" or identity.get("tenant_id") != principal.tenant_id:
+            raise ResourceNotFoundError(job_id)
+        require_document_manager(runtime, principal, str(identity.get("document_id", "")))
+        return ledger.report(job_id) if ledger else {"available": False, "task_id": job_id}
 
     @router.get(
         "/api/documents/{document_id}",

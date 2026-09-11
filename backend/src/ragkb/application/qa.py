@@ -10,19 +10,22 @@ import time
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import asdict, replace
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from ragkb.contracts.rag import ExactAnswerReusePort
 from urllib.parse import urlparse
 
 from ragkb.application.provider_budget import ConservativeTokenCounter
+from ragkb.application.qa_budget import budget_stage, current, question_budget
 from ragkb.application.qa_diagnostics import (
     diagnostic_scope,
     failure_diagnostics,
     record_failure,
 )
+from ragkb.application.reuse_statistics import ReuseLedgerPort, current_usage, task_usage
 from ragkb.application.tracing import InMemoryTracer, TracerPort
+from ragkb.config import EnvSettings
 from ragkb.contracts.rag import (
     BufferedGenerationPort,
     CitationReferencePort,
@@ -46,6 +49,7 @@ from ragkb.domain.errors import (
     InvalidProviderResponse,
     ProviderRateLimited,
     ProviderTimeout,
+    QABudgetExceeded,
     QuestionAssessmentFailed,
     RetrievalFailClosed,
     TransientProviderError,
@@ -409,6 +413,7 @@ class CompositeClaimVerifier:
             conflicting_evidence_ids=semantic.conflicting_evidence_ids,
             condition_checks=semantic.condition_checks,
             answer_projection=semantic.answer_projection,
+            aspect_checks=semantic.aspect_checks,
         )
 
 
@@ -426,6 +431,8 @@ class TrustedQAService:
         tracer: TracerPort | None = None,
         verifier: ClaimVerifierPort | None = None,
         response_release_guard: Callable[[], AbstractContextManager[object]] | None = None,
+        budget_settings: EnvSettings | None = None,
+        reuse_ledger: ReuseLedgerPort | None = None,
     ) -> None:
         self.evidence_provider = evidence_provider
         self.generator = generator
@@ -437,6 +444,21 @@ class TrustedQAService:
         self.result_reuse: ExactAnswerReusePort | None = None
         self.tracer = tracer or InMemoryTracer()
         self.response_release_guard = response_release_guard or nullcontext
+        self.budget_settings = budget_settings or EnvSettings()
+        self.reuse_ledger = reuse_ledger
+
+    def _budget_stop(self, package: EvidencePackage, error: QABudgetExceeded) -> AskResult:
+        return self._save(
+            package,
+            AnswerStatus.BUDGET_EXHAUSTED,
+            warnings=("QA_BUDGET_EXHAUSTED", error.code),
+        )
+
+    def _verify(
+        self, question: str, draft: DraftAnswer, evidence: tuple[Evidence, ...]
+    ) -> VerificationResult:
+        with budget_stage("verification"):
+            return self.verifier.verify(question, draft, evidence)
 
     def _save(
         self,
@@ -449,6 +471,7 @@ class TrustedQAService:
         verified: bool = False,
         retryable: bool = False,
         condition_checks: tuple[dict[str, str], ...] = (),
+        aspect_checks: tuple[dict[str, Any], ...] = (),
     ) -> AskResult:
         if status in {AnswerStatus.SYSTEM_ERROR, AnswerStatus.CONFLICTING_EVIDENCE} or (
             status is AnswerStatus.INSUFFICIENT_EVIDENCE and not verified
@@ -457,6 +480,40 @@ class TrustedQAService:
                 record_failure("answer_validation", warnings[0] if warnings else status.value)
             package = replace(package, diagnostics=failure_diagnostics())
         report = dict(package.coverage_report)
+        report.pop("reuse_statistics", None)
+        task = current_usage.get()
+        if task:
+            task.state = status.value
+        budget = current.get()
+        if budget:
+            if time.monotonic() - budget.started >= budget.limits.seconds:
+                status, answer, citations, verified, retryable = (
+                    AnswerStatus.BUDGET_EXHAUSTED,
+                    None,
+                    (),
+                    False,
+                    False,
+                )
+                warnings = (*warnings, "QA_TIME_BUDGET_EXHAUSTED")
+            report["budget"] = budget.report()
+        if status is AnswerStatus.BUDGET_EXHAUSTED:
+            report.update(complete=False, answer_scope="unanswered", stop_reason="budget_exhausted")
+        elif status is AnswerStatus.ANSWERED:
+            report["answer_scope"] = "partial" if package.coverage == "partial" else "answered"
+            report["answered_evidence_ids"] = [c.evidence_id for c in citations]
+        from ragkb.domain.question_coverage import coverage_report
+
+        aspects = coverage_report(
+            package.query,
+            aspect_checks,
+            report.get("aspect_sources", []),
+            answer,
+            {c.evidence_id for c in citations},
+        )
+        report["required_aspects"] = aspects
+        if status is AnswerStatus.ANSWERED and not aspects["complete"]:
+            report.update(complete=False, answer_scope="partial")
+            warnings = (*warnings, "REQUIRED_ASPECTS_INCOMPLETE")
         from ragkb.application.qa_performance import performance_report
 
         performance = performance_report()
@@ -535,6 +592,10 @@ class TrustedQAService:
             # citation inventory separately; claim and condition verification
             # remain responsible for the answer's factual completeness.
             report["uncited_sections"] = uncited
+        if task:
+            task.state = status.value
+            task.finish()
+            report["reuse_statistics"] = task.report()
         result = AskResult(
             rag_run_id=package.rag_run_id,
             status=status,
@@ -552,7 +613,8 @@ class TrustedQAService:
             ),
             clarification_question=package.clarification_question,
             coverage="partial"
-            if package.coverage == "complete" and report.get("complete") is False
+            if (package.coverage == "complete" and report.get("complete") is False)
+            or report.get("answer_scope") == "partial"
             else package.coverage,
             coverage_report=report,
         )
@@ -611,7 +673,13 @@ class TrustedQAService:
                     t for t in subject_scope_tokens if t.startswith("auth-revision:")
                 ),
             )
-        except (RetrievalFailClosed, TransientProviderError, QuestionAssessmentFailed) as error:
+        except (
+            RetrievalFailClosed,
+            TransientProviderError,
+            QuestionAssessmentFailed,
+            QABudgetExceeded,
+        ) as error:
+            failed_budget = current.get()
             package = EvidencePackage(
                 rag_run_id=new_uuid7(),
                 tenant_id=tenant_id,
@@ -624,14 +692,17 @@ class TrustedQAService:
                 model_revision=self.generator.revision,
                 permission_revision=0,
                 evidence=(),
+                retrieval_queries=tuple(failed_budget.queries) if failed_budget else (),
                 verifier_revision=self.verifier.revision,
                 real_acceptance=False,
                 retrieval_health=(
                     RetrievalHealth.HEALTHY
-                    if isinstance(error, QuestionAssessmentFailed)
+                    if isinstance(error, (QuestionAssessmentFailed, QABudgetExceeded))
                     else RetrievalHealth.UNAVAILABLE
                 ),
             )
+            if isinstance(error, QABudgetExceeded):
+                return self._budget_stop(package, error)
             return self._save(
                 package,
                 AnswerStatus.SYSTEM_ERROR,
@@ -667,6 +738,20 @@ class TrustedQAService:
                 verified=True,
                 warnings=(package.disposition_reason,) if package.disposition_reason else (),
             )
+        retrieval_stopped = package.coverage_report.get("retrieval_budget", {}).get("stop_reason")
+        incomplete_budget = retrieval_stopped in {
+            "retrieval_budget_exhausted",
+            "model_budget_exhausted",
+        }
+        if package.coverage_report.get("blocking_missing"):
+            return self._save(
+                package,
+                AnswerStatus.BUDGET_EXHAUSTED
+                if incomplete_budget
+                else AnswerStatus.INSUFFICIENT_EVIDENCE,
+                warnings=("CRITICAL_QUESTION_CONDITION_UNCONFIRMED",),
+                verified=not incomplete_budget,
+            )
         if not package.generation_evidence:
             if package.retrieval_health is RetrievalHealth.DEGRADED:
                 return self._save(
@@ -677,8 +762,10 @@ class TrustedQAService:
                 )
             return self._save(
                 package,
-                AnswerStatus.INSUFFICIENT_EVIDENCE,
-                verified=True,
+                AnswerStatus.BUDGET_EXHAUSTED
+                if incomplete_budget
+                else AnswerStatus.INSUFFICIENT_EVIDENCE,
+                verified=not incomplete_budget,
                 warnings=("NO_READABLE_CURRENT_SOURCES",)
                 if package.disposition_reason == "NO_READABLE_CURRENT_SOURCES"
                 else (),
@@ -753,8 +840,10 @@ class TrustedQAService:
                             mode="source_list_composition",
                         )
                 else:
-                    with self.tracer.span("rag.ask.llm.generate"):
+                    with self.tracer.span("rag.ask.llm.generate"), budget_stage("generation"):
                         draft = self.generator.generate(question, package.generation_evidence)
+        except QABudgetExceeded as error:
+            return self._budget_stop(package, error)
         except InvalidProviderResponse as error:
             record_failure("generation", error.code, error.diagnostic)
             return self._save(
@@ -785,9 +874,11 @@ class TrustedQAService:
                     )
                 return self._save(
                     package,
-                    AnswerStatus.INSUFFICIENT_EVIDENCE,
+                    AnswerStatus.BUDGET_EXHAUSTED
+                    if incomplete_budget
+                    else AnswerStatus.INSUFFICIENT_EVIDENCE,
                     warnings=("MODEL_INSUFFICIENT_EVIDENCE",),
-                    verified=True,
+                    verified=not incomplete_budget,
                 )
         if draft.status is not DraftAnswerStatus.ANSWERED:
             return self._save(
@@ -877,7 +968,7 @@ class TrustedQAService:
                 )
                 if not self._permission_recheck(package, subject_scope_tokens, clearance_level):
                     raise InvalidProviderResponse("ANSWER_REPAIR_SOURCE_INVALID")
-                with self.tracer.span("rag.ask.answer_surface.rebuild"):
+                with self.tracer.span("rag.ask.answer_surface.rebuild"), budget_stage("generation"):
                     patched = (
                         recompose(question, current, package.evidence, checked)
                         if feedback_recompose is not None or (grounding and not unrelated)
@@ -903,7 +994,7 @@ class TrustedQAService:
                 list_claim_count = None
                 verification_phase = "claims_and_conflicts"
                 with self.tracer.span("rag.ask.answer_surface.reverify"):
-                    return patched, self.verifier.verify(question, patched, package.evidence)
+                    return patched, self._verify(question, patched, package.evidence)
             rebuild = repairable_surface(current, checked) or (
                 requests_source_list(question, package.evidence)
                 and repairable_citations(current, checked)
@@ -933,7 +1024,7 @@ class TrustedQAService:
                     )
             else:
                 assert isinstance(self.generator, CitationRepairPort)
-                with self.tracer.span("rag.ask.citations.repair"):
+                with self.tracer.span("rag.ask.citations.repair"), budget_stage("generation"):
                     patched = self.generator.repair_citations(question, current, package.evidence)
                     validate_citation_only_change(current, patched)
                 if patched == current:
@@ -959,11 +1050,11 @@ class TrustedQAService:
             with self.tracer.span(
                 "rag.ask.answer_surface.reverify" if rebuild else "rag.ask.citations.reverify"
             ):
-                return patched, self.verifier.verify(question, patched, package.evidence)
+                return patched, self._verify(question, patched, package.evidence)
 
         try:
             with self.tracer.span("rag.ask.claim.verify"):
-                verification = self.verifier.verify(question, draft, package.evidence)
+                verification = self._verify(question, draft, package.evidence)
             draft, verification = repair_surface_once(draft, verification)
             if (
                 any(c["status"] == "missing" for c in verification.condition_checks)
@@ -992,7 +1083,7 @@ class TrustedQAService:
                     else 8000,
                 )
                 verification_phase = "condition_repair"
-                with self.tracer.span("rag.ask.conditions.repair"):
+                with self.tracer.span("rag.ask.conditions.repair"), budget_stage("generation"):
                     recompose = getattr(self.generator, "repair_conditions", None)
                     if recompose is not None:
                         # Reconcile scope and missing conditions together. Appending
@@ -1045,8 +1136,10 @@ class TrustedQAService:
                     )
                     verification_phase = "claims_and_conflicts"
                     with self.tracer.span("rag.ask.claim.reverify"):
-                        verification = self.verifier.verify(question, draft, package.evidence)
+                        verification = self._verify(question, draft, package.evidence)
                     draft, verification = repair_surface_once(draft, verification)
+        except QABudgetExceeded as error:
+            return self._budget_stop(package, error)
         except TransientProviderError as error:
             record_failure(
                 "verification",
@@ -1257,6 +1350,7 @@ class TrustedQAService:
                 citations=citations,
                 verified=True,
                 condition_checks=verification.condition_checks,
+                aspect_checks=verification.aspect_checks,
             )
 
     def ask(
@@ -1272,6 +1366,17 @@ class TrustedQAService:
         from ragkb.application.qa_performance import performance_scope
 
         with (
+            task_usage(
+                self.reuse_ledger,
+                str(new_uuid7()),
+                reuse_existing=True,
+                kind="qa",
+                tenant_id=tenant_id,
+                user_id=user_id,
+                space_id=space_id or "",
+            ),
+            question_budget(self.budget_settings, question),
+            budget_stage("retrieval"),
             performance_scope(),
             diagnostic_scope(),
             self.tracer.span(

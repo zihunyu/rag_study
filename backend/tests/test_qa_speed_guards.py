@@ -61,6 +61,9 @@ def test_exact_hit_skips_models_but_issues_fresh_authorized_references(tmp_path)
     assert first.rag_run_id != second.rag_run_id
     assert first.citations[0].source_url != second.citations[0].source_url
     assert repository.get_package(second.rag_run_id).query == "保修期多久？"
+    assert repository.get_package(second.rag_run_id).retrieval_queries == ()
+    assert second.coverage_report["retrieval_budget"]["used"] == 0
+    assert second.coverage_report["budget"]["model_calls"] == 0
     assert any(e.get("outcome") == "hit" for e in second.coverage_report["performance"]["events"])
 
 

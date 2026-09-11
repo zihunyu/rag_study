@@ -142,10 +142,11 @@ def test_degraded_cache_hit_keeps_current_health_and_warnings(runtime, monkeypat
     monkeypatch.setattr(runtime.qa_service.generator, "generate", unexpected_generate)
     degraded = client.post("/api/ask", json={"question": "保修期多久？"}).json()
     assert degraded["verified"] and degraded["degraded"]
-    assert degraded["warnings"] == ["DENSE_RETRIEVAL_UNAVAILABLE"]
+    assert degraded["warnings"] == ["DENSE_RETRIEVAL_UNAVAILABLE", "REQUIRED_ASPECTS_INCOMPLETE"]
     runtime.search_service.index.failed = ()
     healthy = client.post("/api/ask", json={"question": "保修期多久？"}).json()
-    assert healthy["verified"] and not healthy["degraded"] and healthy["warnings"] == []
+    assert healthy["verified"] and not healthy["degraded"]
+    assert healthy["warnings"] == ["REQUIRED_ASPECTS_INCOMPLETE"]
 
 
 def test_reranker_failure_preserves_degradation_in_answer(runtime, monkeypatch):
@@ -160,7 +161,7 @@ def test_reranker_failure_preserves_degradation_in_answer(runtime, monkeypatch):
     )
     assert result["status"] == "answered" and result["verified"]
     assert result["retrieval_health"] == "degraded"
-    assert result["warnings"] == ["RERANKER_UNAVAILABLE"]
+    assert result["warnings"] == ["RERANKER_UNAVAILABLE", "REQUIRED_ASPECTS_INCOMPLETE"]
 
 
 @pytest.mark.parametrize("index_type", [FaultIndex, NativeFaultIndex])

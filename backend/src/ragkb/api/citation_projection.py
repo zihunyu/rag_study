@@ -93,6 +93,23 @@ def cited_asset_ids(locator: dict[str, Any]) -> list[str]:
     ]
 
 
+def withheld_answer_report(report: dict[str, Any]) -> dict[str, Any]:
+    """A withdrawn answer's coverage receipt must not disclose its excerpts."""
+    value = reader_report(report)
+    value.update(complete=False, answer_scope="unanswered")
+    aspects = value.get("required_aspects")
+    if isinstance(aspects, dict):
+        aspects.update(complete=False, answered=0)
+        for row in aspects.get("items", []):
+            row.update(
+                answer_quote="",
+                evidence_ids=[],
+                answer_status="unchecked",
+                evidence_status="unchecked",
+            )
+    return value
+
+
 def reader_report(report: dict[str, Any]) -> dict[str, Any]:
     """An execution report must not become an uncited document/section listing."""
     value: dict[str, Any] = {
@@ -108,9 +125,78 @@ def reader_report(report: dict[str, Any]) -> dict[str, Any]:
             "checked_images",
             "answer_sections",
             "total_chunks",
+            "answer_scope",
+            "stop_reason",
+            "blocking_missing",
         }
         and isinstance(v, (str, int, float, bool))
     }
+    reuse = report.get("reuse_statistics")
+    if isinstance(reuse, dict):
+        value["reuse_statistics"] = {k: v for k, v in reuse.items() if type(v) in {str, int, bool}}
+    aspects = report.get("required_aspects")
+    if isinstance(aspects, dict):
+        cited = set(report.get("answered_evidence_ids", []))
+        value["required_aspects"] = {
+            **{
+                k: v
+                for k, v in aspects.items()
+                if k in {"complete", "answered", "total", "revision"}
+            },
+            "items": [
+                {
+                    **{
+                        k: row[k]
+                        for k in (
+                            "aspect_id",
+                            "question",
+                            "evidence_status",
+                            "answer_status",
+                            "answer_quote",
+                        )
+                        if k in row
+                    },
+                    "evidence_ids": [i for i in row.get("evidence_ids", []) if i in cited],
+                }
+                for row in aspects.get("items", [])
+                if isinstance(row, dict)
+            ],
+        }
+    for name, keys in {
+        "budget": {
+            "profile",
+            "revision",
+            "model_calls",
+            "max_model_calls",
+            "retrieval_queries_used",
+            "max_retrieval_queries",
+            "input_tokens",
+            "max_input_tokens",
+            "output_tokens",
+            "max_output_tokens",
+            "unknown_usage_calls",
+            "token_accounting",
+            "elapsed_seconds",
+            "max_seconds",
+            "stopped_reason",
+            "stopped_stage",
+        },
+        "retrieval_budget": {
+            "profile",
+            "maximum",
+            "used",
+            "remaining",
+            "initial_limit",
+            "stop_reason",
+        },
+    }.items():
+        source = report.get(name)
+        if isinstance(source, dict):
+            value[name] = {
+                k: v
+                for k, v in source.items()
+                if k in keys and (v is None or type(v) in {str, int, float, bool})
+            }
     if isinstance(report.get("conditions"), dict):
         value["conditions"] = {
             k: v

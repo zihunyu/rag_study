@@ -40,7 +40,7 @@ from ragkb.domain.claim_coverage import render_verified_claims
 from ragkb.domain.rag import Evidence
 from ragkb.domain.retrieval import AuthorizedChunk, SearchContext
 from ragkb.evaluation.quality_thresholds import load_quality_threshold_policy
-from ragkb.evaluation.rag_quality import answer_token_f1, evaluate_quality
+from ragkb.evaluation.rag_quality import answer_agreement, answer_token_f1, evaluate_quality
 from ragkb.evaluation.real_gold import validate_real_gold_dataset
 from ragkb.infrastructure.provider_budget import SQLiteProviderBudgetLedger
 from ragkb.infrastructure.provider_checkpoints import JsonCheckpointStore
@@ -86,13 +86,15 @@ def evaluate_expected_answers(
             if case["expected_status"] == "answered"
             else float(not str(case.get("actual_answer", "")).strip())
         )
+        agreement = answer_agreement({**case, "answerable": case["expected_status"] == "answered"})
         results.append(
             {
                 "case_id": str(case["case_id"]),
                 "performance_scale": scale,
                 "index_generation_id": generations[scale],
                 "score": score,
-                "passed": score >= minimum_f1,
+                "semantic_assessment": agreement,
+                "passed": score >= minimum_f1 and agreement["status"] == "passed",
             }
         )
     return results, bool(results) and all(bool(item["passed"]) for item in results)

@@ -180,6 +180,7 @@ def run_worker(argv: Sequence[str] | None = None) -> int:
         dependency_cooldown_seconds=components.settings.worker_dependency_cooldown_seconds,
         failure_pause_seconds=components.settings.worker_failure_pause_seconds,
         activity=heartbeat.activity,
+        reuse_ledger=components.reuse_ledger,
     )
     heartbeat.start()
     if args.once:

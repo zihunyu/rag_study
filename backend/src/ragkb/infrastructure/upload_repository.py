@@ -884,6 +884,21 @@ class SQLiteUploadRepository:
         result["issue_codes"] = json.loads(str(result.pop("issue_codes_json")))
         return result
 
+    def ingestion_complete(self, version_id: str) -> bool:
+        # Quality is persisted only after indexing completes. Publication may still
+        # require review; successful ingestion must not depend on queue retention.
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM document_versions v JOIN document_quality_reports q "
+                "ON q.version_id=v.id JOIN publication_candidates p ON p.version_id=v.id "
+                "WHERE v.id=? AND v.processing_state='VALIDATED' "
+                "AND p.projection_state IN ('STAGED','ACTIVE') "
+                "AND p.expected_checksum=v.content_sha256 AND p.observed_checksum=v.content_sha256 "
+                "AND p.observed_watermark>=p.required_watermark",
+                (version_id,),
+            ).fetchone()
+        return row is not None
+
     def save_document_review(
         self,
         *,

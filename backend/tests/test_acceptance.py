@@ -145,7 +145,8 @@ def test_qa_http_deadlines_follow_the_configured_reading_budget(
     observed = []
 
     @contextmanager
-    def capture(seconds):
+    def capture(seconds, *, check_on_exit=True):
+        assert check_on_exit is False  # Preserve the already persisted budget-stop receipt.
         observed.append(seconds)
         yield
 

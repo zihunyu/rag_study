@@ -107,6 +107,8 @@ class UploadRepositoryPort(Protocol):
 
     def save_quality_report(self, report: DocumentQualityReport) -> None: ...
 
+    def ingestion_complete(self, version_id: str) -> bool: ...
+
     def record_local_content(
         self,
         document_id: str,

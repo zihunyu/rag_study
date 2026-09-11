@@ -53,7 +53,7 @@ class ExactAnswerReuse:
         return hashlib.sha256(
             json.dumps(
                 {
-                    "revision": "exact-answer-v1",
+                    "revision": "exact-answer-v2-adaptive-budget",
                     "snapshot": snapshot,
                     "configuration": self.config_revision,
                     "question": question,
@@ -115,13 +115,23 @@ class ExactAnswerReuse:
                 if key == release_key and service._permission_recheck(
                     package, scope.get("subject_scope_tokens", ()), scope.get("clearance_level", 0)
                 ):
-                    report = {k: v for k, v in prior.coverage_report.items() if k != "performance"}
+                    report = {
+                        k: v
+                        for k, v in prior.coverage_report.items()
+                        if k
+                        not in {"performance", "budget", "retrieval_budget", "reuse_statistics"}
+                    }
+                    report["retrieval_budget"] = {
+                        "used": 0,
+                        "stop_reason": "verified_answer_cache_hit",
+                    }
                     package = replace(
                         package,
                         rag_run_id=new_uuid7(),
                         query_time_epoch=int(time.time()),
                         diagnostics={},
                         coverage_report=report,
+                        retrieval_queries=(),
                     )
                     citations = tuple(
                         Citation(
@@ -145,8 +155,21 @@ class ExactAnswerReuse:
                         AnswerStatus.ANSWERED,
                         answer=prior.answer,
                         citations=citations,
-                        warnings=prior.warnings,
+                        warnings=tuple(
+                            w for w in prior.warnings if w != "RETRIEVAL_BUDGET_EXHAUSTED"
+                        ),
                         verified=True,
+                        aspect_checks=tuple(
+                            {
+                                "aspect_id": row["aspect_id"],
+                                "status": row["answer_status"],
+                                "evidence_ids": row["evidence_ids"],
+                                "claim_ids": row["claim_ids"],
+                                "answer_quote": row["answer_quote"],
+                            }
+                            for row in report.get("required_aspects", {}).get("items", [])
+                            if row.get("answer_status") != "unchecked"
+                        ),
                     )
             record_event("cache", cache="verified_result", outcome="invalidated_at_release")
         else:

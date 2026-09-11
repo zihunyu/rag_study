@@ -187,12 +187,22 @@ class VisualEvidenceSession:
         remapped = {old: current[key] for key, old in prior.items()}
         if any(eid not in remapped for eid in self.text_selection.source_ids):
             return None
+        if any(
+            eid not in remapped
+            for row in self.text_selection.aspect_sources
+            for eid in row["evidence_ids"]
+        ):
+            return None
         from ragkb.application.qa_performance import record_event
 
         record_event("evidence_selection", outcome="reused_visual_plan")
         return replace(
             self.text_selection,
             source_ids=tuple(remapped[eid] for eid in self.text_selection.source_ids),
+            aspect_sources=tuple(
+                {**row, "evidence_ids": [remapped[eid] for eid in row["evidence_ids"]]}
+                for row in self.text_selection.aspect_sources
+            ),
         )
 
     def _priority(self, item: Evidence) -> tuple[int, int]:

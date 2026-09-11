@@ -69,20 +69,35 @@
 ## 复杂问题的多个检索任务
 
 默认 `RETRIEVAL_QUERY_PLANNING_ENABLED=true`、`RETRIEVAL_MAX_SUBQUERIES=4`。
-上限包含原始问题。规则识别多个问题、枚举关注点以及明确的比较对象；单一问题不展开。
+上限作用于整轮问答，包含原始问题、拆分任务和证据不足时的补充查询。
+规则识别多个问题、枚举关注点以及明确的比较对象；单一问题不展开。
+
+问答现采用[自适应预算](QA_BUDGET.md)：简单事实问题总上限 2、首轮 1；普通问题总上限 4、
+首轮最多 2；明确选择深入模式时总上限 8、首轮最多 2。每次补查只执行一个查询，
+不再对补查问题展开拆分；有新增证据才重新评估覆盖，无新增有效证据则提前停止。
+已执行的完全相同查询（忽略首尾空白）
+不会重复执行，也不再次扣额度。每轮问答独立计数，检索失败仍计入本轮已尝试次数。
+`retrieval_queries` 保存全部实际执行的查询；性能事件 `retrieval_budget` 记录上限、使用数和剩余数。
+
+这个上限计数的是查询任务，每个任务仍可执行关键词、向量两个召回通道。
+另有整轮问答的模型 HTTP 次数、输入/输出 token 与总时限预算，重试也计数。
+已有供应商重试、超时和并发限制继续生效，多个限制取更严格者。
 
 拆分在本地进行，不调用 LLM。每个检索子任务保留完整原问题，并追加关注点，避免丢失实体、
 否定、时间和条件。任务固定使用同一个检索版本与权限上下文，候选按排名融合、去重，经过授权后
 统一重排，再进入现有回答与独立核验流程。失效的入库尝试也继续按原有规则过滤。
 
 复杂问题首次执行可能产生更多查询向量请求，这换取了更多方面的证据；重复问题可命中查询向量缓存。
-如需单查询成本，将上限设为 `1` 或关闭规划开关。并非所有自然语言问题都能被规则拆分，
+如需所有模式都单查询，关闭规划开关；单独调整普通模式或深入模式上限也可设为 `1`。
+并非所有自然语言问题都能被规则拆分，
 本次实现不保证每个问题的正确率都会提高。
 
 ## 验证
 
+多问题现在支持批量向量化与 Milvus 检索，并保护子问题独有候选。API 与 Worker 的缓存复用、实际 HTTP 尝试和成功生成数量已按任务持久保存；接口、字段及覆盖检查说明见 [复杂问答与任务统计](COMPOUND_QA_AND_REUSE.md)。
+
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q backend/tests/test_embedding_reuse.py backend/tests/test_directory_sync.py backend/tests/test_query_planning.py backend/tests/test_dependency_boundaries.py
+.\.venv\Scripts\python.exe -m pytest -q backend/tests/test_embedding_reuse.py backend/tests/test_directory_sync.py backend/tests/test_query_planning.py backend/tests/test_retrieval_query_budget.py backend/tests/test_dependency_boundaries.py
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 

@@ -23,6 +23,7 @@ from ragkb.adapters.mysql_upload import MySQLUploadRepository
 from ragkb.adapters.rag_stubs import (
     LifecycleAwareFinalPermission,
 )
+from ragkb.adapters.reuse_ledger import SQLiteReuseLedger
 from ragkb.adapters.zilliz import ZillizChunkIndexingSink
 from ragkb.application.acceptance import load_acceptance_evidence
 from ragkb.application.authorization import ResourceAuthorizationService
@@ -94,6 +95,7 @@ class RuntimeComponents:
     space_id: str
     settings: EnvSettings
     accounts: AccountService | None = None
+    reuse_ledger: SQLiteReuseLedger | None = None
 
 
 def build_runtime_components(
@@ -119,6 +121,7 @@ def build_runtime_components(
         storage_root = configured if configured.is_absolute() else root / configured
     storage = LocalFileStorage(storage_root)
     storage.ensure_layout()
+    reuse_ledger = SQLiteReuseLedger(storage.root / "artifacts" / "reuse-ledger.sqlite")
     configured_database = settings.queue_database_path
     resolved_database = database_path or (
         configured_database if configured_database.is_absolute() else root / configured_database
@@ -383,6 +386,7 @@ def build_runtime_components(
         readable_scope=ReadableScope(repository, authorization),
         question_assessor=retrieval.question_assessor,
         evidence_selector=retrieval.evidence_selector,
+        deep_max_subqueries=settings.retrieval_deep_max_subqueries,
         visual_enricher=visual_enricher,
         overview_reader=OverviewReader(
             repository,
@@ -412,6 +416,8 @@ def build_runtime_components(
         tracer,
         verifier=verifier,
         response_release_guard=lambda: lifecycle_store.lock,
+        budget_settings=settings,
+        reuse_ledger=reuse_ledger,
     )
     if accounts.enabled:
         from ragkb.infrastructure.account_qa import (
@@ -442,6 +448,7 @@ def build_runtime_components(
             ttl_seconds=settings.llm_generation_cache_ttl_seconds,
         )
     return RuntimeComponents(
+        reuse_ledger=reuse_ledger,
         accounts=accounts,
         repository_root=root,
         storage=storage,

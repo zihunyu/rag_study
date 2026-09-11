@@ -18,6 +18,18 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 
 MYSQL_MIGRATIONS: tuple[tuple[str, str], ...] = (
     (
+        "create_embedding_generation_contracts",
+        """
+        CREATE TABLE IF NOT EXISTS embedding_generation_contracts (
+            target_id CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+            generation_id VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+            contract_json JSON NOT NULL,
+            provenance VARCHAR(1024) NOT NULL,
+            PRIMARY KEY(target_id, generation_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+        """,
+    ),
+    (
         "create_retrieval_chunk_projections",
         """
         CREATE TABLE IF NOT EXISTS retrieval_chunk_projections (
@@ -263,6 +275,7 @@ MYSQL_MIGRATIONS += (
 PROJECT_TABLES = frozenset(
     {
         "schema_migrations",
+        "embedding_generation_contracts",
         "retrieval_chunk_projections",
         "retrieval_release_state",
         "rag_run_documents",

@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class ReadingOptions(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     mode: Literal["auto", "fact", "overview", "compare"] = "auto"
+    budget_profile: Literal["auto", "standard", "deep"] = "auto"
     document_ids: tuple[str, ...] = Field(default=(), max_length=20)
 
 

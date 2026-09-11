@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import re
 from collections.abc import Mapping, Sequence
@@ -41,7 +43,7 @@ def retrieval_metrics(
     reciprocal_ranks: list[float] = []
     ndcgs: list[float] = []
     for relevant, ranking in zip(expected, predicted, strict=True):
-        top = tuple(ranking[:k])
+        top = tuple(dict.fromkeys(ranking))[:k]
         matched = relevant.intersection(top)
         recalls.append(len(matched) / len(relevant) if relevant else float(not top))
         precisions.append(len(matched) / len(top) if top else float(not relevant))
@@ -117,6 +119,68 @@ def generation_metrics(cases: Sequence[Mapping[str, Any]]) -> GenerationMetrics:
     )
 
 
+def semantic_review_digest(case: Mapping[str, Any]) -> str:
+    """Bind a business review to this exact question, answer and source-ID set."""
+    payload = {
+        key: case.get(key)
+        for key in (
+            "case_id",
+            "question",
+            "answerable",
+            "expected_answer",
+            "actual_answer",
+            "relevant_chunk_ids",
+            "actual_citation_chunk_ids",
+        )
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()
+    ).hexdigest()
+
+
+def answer_agreement(case: Mapping[str, Any]) -> dict[str, Any]:
+    """Separate lexical scores from semantic acceptance; uncertainty cannot pass.
+
+    Numeric binding checks can reject a mismatch, but cannot prove all nonnumeric
+    facts. Paraphrases need a review tied to the exact benchmark response.
+    """
+    from ragkb.domain.numeric_facts import check_numeric_facts
+
+    expected = str(case.get("expected_answer", "")).strip()
+    actual = str(case.get("actual_answer", "")).strip()
+    if not case["answerable"]:
+        return {"status": "passed" if not actual else "failed", "basis": "gold_unanswerable"}
+    if not actual:
+        return {"status": "failed", "basis": "missing_answer"}
+    if expected and check_numeric_facts(actual, (expected,)) == "mismatch":
+        return {"status": "failed", "basis": "numeric_binding_mismatch"}
+    review = case.get("semantic_review")
+    if isinstance(review, Mapping):
+        if (
+            review.get("digest") == semantic_review_digest(case)
+            and isinstance(review.get("reviewer_id"), str)
+            and review["reviewer_id"].strip()
+            and isinstance(review.get("reviewed_at"), str)
+            and review["reviewed_at"].strip()
+            and all(
+                type(review.get(key)) is bool
+                for key in ("correct", "complete", "citations_supported")
+            )
+        ):
+            return {
+                "status": "passed"
+                if all(review[k] for k in ("correct", "complete", "citations_supported"))
+                else "failed",
+                "basis": "bound_business_review",
+            }
+        return {"status": "unreviewed", "basis": "invalid_or_stale_review"}
+    expected_ids = set(map(str, case.get("relevant_chunk_ids", ())))
+    actual_ids = set(map(str, case.get("actual_citation_chunk_ids", ())))
+    if expected and actual == expected and expected_ids and expected_ids == actual_ids:
+        return {"status": "passed", "basis": "exact_gold_answer_and_sources"}
+    return {"status": "unreviewed", "basis": "semantic_review_required"}
+
+
 def evaluate_quality(
     cases: Sequence[Mapping[str, Any]], *, k: int, thresholds: Mapping[str, float]
 ) -> dict[str, object]:
@@ -126,6 +190,8 @@ def evaluate_quality(
     retrieval = retrieval_metrics(expected, predicted, k=k)
     generation = generation_metrics(cases)
     metrics = {**asdict(retrieval), **asdict(generation)}
+    assessments = [answer_agreement(case) for case in cases]
+    semantic_passed = bool(cases) and all(row["status"] == "passed" for row in assessments)
     failures = tuple(
         sorted(
             name
@@ -152,5 +218,14 @@ def evaluate_quality(
         "query_type_buckets": buckets,
         "thresholds": dict(thresholds),
         "failed_metrics": failures,
-        "passed": not failures,
+        "metric_gate_passed": not failures,
+        "semantic_assessment": {
+            "passed": semantic_passed,
+            "passed_cases": sum(row["status"] == "passed" for row in assessments),
+            "failed_cases": sum(row["status"] == "failed" for row in assessments),
+            "unreviewed_cases": sum(row["status"] == "unreviewed" for row in assessments),
+            "cases": assessments,
+            "lexical_metrics_are_accuracy": False,
+        },
+        "passed": not failures and semantic_passed,
     }

@@ -316,6 +316,8 @@ def test_uncited_title_is_not_a_reading_gap_and_real_gaps_remain_partial(tmp_pat
         answer="退款十五天。",
         citations=(Citation("E1", "/source", {}),),
         verified=True,
+        aspect_checks=({"aspect_id": "A1", "status": "answered", "evidence_ids": ["E1"],
+                        "claim_ids": ["C1"], "answer_quote": "退款十五天。"},),
     )
     assert result.coverage_report["complete"] and result.coverage == "complete"
     assert result.coverage_report["uncited_sections"] == [sections[0]]

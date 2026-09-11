@@ -8,7 +8,7 @@ import unicodedata
 from collections import Counter, defaultdict
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal, cast
 
 from ragkb.application.tracing import InMemoryTracer, TracerPort
@@ -187,7 +187,7 @@ def _dedupe_context(chunk: AuthorizedChunk) -> tuple[object, ...]:
 
 
 class HybridSearchService:
-    revision = "hybrid-search-service:document-scope-v3"
+    revision = "hybrid-search-service:facet-batch-v5"
 
     def __init__(
         self,
@@ -251,6 +251,11 @@ class HybridSearchService:
     ) -> tuple[
         Sequence[IndexCandidate], Sequence[IndexCandidate], list[str], tuple[SearchChannel, ...]
     ]:
+        from ragkb.application.qa_budget import current
+
+        budget = current.get()
+        if budget:
+            budget.start_query(query)
         warnings: list[str] = []
         native = getattr(self.index, "search_hybrid", None)
         if callable(native):
@@ -309,28 +314,96 @@ class HybridSearchService:
                 warnings.append("DENSE_RETRIEVAL_UNAVAILABLE")
         return bm25, dense, warnings, tuple(available)
 
+    def _retrieve_many(
+        self, queries: tuple[str, ...], context: SearchContext
+    ) -> list[
+        tuple[
+            Sequence[IndexCandidate], Sequence[IndexCandidate], list[str], tuple[SearchChannel, ...]
+        ]
+    ]:
+        bm25_many = getattr(self.index, "search_bm25_many", None)
+        dense_many = getattr(self.index, "search_dense_many", None)
+        embed_many = getattr(self.embedding, "embed_queries", None)
+        if len(queries) == 1 or not all(callable(x) for x in (bm25_many, dense_many, embed_many)):
+            return [self._retrieve(query, context) for query in queries]
+        from ragkb.application.qa_budget import current
+
+        budget = current.get()
+        if budget:
+            budget.start_queries(queries)
+
+        def sparse_path() -> Any:
+            with self.tracer.span("rag.retrieval.bm25", {"query_count": len(queries)}):
+                return cast(Any, bm25_many)(queries, context, self.bm25_top_k)
+
+        def dense_path() -> Any:
+            with self.tracer.span("rag.retrieval.embedding", {"query_count": len(queries)}):
+                vectors = cast(Any, embed_many)(queries)
+                if len(vectors) != len(queries):
+                    raise ValueError("QUERY_EMBEDDING_BATCH_COUNT_INVALID")
+            with self.tracer.span("rag.retrieval.dense", {"query_count": len(queries)}):
+                return cast(Any, dense_many)(vectors, context, self.dense_top_k)
+
+        warnings: list[str] = []
+        available: list[SearchChannel] = []
+        groups: list[Any] = []
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="hybrid-batch") as pool:
+            futures = [
+                pool.submit(contextvars.copy_context().run, fn) for fn in (sparse_path, dense_path)
+            ]
+            for channel, future in zip(("bm25", "dense"), futures, strict=True):
+                try:
+                    result = future.result()
+                    if len(result) != len(queries):
+                        raise ValueError("RETRIEVAL_BATCH_COUNT_INVALID")
+                    groups.append(result)
+                    available.append(cast(SearchChannel, channel))
+                except TransientProviderError:
+                    groups.append([()] * len(queries))
+                    warnings.append(f"{channel.upper()}_RETRIEVAL_UNAVAILABLE")
+        return [
+            (groups[0][i], groups[1][i], list(warnings), tuple(available))
+            for i in range(len(queries))
+        ]
+
     def search(
-        self, query: str, context: SearchContext, *, limit: int | None = None
+        self,
+        query: str,
+        context: SearchContext,
+        *,
+        limit: int | None = None,
+        query_limit: int | None = None,
+        exclude_queries: Sequence[str] = (),
     ) -> SearchResult:
+        """Cap this call by the caller's remaining budget and report every attempt."""
         normalized = query.strip()
         if not normalized:
             raise ValueError("search query must be non-empty")
+        if query_limit is not None and query_limit < 0:
+            raise ValueError("retrieval query limit must be non-negative")
         observed = self.index.observed_security_watermark(context)
         if observed < context.required_security_watermark:
             raise SecurityWatermarkNotReady("SECURITY_WATERMARK_NOT_READY")
+        validate_contract = getattr(self.index, "validate_embedding_contract", None)
+        if callable(validate_contract):
+            validate_contract(context.active_generation_id)
         with self.tracer.span(
             "rag.retrieval", {"query_type": classify_query(normalized), "limit": limit or 0}
         ):
             from ragkb.application.query_planning import REVISION, merge_channel, plan_queries
 
-            queries = plan_queries(
-                normalized, self.max_subqueries if self.query_planning_enabled else 1
-            )
+            maximum = self.max_subqueries if self.query_planning_enabled else 1
+            allowed = maximum if query_limit is None else min(maximum, query_limit)
+            excluded = {value.strip() for value in exclude_queries}
+            queries = tuple(
+                value for value in plan_queries(normalized, maximum) if value not in excluded
+            )[:allowed]
+            if not queries:
+                return SearchResult((), observed, real_acceptance=self.real_acceptance)
             with self.tracer.span(
                 "rag.retrieval.plan", {"revision": REVISION, "query_count": len(queries)}
             ):
-                # Sequential facets keep model concurrency and request deadlines bounded.
-                results = [self._retrieve(query, context) for query in queries]
+                results = self._retrieve_many(queries, context)
             bm25 = merge_channel([r[0] for r in results], self.bm25_top_k)
             dense = merge_channel([r[1] for r in results], self.dense_top_k)
             warnings = list(dict.fromkeys(w for r in results for w in r[2]))
@@ -342,6 +415,7 @@ class HybridSearchService:
                 degraded=True,
                 warnings=tuple(warnings),
                 retrieval_health=RetrievalHealth.UNAVAILABLE,
+                retrieval_queries=queries,
             )
         query_type = classify_query(normalized)
         # Discard late writes from a retired ingestion attempt before score fusion.
@@ -414,8 +488,73 @@ class HybridSearchService:
             )
             if representative is not None:
                 duplicates[representative.chunk_id].append(chunk)
-            elif len(authorized_candidates) < self.rerank_top_k:
+            else:
                 authorized_candidates.append((chunk, score, channels))
+        if len(results) > 1 and len(authorized_candidates) > self.rerank_top_k:
+            # Allocate half the pool round-robin across facets. Prefer evidence
+            # seen in only one query; common hits must not consume every slot.
+            # Membership is built only from current, authorized representatives.
+            representatives = {
+                item.chunk_id: chunk.chunk_id
+                for chunk, _, _ in authorized_candidates
+                for item in (chunk, *duplicates[chunk.chunk_id])
+            }
+            lanes: list[list[str]] = []
+            for sparse, dense_items, _, _ in results:
+                lane = []
+                for item in sorted((*sparse, *dense_items), key=lambda item: item.rank):
+                    chunk = authorized.get(item.chunk_id)
+                    if chunk is None or (
+                        chunk.locator.get("vector_pk")
+                        and chunk.locator["vector_pk"] != item.vector_pk
+                    ):
+                        continue
+                    key = representatives.get(item.chunk_id)
+                    if key and key not in lane:
+                        lane.append(key)
+                lanes.append(lane)
+            frequency = Counter(key for lane in lanes for key in lane)
+            for lane in lanes:
+                lane.sort(key=lambda key: frequency[key] != 1)
+            reserved: list[str] = []
+            lane_order = sorted(
+                (*lanes[1:], lanes[0]),
+                key=lambda lane: not any(frequency[key] == 1 for key in lane),
+            )
+            target = min(self.rerank_top_k, max(len(lanes), self.rerank_top_k // 2))
+            while len(reserved) < target:
+                before = len(reserved)
+                for lane in lane_order:
+                    key = next((key for key in lane if key not in reserved), None)
+                    if key is not None:
+                        reserved.append(key)
+                    if len(reserved) == target:
+                        break
+                if len(reserved) == before:
+                    break
+            by_id = {row[0].chunk_id: row for row in authorized_candidates}
+            authorized_candidates = [by_id[key] for key in reserved] + [
+                row for row in authorized_candidates if row[0].chunk_id not in reserved
+            ]
+        authorized_candidates = authorized_candidates[: self.rerank_top_k]
+
+        def source_queries(chunk: AuthorizedChunk) -> tuple[str, ...]:
+            return tuple(
+                query
+                for query, (sparse, dense_items, _, _) in zip(queries, results, strict=True)
+                if any(
+                    item.chunk_id == chunk.chunk_id
+                    and (
+                        not chunk.locator.get("vector_pk")
+                        or chunk.locator["vector_pk"] == item.vector_pk
+                    )
+                    for item in (*sparse, *dense_items)
+                )
+            )
+
+        def annotated_source(chunk: AuthorizedChunk) -> SearchSource:
+            return replace(_source(chunk), retrieval_queries=source_queries(chunk))
+
         if authorized_candidates:
             try:
                 with self.tracer.span("rag.retrieval.rerank"):
@@ -487,6 +626,7 @@ class HybridSearchService:
                     generation_context=chunk.retrieval_text,
                     parent_source=parent_source,
                     duplicate_sources=tuple(_source(item) for item in duplicates[chunk.chunk_id]),
+                    retrieval_queries=source_queries(chunk),
                 )
             )
             if len(hits) >= requested:
@@ -499,10 +639,11 @@ class HybridSearchService:
             warnings=tuple(warnings),
             retrieval_health=(RetrievalHealth.DEGRADED if warnings else RetrievalHealth.HEALTHY),
             review_sources=tuple(
-                _source(item)
+                annotated_source(item)
                 for chunk, _, _ in authorized_candidates
                 for item in (chunk, *duplicates[chunk.chunk_id])
             ),
+            retrieval_queries=queries,
         )
 
     def expand_parents(

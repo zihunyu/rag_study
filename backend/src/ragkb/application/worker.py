@@ -13,6 +13,7 @@ from typing import Any, Protocol
 
 from ragkb.application.cancellation import cancellation_scope, check_cancelled
 from ragkb.application.lease_guard import LeaseGuard
+from ragkb.application.reuse_statistics import ReuseLedgerPort, task_usage
 from ragkb.application.tracing import InMemoryTracer, TracerPort
 from ragkb.contracts.jobs import PersistentJobQueuePort, QueueJob, QueueLeaseError
 from ragkb.contracts.ports import ChunkerPort, ContentStoragePort, ParserRouterPort, ParsingDeferred
@@ -80,6 +81,7 @@ class LocalIngestionWorker:
         clock: Callable[[], float] = time.monotonic,
         jitter: Callable[[float, float], float] = random.uniform,
         activity: Callable[[str, QueueJob | None], None] | None = None,
+        reuse_ledger: ReuseLedgerPort | None = None,
     ) -> None:
         if (
             retry_base_seconds <= 0
@@ -110,6 +112,7 @@ class LocalIngestionWorker:
         self.clock = clock
         self.jitter = jitter
         self.activity = activity or (lambda phase, job: None)
+        self.reuse_ledger = reuse_ledger
         self.last_failure: WorkerFailure | None = None
         self.last_idle_delay_seconds = 0.0
         self._consecutive_dependency_failures = 0
@@ -204,6 +207,7 @@ class LocalIngestionWorker:
         artifact_key: str | None = None
         initialized = False
         scope = ExitStack()
+        usage = None
         guard = LeaseGuard(self.queue, job.id, owner, self.lease_seconds)
         guard.start()
         try:
@@ -211,6 +215,19 @@ class LocalIngestionWorker:
             ingestion_scope = getattr(self.repository, "ingestion_scope", None)
             if callable(ingestion_scope):
                 scope.enter_context(ingestion_scope(job))
+            usage = scope.enter_context(
+                task_usage(
+                    self.reuse_ledger,
+                    job.id,
+                    kind="ingestion",
+                    tenant_id=str(job.payload.get("tenant_id", "")),
+                    space_id=str(job.payload.get("space_id", "")),
+                    document_id=str(job.payload.get("document_id", "")),
+                    document_version_id=version_id,
+                    attempt=job.attempt,
+                    fence_token=job.fence_token,
+                )
+            )
             scope.enter_context(cancellation_scope(guard.poll))
             guard.check()
             version = self.repository.get_version(version_id)
@@ -369,7 +386,21 @@ class LocalIngestionWorker:
                         )
             finally:
                 guard.stop()
-                scope.close()
+                try:
+                    if usage:
+                        usage.state = "unknown"
+                        if self.last_failure:
+                            usage.state = (
+                                "RETRY_WAIT"
+                                if self.last_failure.retryable
+                                else self.last_failure.error_code
+                            )
+                        else:
+                            latest = self.queue.get(job.id)
+                            if latest and latest.fence_token == job.fence_token:
+                                usage.state = latest.state.value
+                finally:
+                    scope.close()
                 self.activity("failed" if self.last_failure else "idle", None)
         return True
 
