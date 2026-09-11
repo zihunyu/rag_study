@@ -10,6 +10,8 @@ BM25 + Dense 检索、查询类型感知融合、Rerank、基于证据生成、�
 
 表格与章节分块、语义证据选择、有限补查及旧资料升级见 [RAG 通用修复说明](docs/RAG_GENERAL_REPAIR.md)。
 自然段落、对比表格与完整正文核验见 [答案整理说明](docs/ANSWER_SYNTHESIS.md)。
+目录增量同步、文档与问题向量缓存、Embedding 批处理及复杂问题检索见
+[增量入库与缓存说明](docs/INGESTION_REUSE.md)。
 
 系统有两个明确分离的运行模式：
 
@@ -153,6 +155,13 @@ tokenizer artifact；Semantic 路径同样保留节点类型、来源 spans 和 
 Embedding。默认结构化分片保留标题/章节路径，表格行重复携带表头，
 搜索使用小 Chunk，回答可附带授权后的 Parent Chunk。大小、Overlap、上下限和 Parent 上限均在
 `config/.env` 配置。
+
+仓库自带固定版本的 Qwen3-Embedding 分词器，配置见 `config/.env.example`，来源和 SHA-256
+见 `backend/resources/tokenizers/qwen3-embedding-0.6b/provenance.json`。它用于本地分块预算，
+不表示与云端计费 token 完全相同。生产启动和 G4 预检同时校验词表与多语言编码能力，
+拒绝测试 WordLevel 词表；读取时禁用 artifact 自带的截断和 padding，避免丢掉文档尾部。
+BPE 分块切片后重新计数，父块预算包含分隔符。更换词表不会自动修正旧块，迁移与验证说明见
+[分词器与旧索引说明](docs/TOKENIZER_MIGRATION.md)。
 
 检索会并发执行 BM25 与 Embedding/Dense 路径，使用绝对分数与排名稳定项融合；单结果不会
 自动成为满置信度，Embedding 暂时失败时仍保留 BM25。中文

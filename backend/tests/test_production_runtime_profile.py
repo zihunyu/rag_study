@@ -81,9 +81,9 @@ def test_production_profile_contains_no_deterministic_rag_components(
                 "OIDC_TENANT_ID=tenant-production",
                 "OIDC_DEFAULT_SPACE_ID=space-production",
                 "TOKENIZER_ARTIFACT_PATH="
-                f"{root / 'backend/tests/fixtures/tokenizer/minimal-tokenizer.json'}",
-                "TOKENIZER_ARTIFACT_SHA256=e05d0c453e652ff400d7782318a7e21ec3535dc584e314f5112bd169b6c1177e",
-                "TOKENIZER_ID=test-wordlevel-v1",
+                f"{root / 'backend/resources/tokenizers/qwen3-embedding-0.6b/tokenizer.json'}",
+                "TOKENIZER_ARTIFACT_SHA256=def76fb086971c7867b829c23a26261e38d9d74e02139253b38aeb9df8b4b50a",
+                "TOKENIZER_ID=Qwen/Qwen3-Embedding-0.6B@97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
             )
         ),
         encoding="utf-8",

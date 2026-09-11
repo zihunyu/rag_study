@@ -59,7 +59,12 @@ def _settings(tmp_path: Path):
 def test_embedding_and_reranker_mock_contracts_do_not_make_real_calls(tmp_path: Path) -> None:
     settings, secret = _settings(tmp_path)
     embedding_transport = _MockTransport(
-        {"data": [{"embedding": [1.0, 0.0, 0.0]}, {"embedding": [0.0, 1.0, 0.0]}]}
+        {
+            "data": [
+                {"index": 0, "embedding": [1.0, 0.0, 0.0]},
+                {"index": 1, "embedding": [0.0, 1.0, 0.0]},
+            ]
+        }
     )
     reranker_transport = _MockTransport({"results": [{"index": 1}, {"index": 0}]})
     embedding = OpenAICompatibleEmbeddingAdapter(settings, transport=embedding_transport)

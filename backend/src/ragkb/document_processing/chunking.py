@@ -7,7 +7,6 @@ import math
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
-from pathlib import Path
 from typing import Protocol
 
 from ragkb.application.cancellation import check_cancelled
@@ -16,6 +15,7 @@ from ragkb.document_processing.qa_structure import condition_anchors
 from ragkb.document_processing.visual_tables import table_windows
 from ragkb.domain.documents import CanonicalDocument, CanonicalNode, NodeType, SourceLocator
 from ragkb.domain.entities import Chunk
+from ragkb.tokenization import TokenizerArtifact as TokenizerArtifact
 
 _TOKEN_PATTERN = re.compile(r"[\u3400-\u9fff]|[A-Za-z0-9_]+|[^\s]", re.UNICODE)
 _BOUNDARY_CHARACTERS = frozenset("。！？!?；;：:\n")
@@ -32,30 +32,6 @@ class UnicodeApproximateTokenizer:
 
     def spans(self, text: str) -> tuple[tuple[int, int], ...]:
         return tuple((match.start(), match.end()) for match in _TOKEN_PATTERN.finditer(text))
-
-
-class TokenizerArtifact:
-    """Pinned Hugging Face tokenizer.json with an immutable content digest."""
-
-    def __init__(self, path: Path, expected_sha256: str, tokenizer_id: str) -> None:
-        resolved = path.resolve()
-        if not resolved.is_file():
-            raise ValueError("TOKENIZER_ARTIFACT_MISSING")
-        digest = hashlib.sha256(resolved.read_bytes()).hexdigest()
-        if not expected_sha256 or digest != expected_sha256.casefold():
-            raise ValueError("TOKENIZER_ARTIFACT_SHA256_MISMATCH")
-        if not tokenizer_id.strip():
-            raise ValueError("TOKENIZER_ID_REQUIRED")
-        from tokenizers import Tokenizer
-
-        self._tokenizer = Tokenizer.from_file(str(resolved))
-        self.revision = f"{tokenizer_id}:{digest[:16]}"
-
-    def spans(self, text: str) -> tuple[tuple[int, int], ...]:
-        encoded = self._tokenizer.encode(text, add_special_tokens=False)
-        return tuple(
-            (int(start), int(end)) for start, end in encoded.offsets if int(end) > int(start)
-        )
 
 
 _DEFAULT_TOKENIZER = UnicodeApproximateTokenizer()
@@ -135,15 +111,24 @@ def _windows(
         start = spans[token_start][0]
         end = spans[token_end - 1][1]
         piece = text[start:end].strip()
+        # Byte-level BPE can assign several tokens to one Unicode character.
+        # Slicing by offsets restores that whole character and may cost more
+        # tokens than the original token-index window, so recount the actual text.
+        while piece and count_tokens(piece, tokenizer) > config.max_tokens:
+            if token_end <= token_start + 1:
+                raise ValueError("CHUNK_CHARACTER_EXCEEDS_TOKEN_BUDGET")
+            token_end -= 1
+            end = spans[token_end - 1][1]
+            piece = text[start:end].strip()
         if piece:
             if (
                 windows
                 and token_end == len(spans)
                 and count_tokens(piece, tokenizer) < config.min_tokens
-                and count_tokens(f"{windows[-1][0]}\n{piece}", tokenizer) <= config.max_tokens
+                and count_tokens(text[windows[-1][1]:end].strip(), tokenizer) <= config.max_tokens
             ):
-                previous, previous_start, _ = windows.pop()
-                merged = f"{previous}\n{text[start:end].strip()}"
+                _, previous_start, _ = windows.pop()
+                merged = text[previous_start:end].strip()
                 windows.append((merged, previous_start, end))
             else:
                 windows.append((piece, start, end))
@@ -204,7 +189,7 @@ class TokenAwareChunker:
         self.tokenizer = tokenizer or _DEFAULT_TOKENIZER
         self.tokenizer_id = self.tokenizer.revision
         self.revision = (
-            f"token-aware:v5-html-rows:{self.config.strategy}:"
+            f"token-aware:v6-bpe-budgets:{self.config.strategy}:"
             f"{self.config.target_tokens}:{self.config.overlap_tokens}"
         )
 
@@ -307,10 +292,9 @@ class TokenAwareChunker:
 
         parents: list[Chunk] = []
         grouped: list[Chunk] = []
-        grouped_tokens = 0
 
         def flush_parent() -> None:
-            nonlocal grouped, grouped_tokens
+            nonlocal grouped
             if not grouped:
                 return
             text = "\n".join(item.display_text for item in grouped)
@@ -381,16 +365,16 @@ class TokenAwareChunker:
                         **{**children[index].__dict__, "parent_chunk_id": parent_id}
                     )
             grouped = []
-            grouped_tokens = 0
 
         for child in children:
             if grouped and (
                 child.section_id != grouped[-1].section_id
-                or grouped_tokens + child.token_count > self.config.parent_max_tokens
+                or count_tokens(
+                    "\n".join(item.display_text for item in (*grouped, child)), self.tokenizer
+                ) > self.config.parent_max_tokens
             ):
                 flush_parent()
             grouped.append(child)
-            grouped_tokens += child.token_count
         flush_parent()
         return ChunkingResult(tuple(children), tuple(parents), self.revision)
 

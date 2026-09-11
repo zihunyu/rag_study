@@ -7,7 +7,7 @@ import math
 import secrets
 import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -21,6 +21,7 @@ from ragkb.adapters.condition_prompt import (
     EXCEPTION_SCOPE_RULES,
 )
 from ragkb.adapters.deadline_http import DeadlineHttpClient
+from ragkb.adapters.embedding_cache import SQLiteEmbeddingCache
 from ragkb.application.deadlines import bounded_slot, remaining_timeout, request_deadline
 from ragkb.application.qa_diagnostics import record_model_call
 from ragkb.config import EnvSettings
@@ -500,7 +501,7 @@ class _GuardedModelAdapter:
 
 
 class OpenAICompatibleEmbeddingAdapter(_GuardedModelAdapter):
-    revision = "openai-compatible-embedding"
+    revision = "openai-compatible-embedding:v2-cached-batches"
 
     def __init__(
         self,
@@ -508,6 +509,8 @@ class OpenAICompatibleEmbeddingAdapter(_GuardedModelAdapter):
         *,
         transport: JsonTransport | None = None,
         external_call_approved: bool = False,
+        cache: SQLiteEmbeddingCache | None = None,
+        token_counter: Callable[[str], int] | None = None,
     ) -> None:
         super().__init__(
             settings=settings,
@@ -517,11 +520,99 @@ class OpenAICompatibleEmbeddingAdapter(_GuardedModelAdapter):
         )
         self._settings = settings
         self.dimension = settings.embedding_dimension
+        self.cache = cache
+        # Runtime replaces this conservative fallback with the pinned tokenizer.
+        self.token_counter = token_counter or (lambda text: len(text.encode("utf-8")))
+        self._cache_metrics_lock = threading.Lock()
+        self._cache_metrics = {"hits": 0, "misses": 0, "provider_batches": 0}
+        self._cache_namespace = SQLiteEmbeddingCache.key(
+            json.dumps(
+                {
+                    "endpoint": settings.embedding_base_url.rstrip("/"),
+                    "model": settings.embedding_model,
+                    "dimension": self.dimension,
+                    "normalize": settings.embedding_normalize,
+                    "input_contract": "exact-utf8-provider-output-v1",
+                    "revision": settings.embedding_cache_revision,
+                },
+                sort_keys=True,
+            )
+        )
+
+    def cache_stats(self) -> dict[str, int]:
+        with self._cache_metrics_lock:
+            return dict(self._cache_metrics)
+
+    def _cache_metric(self, name: str, count: int) -> None:
+        with self._cache_metrics_lock:
+            self._cache_metrics[name] += count
 
     def embed(self, texts: Sequence[str]) -> Sequence[Sequence[float]]:
-        self._guard()
+        return self._embed(texts, cache_enabled=self._settings.embedding_cache_enabled)
+
+    def embed_query(self, text: str) -> Sequence[float]:
+        return self._embed([text], cache_enabled=self._settings.query_embedding_cache_enabled)[0]
+
+    def _embed(self, texts: Sequence[str], *, cache_enabled: bool) -> list[list[float]]:
         if not texts or any(not text.strip() for text in texts):
             raise ValueError("embedding input must contain non-empty text")
+        unique = dict.fromkeys(texts)
+        sizes = {text: self.token_counter(text) for text in unique}
+        maximum = min(
+            self._settings.embedding_max_input_tokens, self._settings.embedding_max_batch_tokens
+        )
+        if any(size < 1 or size > maximum for size in sizes.values()):
+            raise ValueError("EMBEDDING_INPUT_TOKEN_LIMIT")
+        keys = {text: SQLiteEmbeddingCache.key(text) for text in unique}
+        cache = self.cache if cache_enabled else None
+        lock = (
+            cache.lock(
+                self._cache_namespace,
+                list(keys.values()),
+                remaining_timeout(self._settings.llm_timeout_seconds),
+            )
+            if cache
+            else nullcontext()
+        )
+        with lock:
+            vectors: dict[str, list[float]] = {}
+            for text, key in keys.items():
+                cached = cache.get(self._cache_namespace, key, self.dimension) if cache else None
+                if cached is not None:
+                    vectors[text] = cached
+            self._cache_metric("hits", sum(text in vectors for text in texts))
+            missing = [text for text in unique if text not in vectors]
+            self._cache_metric("misses", len(missing))
+            batches: list[list[str]] = []
+            batch: list[str] = []
+            tokens = 0
+            for text in missing:
+                if batch and (
+                    len(batch) >= self._settings.embedding_batch_size
+                    or tokens + sizes[text] > self._settings.embedding_max_batch_tokens
+                ):
+                    batches.append(batch)
+                    batch, tokens = [], 0
+                batch.append(text)
+                tokens += sizes[text]
+            if batch:
+                batches.append(batch)
+            for batch in batches:
+                result = self._request_embeddings(batch)
+                completed = dict(zip(batch, result, strict=True))
+                # Commit each successful batch before starting another network request.
+                if cache:
+                    cache.put(
+                        self._cache_namespace,
+                        {keys[t]: v for t, v in completed.items()},
+                        self.dimension,
+                    )
+                vectors.update(completed)
+            return [list(vectors[text]) for text in texts]
+
+    def _request_embeddings(self, texts: Sequence[str]) -> list[list[float]]:
+        self._guard()
+        self._cache_metric("provider_batches", 1)
         key = self._settings.embedding_api_key
         response = self._post_json(
             f"{self._settings.embedding_base_url.rstrip('/')}/embeddings",
@@ -532,15 +623,20 @@ class OpenAICompatibleEmbeddingAdapter(_GuardedModelAdapter):
         data = response.get("data")
         if not isinstance(data, Sequence) or len(data) != len(texts):
             raise InvalidProviderResponse("EMBEDDING_RESPONSE_COUNT_MISMATCH")
-        vectors: list[list[float]] = []
+        ordered: dict[int, list[float]] = {}
         for item in data:
             if not isinstance(item, Mapping) or not isinstance(item.get("embedding"), Sequence):
                 raise InvalidProviderResponse("EMBEDDING_RESPONSE_ITEM_INVALID")
-            vector = [float(value) for value in item["embedding"]]
-            if len(vector) != self.dimension or not all(math.isfinite(value) for value in vector):
+            index = item.get("index")
+            if type(index) is not int or index < 0 or index >= len(texts) or index in ordered:
+                raise InvalidProviderResponse("EMBEDDING_RESPONSE_INDEX_INVALID")
+            raw = item["embedding"]
+            if len(raw) != self.dimension or any(
+                type(value) not in (int, float) or not math.isfinite(value) for value in raw
+            ):
                 raise InvalidProviderResponse("EMBEDDING_VECTOR_INVALID")
-            vectors.append(vector)
-        return vectors
+            ordered[index] = [float(value) for value in raw]
+        return [ordered[i] for i in range(len(texts))]
 
     def probe_plan(self) -> dict[str, object]:
         return {

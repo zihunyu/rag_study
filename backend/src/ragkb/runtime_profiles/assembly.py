@@ -10,10 +10,12 @@ from pathlib import Path
 from pydantic import SecretStr
 
 from ragkb.adapters.chapter_reader import ChapterReader
+from ragkb.adapters.embedding_cache import SQLiteEmbeddingCache
 from ragkb.adapters.local_indexing import SQLiteLocalIndexingSink
 from ragkb.adapters.local_storage import LocalFileStorage
 from ragkb.adapters.model_http import (
     HttpxJsonTransport,
+    OpenAICompatibleEmbeddingAdapter,
 )
 from ragkb.adapters.mysql_governance import MySQLGovernanceRepository
 from ragkb.adapters.mysql_retrieval import MySQLRetrievalControlPlane
@@ -208,6 +210,10 @@ def build_runtime_components(
         parent_max_tokens=settings.parent_chunk_max_tokens,
     )
     tokenizer = profile_factory.build_tokenizer(settings, root)
+    if isinstance(embedding, OpenAICompatibleEmbeddingAdapter):
+        embedding.token_counter = lambda text: len(tokenizer.spans(text))
+        if settings.embedding_cache_enabled or settings.query_embedding_cache_enabled:
+            embedding.cache = SQLiteEmbeddingCache(storage.root / "cache/embeddings.sqlite3")
     chunker: ChunkerPort = (
         SemanticChunker(
             EmbeddingSemanticBoundaryScorer(embedding),
@@ -309,6 +315,8 @@ def build_runtime_components(
         real_acceptance=acceptance,
         tracer=tracer,
         lifecycle_authorizer=lifecycle_store.authorizes_chunk,
+        query_planning_enabled=settings.retrieval_query_planning_enabled,
+        max_subqueries=settings.retrieval_max_subqueries,
     )
     rag_persistence = profile_factory.build_rag_persistence(database, persistence)
     rag_repository = rag_persistence.repository

@@ -210,6 +210,8 @@ class HybridSearchService:
         real_acceptance: bool = False,
         tracer: TracerPort | None = None,
         lifecycle_authorizer: Callable[[AuthorizedChunk, SearchContext], bool] | None = None,
+        query_planning_enabled: bool = True,
+        max_subqueries: int = 4,
     ) -> None:
         self.embedding = embedding
         self.index = index
@@ -229,6 +231,17 @@ class HybridSearchService:
         self.real_acceptance = real_acceptance
         self.tracer = tracer or InMemoryTracer()
         self.lifecycle_authorizer = lifecycle_authorizer
+        self.query_planning_enabled = query_planning_enabled
+        self.max_subqueries = max_subqueries
+
+    def _query_vector(self, query: str) -> Sequence[float]:
+        embed_query = getattr(self.embedding, "embed_query", None)
+        if callable(embed_query):
+            return cast(Sequence[float], embed_query(query))
+        vectors = self.embedding.embed([query])
+        if len(vectors) != 1:
+            raise ValueError("embedding adapter must return exactly one query vector")
+        return vectors[0]
 
     def _currently_authorized(self, chunk: AuthorizedChunk, context: SearchContext) -> bool:
         return self.lifecycle_authorizer is None or self.lifecycle_authorizer(chunk, context)
@@ -243,12 +256,10 @@ class HybridSearchService:
         if callable(native):
             try:
                 with self.tracer.span("rag.retrieval.embedding"):
-                    vectors = self.embedding.embed([query])
-                if len(vectors) != 1:
-                    raise ValueError("embedding adapter must return exactly one query vector")
+                    vector = self._query_vector(query)
                 result = cast(Any, native)(
                     query,
-                    vectors[0],
+                    vector,
                     context,
                     bm25_limit=self.bm25_top_k,
                     dense_limit=self.dense_top_k,
@@ -270,11 +281,9 @@ class HybridSearchService:
 
         def dense_path() -> Sequence[IndexCandidate]:
             with self.tracer.span("rag.retrieval.embedding"):
-                vectors = self.embedding.embed([query])
-            if len(vectors) != 1:
-                raise ValueError("embedding adapter must return exactly one query vector")
+                vector = self._query_vector(query)
             with self.tracer.span("rag.retrieval.dense"):
-                return self.index.search_dense(vectors[0], context, self.dense_top_k)
+                return self.index.search_dense(vector, context, self.dense_top_k)
 
         def bm25_path() -> Sequence[IndexCandidate]:
             with self.tracer.span("rag.retrieval.bm25"):
@@ -312,7 +321,20 @@ class HybridSearchService:
         with self.tracer.span(
             "rag.retrieval", {"query_type": classify_query(normalized), "limit": limit or 0}
         ):
-            bm25, dense, warnings, available_channels = self._retrieve(normalized, context)
+            from ragkb.application.query_planning import REVISION, merge_channel, plan_queries
+
+            queries = plan_queries(
+                normalized, self.max_subqueries if self.query_planning_enabled else 1
+            )
+            with self.tracer.span(
+                "rag.retrieval.plan", {"revision": REVISION, "query_count": len(queries)}
+            ):
+                # Sequential facets keep model concurrency and request deadlines bounded.
+                results = [self._retrieve(query, context) for query in queries]
+            bm25 = merge_channel([r[0] for r in results], self.bm25_top_k)
+            dense = merge_channel([r[1] for r in results], self.dense_top_k)
+            warnings = list(dict.fromkeys(w for r in results for w in r[2]))
+            available_channels = tuple(dict.fromkeys(c for r in results for c in r[3]))
         if not available_channels:
             return SearchResult(
                 (),

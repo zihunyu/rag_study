@@ -282,11 +282,13 @@ class ProductionRuntimeFactory:
     def build_tokenizer(self, settings: EnvSettings, root: Path) -> TokenizerArtifact:
         self._guard(settings)
         artifact = settings.tokenizer_artifact_path
-        return TokenizerArtifact(
+        tokenizer = TokenizerArtifact(
             artifact if artifact.is_absolute() else root / artifact,
             settings.tokenizer_artifact_sha256,
             settings.tokenizer_id,
         )
+        tokenizer.validate_for_production()
+        return tokenizer
 
     def build_rag_persistence(
         self, database: SQLiteDatabase, persistence: PersistenceAdapters

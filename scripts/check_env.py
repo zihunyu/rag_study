@@ -14,7 +14,7 @@ from ragkb.config import build_env_report, load_env  # noqa: E402
 
 CONFIG_HINTS = {
     "RETRIEVAL_ACTIVE_GENERATION_ID": "填写已完成 MySQL/Zilliz 对账并发布的 generation ID",
-    "TOKENIZER_ARTIFACT_PATH": "填写与 EMBEDDING_MODEL 匹配的 tokenizer.json 本地路径",
+    "TOKENIZER_ARTIFACT_PATH": "使用 .env.example 固定的 Qwen 词表或经校准的正式词表",
     "TOKENIZER_ARTIFACT_SHA256": "填写 Get-FileHash <tokenizer.json> -Algorithm SHA256 的结果",
     "TOKENIZER_ID": "填写供应商模型名和 tokenizer 版本组成的稳定标识",
     "VERIFIER_BASE_URL": "填写独立核验模型的 OpenAI-compatible Base URL",

@@ -143,10 +143,16 @@ def build_health_router(runtime: RuntimeComponents) -> APIRouter:
         # Reuse real readiness probes. Failed dependencies remain readable to the dashboard.
         snapshot = ready(Response()).model_dump()
         usage = VisualAssetStore(runtime.storage).ledger.usage_report()
+        embedding_stats = getattr(runtime.search_service.embedding, "cache_stats", None)
         return {
             **snapshot,
             "checked_at": time.time(),
             "model_usage": {k: v for k, v in usage.items() if k != "records"},
+            "embedding_cache": {
+                "document_enabled": runtime.settings.embedding_cache_enabled,
+                "query_enabled": runtime.settings.query_embedding_cache_enabled,
+                "process_counters": embedding_stats() if callable(embedding_stats) else {},
+            },
             "visual_processing": {
                 "enabled": runtime.settings.ocr_enabled,
                 "ocr_model": runtime.settings.ocr_model,

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from urllib.parse import urlparse
 
 from ragkb.config.env import (
@@ -14,6 +13,7 @@ from ragkb.config.env import (
     known_env_keys,
 )
 from ragkb.config.vector import normalize_milvus_uri
+from ragkb.tokenization import TokenizerArtifact
 
 GATE_ORDER = {f"G{index}": index for index in range(7)}
 
@@ -158,15 +158,19 @@ def conditional_issues(result: EnvLoadResult) -> tuple[EnvIssue, ...]:
         if not tokenizer_path.is_file():
             issues.append(EnvIssue("TOKENIZER_ARTIFACT_PATH", "TOKENIZER_ARTIFACT_MISSING", "G4"))
         elif settings.tokenizer_artifact_sha256:
-            digest = hashlib.sha256(tokenizer_path.read_bytes()).hexdigest()
-            if digest != settings.tokenizer_artifact_sha256.casefold():
-                issues.append(
-                    EnvIssue(
-                        "TOKENIZER_ARTIFACT_SHA256",
-                        "TOKENIZER_ARTIFACT_SHA256_MISMATCH",
-                        "G4",
-                    )
+            try:
+                tokenizer = TokenizerArtifact(
+                    tokenizer_path, settings.tokenizer_artifact_sha256, settings.tokenizer_id
                 )
+                tokenizer.validate_for_production()
+            except ValueError as error:
+                code = str(error)
+                key = (
+                    "TOKENIZER_ARTIFACT_SHA256"
+                    if code == "TOKENIZER_ARTIFACT_SHA256_MISMATCH"
+                    else "TOKENIZER_ARTIFACT_PATH"
+                )
+                issues.append(EnvIssue(key, code, "G4"))
     if settings.retrieval_rerank_top_k > (
         settings.retrieval_bm25_top_k + settings.retrieval_dense_top_k
     ):

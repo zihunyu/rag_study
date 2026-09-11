@@ -6,5 +6,9 @@ versions are recorded in requirements.lock and frontend/package-lock.json.
 The container assurance workflow generates a CycloneDX SBOM for every built
 image. Third-party components remain subject to their respective licenses.
 
+The pinned tokenizer in backend/resources/tokenizers/qwen3-embedding-0.6b
+is from Qwen/Qwen3-Embedding-0.6B, distributed under Apache License 2.0.
+The original artifact, source revision and SHA-256 are recorded in provenance.json.
+
 Model, tokenizer, evaluation-data, and business-document licenses are not
 granted by this repository and must be reviewed before production deployment.

@@ -291,6 +291,11 @@ class EnvSettings(BaseModel):
     embedding_normalize: bool = True
     embedding_batch_size: int = Field(default=32, gt=0)
     embedding_max_concurrency: int = Field(default=4, gt=0)
+    embedding_max_input_tokens: int = Field(default=8192, gt=0)
+    embedding_max_batch_tokens: int = Field(default=32768, gt=0)
+    embedding_cache_enabled: bool = True
+    query_embedding_cache_enabled: bool = True
+    embedding_cache_revision: str = "provider-output-v1"
 
     reranker_base_url: str = ""
     reranker_api_key: SecretStr | None = None
@@ -328,6 +333,10 @@ class EnvSettings(BaseModel):
     retrieval_near_duplicate_threshold: float = Field(default=0.92, ge=0, le=1)
     retrieval_max_chunks_per_document: int = Field(default=3, gt=0)
     retrieval_max_chunks_per_section: int = Field(default=2, gt=0)
+    retrieval_query_planning_enabled: bool = True
+    retrieval_max_subqueries: int = Field(default=4, ge=1, le=8)
+    directory_sync_max_files: int = Field(default=10000, ge=1, le=1000000)
+    directory_sync_contract_revision: str = "v1"
 
     upload_max_file_size_mb: int = Field(default=200, gt=0)
     upload_max_pages: int = Field(default=600, gt=0)

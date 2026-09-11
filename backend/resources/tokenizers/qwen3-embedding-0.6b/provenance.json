@@ -1,0 +1,9 @@
+{
+  "repository": "Qwen/Qwen3-Embedding-0.6B",
+  "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+  "url": "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B/resolve/97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3/tokenizer.json",
+  "sha256": "def76fb086971c7867b829c23a26261e38d9d74e02139253b38aeb9df8b4b50a",
+  "size_bytes": 11423705,
+  "license": "Apache-2.0",
+  "usage": "Local chunk budgeting for Qwen3-family text-embedding-v4; local counts do not imply provider billing token parity."
+}
