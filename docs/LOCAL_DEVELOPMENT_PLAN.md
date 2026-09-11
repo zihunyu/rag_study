@@ -1,5 +1,9 @@
 # 本地开发配置与启动
 
+2026-09-11 更新：现已支持通过 `VECTOR_BACKEND` 选择 Zilliz Cloud 或自建 Milvus。
+自建模式可以使用独立的 `config/.env.milvus` 覆盖连接参数；具体优先级、网络地址及初始化
+见 [自建 Milvus 说明](SELF_HOSTED_MILVUS.md)。下文早期“仅 Zilliz Cloud”的部署限制由本更新替代。
+
 ## 唯一配置入口
 
 | 文件 | 用途 | Git |

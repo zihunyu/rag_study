@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-EVALUATION_REVISION = "acceptance-v4-relevance-20260909"
+EVALUATION_REVISION = "acceptance-v6-absence-row-citations-20260910"
 RELEVANCE_POINT_ID = "__answer_relevance"
 
 
@@ -49,6 +49,7 @@ class PointSpec(BaseModel):
     criteria: list[Criterion] = Field(default_factory=list, max_length=30)
     list_checks: ListChecks = Field(default_factory=ListChecks)
     check_relevance: bool = False
+    check_citation_structure: bool = False
 
     @model_validator(mode="after")
     def distinct_ids(self) -> PointSpec:
@@ -80,7 +81,9 @@ def criteria_for(case: dict[str, Any]) -> list[dict[str, Any]]:
                 "id": RELEVANCE_POINT_ID,
                 "kind": "relevance",
                 "text": "回答围绕问题；保留必要条件、例外、单位和范围，"
-                "不混入无关条款，不重复附加相同内容。",
+                "不混入无关条款，不重复附加相同内容。共享条件必须明确覆盖全部适用对象；"
+                "例外不得扩大到其他规则。段落、数据行与单位说明中的事实均应就近标注来源，"
+                "不得把漏答或缩小条件范围视为精简。",
                 "sources": sources,
             }
         )

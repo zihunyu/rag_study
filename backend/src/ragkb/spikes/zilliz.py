@@ -72,7 +72,12 @@ def run_zilliz_spike(loaded: EnvLoadResult) -> dict[str, object]:
     assertions = [
         {"name": "authorized_ranked_first", "passed": ranking[:1] == ["authorized"]},
         {"name": "unauthorized_never_visible", "passed": "unauthorized" not in ranking},
-        {"name": "bm25_required", "passed": settings.zilliz_cloud_enable_bm25},
+        {
+            "name": "bm25_required",
+            "passed": settings.vector_enable_bm25
+            if settings.vector_backend == "milvus"
+            else settings.zilliz_cloud_enable_bm25,
+        },
         {
             "name": "security_consistency_strong",
             "passed": settings.zilliz_cloud_security_consistency_level == "Strong",
@@ -83,7 +88,7 @@ def run_zilliz_spike(loaded: EnvLoadResult) -> dict[str, object]:
         "zilliz_cloud_chinese_analyzer_not_measured",
         "zilliz_cloud_acl_watermark_latency_not_measured",
     ]
-    if not loaded.configured["ZILLIZ_CLOUD_TOKEN"]:
+    if settings.vector_backend == "zilliz" and not loaded.configured["ZILLIZ_CLOUD_TOKEN"]:
         blockers.append("ZILLIZ_CLOUD_TOKEN:not_configured")
     return result(
         "zilliz_cloud_bm25_acl_watermark",

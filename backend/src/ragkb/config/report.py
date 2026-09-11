@@ -13,6 +13,7 @@ from ragkb.config.env import (
     EnvSettings,
     known_env_keys,
 )
+from ragkb.config.vector import normalize_milvus_uri
 
 GATE_ORDER = {f"G{index}": index for index in range(7)}
 
@@ -113,7 +114,12 @@ def conditional_issues(result: EnvLoadResult) -> tuple[EnvIssue, ...]:
         else settings.zilliz_cloud_dimension
     )
     if settings.embedding_dimension != configured_vector_dimension:
-        issues.append(EnvIssue("EMBEDDING_DIMENSION", "ZILLIZ_DIMENSION_MISMATCH", "G2"))
+        code = (
+            "VECTOR_DIMENSION_MISMATCH"
+            if settings.vector_backend == "milvus"
+            else "ZILLIZ_DIMENSION_MISMATCH"
+        )
+        issues.append(EnvIssue("EMBEDDING_DIMENSION", code, "G2"))
     embedding_url = urlparse(settings.embedding_base_url)
     dashscope_embedding = bool(
         (embedding_url.hostname or "").casefold()
@@ -198,7 +204,20 @@ def conditional_issues(result: EnvLoadResult) -> tuple[EnvIssue, ...]:
         require("ZILLIZ_CLOUD_TOKEN", "G2")
     elif settings.vector_backend == "milvus":
         require("VECTOR_URI", "G2")
-    require("ZILLIZ_CLOUD_DIMENSION", "G2")
+        if settings.vector_uri:
+            try:
+                normalize_milvus_uri(settings.vector_uri)
+            except ValueError:
+                issues.append(EnvIssue("VECTOR_URI", "VECTOR_URI_INVALID", "G2"))
+        if settings.vector_token is not None and (
+            settings.vector_user or settings.vector_password is not None
+        ):
+            issues.append(EnvIssue("VECTOR_TOKEN", "VECTOR_AUTH_METHODS_CONFLICT", "G2"))
+        if bool(settings.vector_user) != (settings.vector_password is not None):
+            missing_key = "VECTOR_PASSWORD" if settings.vector_user else "VECTOR_USER"
+            issues.append(EnvIssue(missing_key, "VECTOR_USER_PASSWORD_PAIR_REQUIRED", "G2"))
+    vector_prefix = "VECTOR" if settings.vector_backend == "milvus" else "ZILLIZ_CLOUD"
+    require(f"{vector_prefix}_DIMENSION", "G2")
     require("EMBEDDING_DIMENSION", "G2")
     bm25_enabled = (
         settings.vector_enable_bm25
@@ -206,7 +225,15 @@ def conditional_issues(result: EnvLoadResult) -> tuple[EnvIssue, ...]:
         else settings.zilliz_cloud_enable_bm25
     )
     if not bm25_enabled:
-        issues.append(EnvIssue("ZILLIZ_CLOUD_ENABLE_BM25", "ZILLIZ_BM25_REQUIRED", "G2"))
+        issues.append(
+            EnvIssue(
+                f"{vector_prefix}_ENABLE_BM25",
+                "VECTOR_BM25_REQUIRED"
+                if settings.vector_backend == "milvus"
+                else "ZILLIZ_BM25_REQUIRED",
+                "G2",
+            )
+        )
     security_consistency = (
         settings.vector_security_consistency_level
         if settings.vector_backend == "milvus"
@@ -215,7 +242,7 @@ def conditional_issues(result: EnvLoadResult) -> tuple[EnvIssue, ...]:
     if security_consistency != "Strong":
         issues.append(
             EnvIssue(
-                "ZILLIZ_CLOUD_SECURITY_CONSISTENCY_LEVEL",
+                f"{vector_prefix}_SECURITY_CONSISTENCY_LEVEL",
                 "ZILLIZ_SECURITY_STRONG_REQUIRED",
                 "G2",
             )
@@ -343,7 +370,9 @@ def build_env_report(result: EnvLoadResult, requested_gate: str = "G0") -> dict[
         "report_schema_version": 1,
         "requested_gate": requested_gate,
         "env_file": "config/.env",
-        "precedence": ["process_environment", "config/.env", "typed_defaults"],
+        "precedence": ["process_environment", "config/.env.milvus", "config/.env", "typed_defaults"]
+        if "milvus_env" in result.sources.values()
+        else ["process_environment", "config/.env", "typed_defaults"],
         "safe_output_contract": "variable names and status only; values are never returned",
         "summary": {
             "known_key_count": len(variables),

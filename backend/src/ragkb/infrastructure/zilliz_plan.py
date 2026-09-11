@@ -7,6 +7,16 @@ import json
 from typing import Any
 
 from ragkb.config import EnvSettings
+from ragkb.config.vector import (
+    vector_analyzer,
+    vector_consistency,
+    vector_database,
+    vector_dense_field,
+    vector_dimension,
+    vector_metric_type,
+    vector_security_consistency,
+    vector_sparse_field,
+)
 
 ZILLIZ_PLAN_REVISION = "zilliz-collection-plan"
 
@@ -56,28 +66,28 @@ def build_zilliz_collection_plan(settings: EnvSettings) -> dict[str, Any]:
             "type": "VARCHAR",
             "max_length": 65535,
             "enable_analyzer": True,
-            "analyzer_params": {"type": settings.zilliz_cloud_bm25_analyzer},
+            "analyzer_params": {"type": vector_analyzer(settings)},
         },
         {
-            "name": settings.zilliz_cloud_dense_field,
+            "name": vector_dense_field(settings),
             "type": "FLOAT_VECTOR",
-            "dimension": settings.zilliz_cloud_dimension,
+            "dimension": vector_dimension(settings),
         },
-        {"name": settings.zilliz_cloud_sparse_field, "type": "SPARSE_FLOAT_VECTOR"},
+        {"name": vector_sparse_field(settings), "type": "SPARSE_FLOAT_VECTOR"},
         _varchar("index_generation_id"),
         _varchar("analyzer_revision"),
         _varchar("content_checksum", 64),
     ]
     indexes = [
         {
-            "field": settings.zilliz_cloud_dense_field,
+            "field": vector_dense_field(settings),
             "index_name": "idx_dense_hnsw",
             "index_type": "HNSW",
-            "metric_type": settings.zilliz_cloud_metric_type,
+            "metric_type": vector_metric_type(settings),
             "params": {"M": 16, "efConstruction": 200},
         },
         {
-            "field": settings.zilliz_cloud_sparse_field,
+            "field": vector_sparse_field(settings),
             "index_name": "idx_sparse_bm25",
             "index_type": "SPARSE_INVERTED_INDEX",
             "metric_type": "BM25",
@@ -107,27 +117,31 @@ def build_zilliz_collection_plan(settings: EnvSettings) -> dict[str, Any]:
                 "name": "retrieval_text_bm25",
                 "type": "BM25",
                 "input_fields": ["retrieval_text"],
-                "output_fields": [settings.zilliz_cloud_sparse_field],
+                "output_fields": [vector_sparse_field(settings)],
             }
         ],
         "indexes": indexes,
         "consistency": {
-            "default": settings.zilliz_cloud_consistency_level,
-            "security_reads": settings.zilliz_cloud_security_consistency_level,
+            "default": vector_consistency(settings),
+            "security_reads": vector_security_consistency(settings),
         },
     }
     fingerprint = hashlib.sha256(
         json.dumps(schema, sort_keys=True, separators=(",", ":")).encode("utf-8"),
         usedforsecurity=False,
     ).hexdigest()
-    database_is_default = settings.zilliz_cloud_database.casefold() == "default"
+    database_is_default = vector_database(settings).casefold() == "default"
     approved_operations = ["create_collection", "create_indexes", "load"]
     if not database_is_default:
         approved_operations.insert(0, "create_database_if_custom_and_missing")
     return {
         "plan_revision": ZILLIZ_PLAN_REVISION,
-        "database_name_from": "ZILLIZ_CLOUD_DATABASE",
-        "collection_name_from": "ZILLIZ_CLOUD_COLLECTION",
+        "database_name_from": "VECTOR_DATABASE"
+        if settings.vector_backend == "milvus"
+        else "ZILLIZ_CLOUD_DATABASE",
+        "collection_name_from": "VECTOR_COLLECTION"
+        if settings.vector_backend == "milvus"
+        else "ZILLIZ_CLOUD_COLLECTION",
         "schema": schema,
         "schema_fingerprint": fingerprint,
         "execution": {

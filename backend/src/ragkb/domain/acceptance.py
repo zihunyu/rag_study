@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -46,6 +47,28 @@ def fingerprint(value: Any) -> str:
     return hashlib.sha256(
         json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).encode()
     ).hexdigest()
+
+
+def _missing_information_row(row: str, question: str) -> bool:
+    """Recognize only an asked field followed solely by explicit absence markers.
+
+    This is a citation-layout exception, not proof that the information is absent.
+    The published answer must still pass semantic review and all case expectations.
+    Unknown wording, policy denials and mixed factual cells remain citation-bearing.
+    """
+    cells = re.split(r"(?<!\\)\|", row.strip())[1:]
+    if cells and not cells[-1].strip():
+        cells.pop()
+    cells = [c.strip().strip("*_` ").rstrip("。.!！").strip() for c in cells]
+    if len(cells) < 2 or not cells[0] or cells[0].casefold() not in question.casefold():
+        return False
+    absence = (
+        r"(?:(?:(?:现有|当前|所给|所提供|已提供|提供的|已提供的)(?:的)?)?"
+        r"(?:资料|文档|信息)(?:中)?[，,:：]?)?未(?:提供|给出|说明|明确)|"
+        r"not (?:provided|specified|stated)(?: in (?:the )?(?:supplied |provided )?"
+        r"(?:documents|information|sources))?"
+    )
+    return all(re.fullmatch(absence, cell, re.I) is not None for cell in cells[1:])
 
 
 def mechanical_checks(
@@ -99,4 +122,35 @@ def mechanical_checks(
             "detail": "有答案须通过系统核验；预期拒答时不能发布正文或引用",
         }
     )
+    if expected == "answered" and case.get("check_citation_structure"):
+        from ragkb.domain.citation_repair import citation_targets
+
+        answer = result.get("answer") or ""
+        markers = set(re.findall(r"\[(E\d+)\]", answer))
+        rows = [line for line in citation_targets(answer).values() if line.strip().startswith("|")]
+        absence_rows = [
+            row
+            for row in rows
+            if result.get("verified") is True
+            and not re.search(r"\[E\d+\]", row)
+            and _missing_information_row(row, case.get("question", ""))
+        ]
+        checks.extend(
+            [
+                {
+                    "name": "正文引用对应已发布来源",
+                    "passed": bool(markers) and markers <= cited,
+                    "detail": "逐个核对正文引用编号；语义支持关系另由模型与人工复核。",
+                },
+                {
+                    "name": "表格数据行引用齐全",
+                    "passed": all(re.search(r"\[E\d+\]", r) or r in absence_rows for r in rows),
+                    "detail": (
+                        f"检查 {len(rows)} 行数据，其中 {len(absence_rows)} 行仅说明"
+                        "所问字段资料不足，"
+                        "不要求虚构引用；资料是否确实缺失及表前事实另行语义复核。"
+                    ),
+                },
+            ]
+        )
     return checks + list_check_results(case, result.get("answer") or "")

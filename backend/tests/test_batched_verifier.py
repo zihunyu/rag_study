@@ -71,6 +71,27 @@ class ReviewTransport:
         return {"choices": [{"message": {"content": json.dumps(response)}}]}
 
 
+@pytest.mark.parametrize("count", [2, 93])
+def test_single_status_protocol_preserves_missing_verdict_in_both_paths(tmp_path, count):
+    settings, _ = _settings(tmp_path)
+    draft, sources = sample(count)
+
+    def single_status(data, response, kwargs):
+        for check in response["condition_checks"]:
+            check.pop("applicable")
+            if check["id"] == "K1":
+                check.update(status="missing", reason="The applicable prerequisite is absent.")
+
+    transport = ReviewTransport(single_status)
+    result = OpenAICompatibleClaimVerifier(settings, transport=transport).verify(
+        "完整适用条件？", draft, sources
+    )
+    assert not result.supported
+    assert len(result.condition_checks) == count
+    assert result.condition_checks[0]["status"] == "missing"
+    assert all(not c.get("protocol_repair") for c in transport.calls)
+
+
 @pytest.mark.parametrize("failure", ["claim", "citation", "surface", "none"])
 def test_combined_condition_repair_retains_prior_fact_and_surface_verdicts(tmp_path, failure):
     settings, _ = _settings(tmp_path)
@@ -354,6 +375,8 @@ def test_late_batch_invalid_witness_is_not_published(tmp_path):
 
 
 def test_batch_repair_only_rechecks_invalid_rows_and_preserves_missing_rules(tmp_path):
+    from ragkb.application.qa_performance import performance_report, performance_scope
+
     settings, _ = _settings(tmp_path)
     draft, sources = sample()
 
@@ -365,9 +388,11 @@ def test_batch_repair_only_rechecks_invalid_rows_and_preserves_missing_rules(tmp
                 check.update(applicable=True, status="covered", answer_quote="invented witness")
 
     transport = ReviewTransport(partial)
-    result = OpenAICompatibleClaimVerifier(settings, transport=transport).verify(
-        "保修期多久？", draft, sources
-    )
+    with performance_scope():
+        result = OpenAICompatibleClaimVerifier(settings, transport=transport).verify(
+            "保修期多久？", draft, sources
+        )
+        events = performance_report()["events"]
     assert not result.supported
     assert len(result.condition_checks) == 93
     assert result.condition_checks[0]["status"] == "missing"
@@ -375,6 +400,65 @@ def test_batch_repair_only_rechecks_invalid_rows_and_preserves_missing_rules(tmp
     assert [r["id"] for r in repair["condition_requirements"]] == ["K3"]
     assert [r["evidence_id"] for r in repair["sources"]] == ["E4", "E1"]
     assert result.condition_checks[2]["status"] == "not_applicable"
+    retry_stages = [e for e in events if e.get("name") == "verification.conditions.protocol_repair"]
+    assert len(retry_stages) == 1
+    assert retry_stages[0]["condition_count"] == 1
+
+
+@pytest.mark.parametrize("count", [3, 93])
+@pytest.mark.parametrize("shape", ["omitted", "duplicate", "reordered"])
+def test_condition_id_recovery_retains_valid_missing_verdicts_and_only_rechecks_gap(
+    tmp_path, count, shape
+):
+    settings, _ = _settings(tmp_path)
+    draft, sources = sample(count)
+
+    def partial(data, response, kwargs):
+        checks = response["condition_checks"]
+        for check in checks:
+            if check["id"] == "K1":
+                check.update(
+                    applicable=True, status="missing", reason="Required prerequisite is absent."
+                )
+        if not data.get("protocol_repair"):
+            if shape == "omitted":
+                response["condition_checks"] = [c for c in checks if c["id"] != "K3"]
+            elif shape == "duplicate":
+                response["condition_checks"] = checks + [
+                    c.copy() for c in checks if c["id"] == "K3"
+                ]
+            else:
+                response["condition_checks"] = list(reversed(checks))
+
+    transport = ReviewTransport(partial)
+    result = OpenAICompatibleClaimVerifier(settings, transport=transport).verify(
+        "完整适用条件？", draft, sources
+    )
+    assert not result.supported
+    assert len(result.condition_checks) == count
+    assert result.condition_checks[0]["status"] == "missing"
+    repairs = [c for c in transport.calls if c.get("protocol_repair")]
+    if shape == "reordered":
+        assert repairs == []
+    else:
+        assert len(repairs) == 1
+        assert [r["id"] for r in repairs[0]["condition_requirements"]] == ["K3"]
+    initial = transport.calls[0]
+    assert len(initial["conflict_evidence"]) == len(sources)
+
+
+def test_unknown_condition_id_cannot_be_accepted_as_coverage(tmp_path):
+    settings, _ = _settings(tmp_path)
+    draft, sources = sample()
+
+    def invalid(data, response, kwargs):
+        if response["condition_checks"]:
+            response["condition_checks"].append({**response["condition_checks"][0], "id": "K999"})
+
+    with pytest.raises(InvalidProviderResponse, match="VERIFIER_CONDITION_CHECK_REQUIRED"):
+        OpenAICompatibleClaimVerifier(settings, transport=ReviewTransport(invalid)).verify(
+            "保修期限？", draft, sources
+        )
 
 
 def test_contradictory_applicability_reason_requires_provider_correction(tmp_path):

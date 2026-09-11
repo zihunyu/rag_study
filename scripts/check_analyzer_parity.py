@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT / "backend/src"))
 from ragkb.adapters.retrieval_memory import analyze_terms  # noqa: E402
 from ragkb.adapters.zilliz import ZillizCloudAdapter  # noqa: E402
 from ragkb.config import load_env  # noqa: E402
+from ragkb.config.vector import vector_collection_name  # noqa: E402
 
 APPROVAL = "ANALYZER_PARITY_CALL_APPROVED"
 PUBLIC_SAMPLES = ("南京市长江大桥", "ThinkPad P16 Gen 3 21FA")
@@ -31,7 +32,7 @@ def main() -> int:
     client = ZillizCloudAdapter(settings).connect()
     results = client.run_analyzer(
         list(PUBLIC_SAMPLES),
-        collection_name=settings.zilliz_cloud_collection,
+        collection_name=vector_collection_name(settings),
         field_name="retrieval_text",
     )
     remote = [tuple(map(str, result.tokens)) for result in results]

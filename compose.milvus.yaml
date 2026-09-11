@@ -1,0 +1,17 @@
+# docker compose -f compose.yaml -f compose.milvus.yaml up -d
+# Connect to an existing Milvus server. This file does not start or migrate Milvus.
+services:
+  backend:
+    env_file:
+      - config/.env
+      - config/.env.milvus
+    environment:
+      VECTOR_BACKEND: milvus
+      RAG_RUNTIME_PROFILE: production
+  worker:
+    env_file:
+      - config/.env
+      - config/.env.milvus
+    environment:
+      VECTOR_BACKEND: milvus
+      RAG_RUNTIME_PROFILE: production

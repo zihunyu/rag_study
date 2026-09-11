@@ -39,6 +39,47 @@ class ConditionCheckError(ValueError):
         }
 
 
+def partition_condition_checks(
+    raw: Any,
+    pending: list[dict[str, Any]],
+    draft: DraftAnswer,
+    question: str,
+    required: list[dict[str, Any]],
+) -> tuple[dict[str, dict[str, str]], list[dict[str, Any]], list[ConditionCheckError]]:
+    """Keep uniquely identified, fully validated rows; never infer a missing verdict."""
+    expected = {r["id"] for r in pending}
+    if not isinstance(raw, list) or any(
+        not isinstance(c, dict) or not isinstance(c.get("id"), str) or c["id"] not in expected
+        for c in raw
+    ):
+        error = ConditionCheckError(
+            "VERIFIER_CONDITION_CHECK_REQUIRED", "check_shape_or_id_mismatch"
+        )
+        error.diagnostic.update(
+            expected_count=len(pending), received_count=len(raw) if isinstance(raw, list) else None
+        )
+        return {}, pending, [error]
+    checked, failed, errors = {}, [], []
+    for rule in pending:
+        matches = [c for c in raw if c["id"] == rule["id"]]
+        try:
+            if len(matches) != 1:
+                error = ConditionCheckError(
+                    "VERIFIER_CONDITION_CHECK_REQUIRED",
+                    "condition_id_missing" if not matches else "condition_id_duplicated",
+                    rule,
+                )
+                error.diagnostic.update(expected_count=len(pending), received_count=len(raw))
+                raise error
+            checked[rule["id"]] = validate_condition_checks(
+                matches, [rule], draft, question, witness_requirements=required
+            )[0]
+        except ConditionCheckError as caught:
+            failed.append(rule)
+            errors.append(caught)
+    return checked, failed, errors
+
+
 def _terms(text: str) -> set[str]:
     text = re.sub(r"\[E[^\]]+\]", "", text).casefold()
     text = re.sub(

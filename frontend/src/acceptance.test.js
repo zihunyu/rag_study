@@ -56,7 +56,7 @@ describe('问答验收工作台', () => {
     data.attempts[0].point_results = [{ point_id: 'P1', status: 'covered', answer_quote: '保修三年。', note: '原文支持' }, { point_id: '__answer_relevance', status: 'incorrect', answer_quote: '保修三年。', note: '需要负责人确认范围' }];
     const original = request.getMockImplementation();
     request.mockImplementation(async (path, options) => path.endsWith('/runs/r1') ? data : original(path, options));
-    await open('/acceptance/a?run=r1'); await button('第 1 次').trigger('click');
+    await open('/acceptance/a?run=r1'); await button('第 1 轮 · 尝试 1').trigger('click');
     expect(wrapper.text()).toContain('回答相关性与重复附加内容');
     expect(button('确认通过').attributes('disabled')).toBeDefined();
     expect(wrapper.findAll('select').some(s => s.element.value === 'incorrect')).toBe(true);
@@ -137,7 +137,7 @@ describe('问答验收工作台', () => {
     await open('/acceptance/a?run=r1');
     expect(wrapper.text()).toContain('本题处理超过总时限，已保存收到的结果与诊断');
     expect(button('继续未完成题')).toBeDefined();
-    expect(button('第 1 次')).toBeDefined();
+    expect(button('第 1 轮 · 尝试 1')).toBeDefined();
   });
   it('edits reactive case data and preserves the revision on save', async () => {
     await open(); await button('编辑').trigger('click');
@@ -148,7 +148,7 @@ describe('问答验收工作台', () => {
     expect(JSON.parse(update[1].body)).toMatchObject({ revision: 1, case: { question: '保修多久，从哪天起算？' } });
   });
   it('requires point and source review instead of treating system verification as a pass', async () => {
-    await open('/acceptance/a?run=r1'); await button('第 1 次').trigger('click');
+    await open('/acceptance/a?run=r1'); await button('第 1 轮 · 尝试 1').trigger('click');
     expect(wrapper.text()).toContain('待人工复核');
     expect(button('确认通过').attributes('disabled')).toBeDefined();
     const checks = wrapper.findAll('[role=dialog] input[type=checkbox]');

@@ -437,13 +437,24 @@ def extract_numeric_facts(raw_text: str) -> ParsedFacts:
     return ParsedFacts(tuple(result), uncertain, tuple(match[0] for match in identifiers))
 
 
-def check_numeric_facts(claim: str, sources: tuple[str, ...]) -> NumericCheck:
+def check_numeric_facts(
+    claim: str, sources: tuple[str, ...], *, question_identifiers: tuple[str, ...] = ()
+) -> NumericCheck:
     expected = extract_numeric_facts(claim)
     observed = tuple(extract_numeric_facts(source) for source in sources)
     source_identifiers = {identifier for parsed in observed for identifier in parsed.identifiers}
-    if any(identifier not in source_identifiers for identifier in expected.identifiers):
+    missing_identifiers = set(expected.identifiers) - source_identifiers
+    # A model/code named by the question can be a comparison reference rather
+    # than an asserted source fact. This is uncertainty, never source support:
+    # the full semantic verifier must still check its role and every citation.
+    # Numeric-leading tokens can be compact quantities (220V), so retain their
+    # strict matching. Actual quantities below keep all existing mismatch gates.
+    contextual_identifiers = {
+        identifier for identifier in question_identifiers if identifier and identifier[0].isalpha()
+    }
+    if missing_identifiers - contextual_identifiers:
         return "mismatch"
-    uncertain = expected.uncertain
+    uncertain = expected.uncertain or bool(missing_identifiers)
     facts = tuple(fact for parsed in observed for fact in parsed.facts if fact.certain)
     for fact in expected.facts:
         if not fact.certain:

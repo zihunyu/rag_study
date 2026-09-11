@@ -24,7 +24,16 @@ def test_env_example_is_the_only_complete_template() -> None:
 
     assert template_keys == known_env_keys()
     assert len(template_keys) == len(known_env_keys())
-    assert config_entries == {".env", ".env.example", "rag-quality-thresholds.json"}
+    assert config_entries.issubset(
+        {
+            ".env",
+            ".env.example",
+            ".env.milvus",
+            ".env.milvus.example",
+            "rag-quality-thresholds.json",
+        }
+    )
+    assert ".env.milvus.example" in config_entries
     assert (root / "config/.env").is_file()
     assert "config/.env" in (root / ".gitignore").read_text(encoding="utf-8")
     template = load_env(root, env_path=root / "config/.env.example", environ={})

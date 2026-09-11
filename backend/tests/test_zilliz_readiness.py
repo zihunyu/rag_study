@@ -63,7 +63,7 @@ class _ReadinessClient:
         self.stored.difference_update(map(str, kwargs["ids"]))
         return {"delete_count": len(kwargs["ids"])}
 
-    def load(self, **kwargs):
+    def load_collection(self, **kwargs):
         self.events.append("load")
         raise AttributeError("simulated load return compatibility error")
 

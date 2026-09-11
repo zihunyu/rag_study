@@ -11,13 +11,16 @@ from ragkb.adapters.model_http import (
     OpenAICompatibleEmbeddingAdapter,
     OpenAICompatibleRerankerAdapter,
 )
-from ragkb.adapters.zilliz import ZillizCloudAdapter
+from ragkb.adapters.zilliz import MilvusHybridAdapter, ZillizCloudAdapter
 from ragkb.config import load_env
 from ragkb.runtime_components import build_runtime_components
 from ragkb.runtime_profiles.production import ProductionRuntimeFactory
 
 
-def test_production_profile_contains_no_deterministic_rag_components(tmp_path: Path) -> None:
+@pytest.mark.parametrize("backend", ["zilliz", "milvus"])
+def test_production_profile_contains_no_deterministic_rag_components(
+    tmp_path: Path, backend: str
+) -> None:
     root = Path(__file__).resolve().parents[2]
     config = tmp_path / "config"
     config.mkdir()
@@ -29,6 +32,11 @@ def test_production_profile_contains_no_deterministic_rag_components(tmp_path: P
                 "APP_DEBUG=false",
                 f"APP_REVISION={'c' * 40}",
                 "RAG_RUNTIME_PROFILE=production",
+                f"VECTOR_BACKEND={backend}",
+                "VECTOR_URI=standalone:19530",
+                "VECTOR_USER=root",
+                "VECTOR_PASSWORD=runtime-fixture",
+                "VECTOR_DIMENSION=1024",
                 "REAL_PROVIDER_CALLS_ENABLED=true",
                 "RAG_ACCEPTANCE_SIGNING_KEY=production-acceptance-test-key",
                 "EMBEDDING_INPUT_COST_PER_MILLION_CNY=1",
@@ -88,7 +96,8 @@ def test_production_profile_contains_no_deterministic_rag_components(tmp_path: P
     )
 
     assert isinstance(components.search_service.embedding, OpenAICompatibleEmbeddingAdapter)
-    assert isinstance(components.search_service.index, ZillizCloudAdapter)
+    expected_index = MilvusHybridAdapter if backend == "milvus" else ZillizCloudAdapter
+    assert type(components.search_service.index) is expected_index
     assert isinstance(components.search_service.reranker, OpenAICompatibleRerankerAdapter)
     assert isinstance(components.qa_service.generator, OpenAICompatibleBufferedGenerator)
     assert isinstance(components.qa_service.verifier, OpenAICompatibleClaimVerifier)

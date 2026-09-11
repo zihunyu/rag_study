@@ -53,3 +53,36 @@ def test_old_timings_do_not_double_count_children_or_claim_duplicate_identity():
     assert summary["reverification_count"] == 1 and summary["failed_calls"] == 1
     assert not summary["calls"][0]["identity_recorded"]
     assert not summarize_performance({})
+
+
+def test_verification_work_distinguishes_receipt_retry_repair_and_duplicate_removal():
+    paths = [
+        ["rag.ask.claim.verify", "verification.conditions"],
+        ["rag.ask.claim.verify", "verification.conditions.protocol_repair"],
+        ["rag.ask.citations.repair"],
+        ["rag.ask.citations.reverify"],
+    ]
+    summary = summarize_performance(
+        {
+            "elapsed_seconds": 30,
+            "events": [
+                *[{"kind": "model_http", "stage_path": p, "outcome": "200"} for p in paths],
+                {"kind": "answer_projection", "outcome": "removed_verified_duplicate_table"},
+                {"kind": "citation_assembly", "outcome": "exact_ledger_binding"},
+                {
+                    "kind": "retrieval_round",
+                    "number": 2,
+                    "new_sources": 0,
+                    "reason": "supplement_missing",
+                },
+            ],
+        }
+    )
+    assert summary["verification_work"] == {
+        "initial_calls": 1,
+        "protocol_retry_calls": 1,
+        "answer_repair_calls": 1,
+        "verified_duplicate_removals": 1,
+        "citation_assemblies": 1,
+    }
+    assert summary["retrieval_rounds"][0]["new_sources"] == 0

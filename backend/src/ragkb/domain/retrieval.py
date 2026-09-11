@@ -61,6 +61,7 @@ class SearchContext:
     active_generation_id: str
     active_permission_revision: int
     required_security_watermark: int
+    document_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.tenant_id or not self.space_ids or not self.active_generation_id:

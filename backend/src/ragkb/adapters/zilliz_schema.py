@@ -7,6 +7,10 @@ from typing import Any
 from pymilvus import DataType, Function, FunctionType
 
 from ragkb.config import EnvSettings
+from ragkb.config.vector import (
+    vector_database,
+    vector_sparse_field,
+)
 from ragkb.infrastructure.zilliz_plan import build_zilliz_collection_plan
 
 
@@ -20,13 +24,13 @@ class ZillizCollectionCapacityError(RuntimeError):
 
 def database_creation_required(settings: EnvSettings, listed_databases: set[str]) -> bool:
     return (
-        settings.zilliz_cloud_database.casefold() != "default"
-        and settings.zilliz_cloud_database not in listed_databases
+        vector_database(settings).casefold() != "default"
+        and vector_database(settings) not in listed_databases
     )
 
 
 def database_switch_required(settings: EnvSettings) -> bool:
-    return settings.zilliz_cloud_database.casefold() != "default"
+    return vector_database(settings).casefold() != "default"
 
 
 def _datatype(name: str) -> DataType:
@@ -66,7 +70,7 @@ def build_sdk_schema(client: Any, settings: EnvSettings) -> tuple[Any, Any]:
             name="retrieval_text_bm25",
             function_type=FunctionType.BM25,
             input_field_names=["retrieval_text"],
-            output_field_names=[settings.zilliz_cloud_sparse_field],
+            output_field_names=[vector_sparse_field(settings)],
         )
     )
     index_params = client.prepare_index_params()

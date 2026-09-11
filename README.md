@@ -109,8 +109,13 @@ Production 发布使用两阶段 fail-closed 协议：先持久化不可见的 `
 向量后端：
 
 - `zilliz` 使用 `ZILLIZ_CLOUD_*`；
-- `milvus` 使用通用的 `VECTOR_URI/TOKEN/DATABASE/COLLECTION`；
+- `milvus` 使用 `VECTOR_*`，支持用户名/密码、Token 或无鉴权连接；主配置选择后读取可选的 `config/.env.milvus`；
 - `local` 使用 SQLite 持久 BM25 + Dense，仅供开发和离线验收。
+
+自建连接模板见 [Milvus 配置与切换说明](docs/SELF_HOSTED_MILVUS.md)。
+填写 `config/.env.milvus` 后，在 `config/.env` 设置 `VECTOR_BACKEND=milvus`，
+并使用 `RAG_RUNTIME_PROFILE=production`；切回云端将开关改为 `zilliz`。
+切换连接不会复制旧向量数据，新实例需先建表、重建投影并完成对账。
 
 Embedding、Reranker、Generator 和 Verifier 分别使用独立连接池、并发门、熔断和整体 deadline。
 生成 Prompt 以 JSON 传入不可信 Evidence，不使用可由正文闭合的 XML。答案必须输出原子 Claim；

@@ -181,4 +181,26 @@ def summarize_performance(report: dict[str, Any]) -> dict[str, Any]:
         "failed_calls": sum(c["outcome"] != "200" for c in calls),
         "same_request_again_count": sum(c["same_request_again"] for c in calls),
         "cache": [e for e in events if e.get("kind") == "cache"],
+        "verification_work": {
+            "initial_calls": sum(
+                "rag.ask.claim.verify" in c["stage"]
+                and "protocol_repair" not in c["stage"]
+                and "conditions.retry" not in c["stage"]
+                for c in calls
+            ),
+            "protocol_retry_calls": sum(
+                "protocol_repair" in c["stage"] or "conditions.retry" in c["stage"] for c in calls
+            ),
+            "answer_repair_calls": sum(
+                any(name in c["stage"] for name in names["repair"][1]) for c in calls
+            ),
+            "verified_duplicate_removals": sum(
+                e.get("kind") == "answer_projection"
+                and e.get("outcome") == "removed_verified_duplicate_table"
+                for e in events
+            ),
+            "citation_assemblies": sum(e.get("kind") == "citation_assembly" for e in events),
+        },
+        "retrieval_rounds": [e for e in events if e.get("kind") == "retrieval_round"],
+        "reading_scope": [e for e in events if e.get("kind") == "reading_scope"],
     }

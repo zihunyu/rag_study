@@ -4,6 +4,7 @@ from dataclasses import replace
 import pytest
 from ragkb.adapters.model_http import OpenAICompatibleClaimVerifier
 from ragkb.adapters.rag_stubs import SyntheticEvidenceProvider
+from ragkb.domain.answer_conditions import condition_requirements
 from ragkb.domain.answer_projection import (
     approved_projection,
     duplicate_table_candidate,
@@ -90,19 +91,67 @@ def test_retained_real_condition_witness_is_preserved():
     assert verified_projection("介绍参数", value, checked) == paragraph
 
 
+def recap_sample():
+    table = "| 类型 | 期限 |\n|---|---|\n| A | 15自然日 [E1] |\n| B | 7工作日 [E1] |"
+    restriction = "上述期限从申请受理日起算，仅适用于服务费。[E1]"
+    recap = "也就是说，A为15自然日，B为7工作日。"
+    value = DraftAnswer(
+        table + "\n\n" + recap + restriction,
+        ("E1",),
+        (AtomicClaim("A为15自然日，B为7工作日，均从受理日起算且仅适用于服务费。", ("E1",)),),
+        synthesized=True,
+    )
+    return table + "\n\n" + restriction, recap, value
+
+
+def test_recap_candidate_keeps_table_and_new_restrictions_verbatim():
+    candidate, recap, value = recap_sample()
+    assert duplicate_table_candidate("两种期限有什么区别？", value) == candidate
+    checked = verification(value, answer_projection=candidate)
+    assert verified_projection("两种期限有什么区别？", value, checked) == candidate
+    assert approved_projection("两种期限有什么区别？", value, receipt()) == candidate
+    # Even a positive optional receipt cannot erase an actual condition witness.
+    checked = replace(checked, condition_checks=({"status": "covered", "answer_quote": recap},))
+    assert verified_projection("两种期限有什么区别？", value, checked) == ""
+    denied = receipt(all_content_preserved=False)
+    assert approved_projection("两种期限有什么区别？", value, denied) == ""
+
+
+@pytest.mark.parametrize("change", ["new_number", "new_source", "no_cue", "requested_restatement"])
+def test_recap_is_bounded_and_no_unverified_content_is_removed(change):
+    _, _, value = recap_sample()
+    question = "两种期限有什么区别？"
+    if change == "new_number":
+        value = replace(value, text=value.text.replace("也就是说，", "也就是说，2026年"))
+    elif change == "new_source":
+        value = replace(value, text=value.text.replace("也就是说，", "也就是说，[E2]"))
+    elif change == "no_cue":
+        value = replace(value, text=value.text.replace("也就是说，", "一般而言，"))
+    else:
+        question = "先对比两种期限，再复述一次"
+    assert duplicate_table_candidate(question, value) == ""
+
+
 @pytest.mark.parametrize("approved", [True, False])
-def test_optional_projection_is_reviewed_in_the_existing_full_pool_call(tmp_path, approved):
+@pytest.mark.parametrize("kind", ["lead", "recap"])
+def test_optional_projection_is_reviewed_in_the_existing_full_pool_call(tmp_path, approved, kind):
     paragraph, value = sample()
+    if kind == "recap":
+        paragraph, _, value = recap_sample()
+    sources = (_evidence(text=value.text if kind == "recap" else value.claims[0].text),)
     response = {
         "verdicts": [{"claim_id": "C1", "verdict": "SUPPORTED", "reason_code": "supported"}],
         "answer_check": {"covered": True, "citations_valid": True, "reason_code": "supported"},
         "conflict_check": {"checked": True, "conflicting_evidence_ids": []},
         "projection_check": receipt(all_content_preserved=approved),
+        "condition_checks": [
+            {"id": rule["id"], "status": "covered", "answer_quote": value.text, "reason": "fixture"}
+            for rule in condition_requirements(sources)
+        ],
     }
     transport = _MockTransport({"choices": [{"message": {"content": json.dumps(response)}}]})
     settings, _ = _settings(tmp_path)
     verifier = OpenAICompatibleClaimVerifier(settings, transport=transport)
-    sources = (_evidence(text=value.claims[0].text),)
     result = verifier.verify("介绍参数", value, sources)
     assert len(transport.calls) == 1
     payload = json.loads(transport.calls[0]["payload"]["messages"][-1]["content"])

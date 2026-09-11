@@ -13,76 +13,36 @@ from pymilvus.exceptions import MilvusException
 
 from ragkb.application.tracing import InMemoryTracer, TracerPort
 from ragkb.config import EnvSettings
+from ragkb.config.vector import (
+    vector_analyzer as vector_analyzer,
+)
+from ragkb.config.vector import (
+    vector_collection_name as vector_collection_name,
+)
+from ragkb.config.vector import (
+    vector_dense_field as vector_dense_field,
+)
+from ragkb.config.vector import (
+    vector_dimension as vector_dimension,
+)
+from ragkb.config.vector import (
+    vector_metric_type as vector_metric_type,
+)
+from ragkb.config.vector import (
+    vector_security_consistency as vector_security_consistency,
+)
+from ragkb.config.vector import (
+    vector_sparse_field as vector_sparse_field,
+)
+from ragkb.config.vector import (
+    vector_timeout as vector_timeout,
+)
 from ragkb.contracts.jobs import QueueLeaseError
 from ragkb.contracts.ports import EmbeddingPort, RetrievalProjectionPort
 from ragkb.document_processing.chunking import ChunkingResult
 from ragkb.domain.errors import IngestionCancelled, VectorBatchWriteError
 from ragkb.domain.retrieval import AuthorizedChunk, SecurityProjection
 from ragkb.infrastructure.ingestion_fencing import current_fence
-
-
-def vector_collection_name(settings: EnvSettings) -> str:
-    return (
-        settings.vector_collection
-        if settings.vector_backend == "milvus"
-        else settings.zilliz_cloud_collection
-    )
-
-
-def vector_dense_field(settings: EnvSettings) -> str:
-    return (
-        settings.vector_dense_field
-        if settings.vector_backend == "milvus"
-        else settings.zilliz_cloud_dense_field
-    )
-
-
-def vector_sparse_field(settings: EnvSettings) -> str:
-    return (
-        settings.vector_sparse_field
-        if settings.vector_backend == "milvus"
-        else settings.zilliz_cloud_sparse_field
-    )
-
-
-def vector_metric_type(settings: EnvSettings) -> str:
-    return (
-        settings.vector_metric_type
-        if settings.vector_backend == "milvus"
-        else settings.zilliz_cloud_metric_type
-    )
-
-
-def vector_dimension(settings: EnvSettings) -> int:
-    return (
-        settings.vector_dimension
-        if settings.vector_backend == "milvus"
-        else settings.zilliz_cloud_dimension
-    )
-
-
-def vector_analyzer(settings: EnvSettings) -> str:
-    return (
-        settings.vector_bm25_analyzer
-        if settings.vector_backend == "milvus"
-        else settings.zilliz_cloud_bm25_analyzer
-    )
-
-
-def vector_timeout(settings: EnvSettings) -> float:
-    return (
-        settings.vector_timeout_seconds
-        if settings.vector_backend == "milvus"
-        else settings.zilliz_cloud_timeout_seconds
-    )
-
-
-def vector_security_consistency(settings: EnvSettings) -> str:
-    return (
-        settings.vector_security_consistency_level
-        if settings.vector_backend == "milvus"
-        else settings.zilliz_cloud_security_consistency_level
-    )
 
 
 class ConnectedVectorAdapter(Protocol):

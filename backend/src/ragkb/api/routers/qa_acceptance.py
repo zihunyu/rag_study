@@ -41,6 +41,7 @@ class CreateRun(BaseModel):
     case_ids: list[str] = Field(min_length=1, max_length=100)
     call_limit: int = Field(default=100, ge=1, le=2000)
     review_mode: Literal["manual", "assisted"] = "manual"
+    repeat_count: int = Field(default=1, ge=1, le=5)
 
 
 class GenerateCandidates(BaseModel):
@@ -289,6 +290,7 @@ def build_acceptance_router(service: AcceptanceService) -> APIRouter:
             | {
                 "name": r["payload"]["name"],
                 "case_count": len(r["payload"]["cases"]),
+                "repeat_count": r["payload"].get("repeat_count", 1),
                 "kind": r["payload"].get("kind", "qa"),
             }
             for r in repo.runs(space_id)
@@ -310,6 +312,7 @@ def build_acceptance_router(service: AcceptanceService) -> APIRouter:
                 body.name,
                 body.call_limit,
                 body.review_mode,
+                body.repeat_count,
             )
         except ValueError as error:
             raise HTTPException(422, str(error)) from error

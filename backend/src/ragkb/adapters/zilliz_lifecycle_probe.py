@@ -10,6 +10,14 @@ from typing import Any
 from ragkb.adapters.vector_indexing import ZillizSafeProjectionWriter
 from ragkb.adapters.zilliz_readiness import ZillizCollectionNotReady, wait_for_collection_ready
 from ragkb.config import EnvSettings
+from ragkb.config.vector import (
+    vector_analyzer,
+    vector_collection_name,
+    vector_dense_field,
+    vector_dimension,
+    vector_security_consistency,
+    vector_timeout,
+)
 
 ZILLIZ_SAFE_WRITE_BATCH_SIZE = 256
 
@@ -62,11 +70,11 @@ def run_synthetic_lifecycle(
         inserted_ids = ZillizSafeProjectionWriter(client, settings).insert_records(records)
         stage = "confirm_synthetic_batch"
         visible = client.get(
-            collection_name=settings.zilliz_cloud_collection,
+            collection_name=vector_collection_name(settings),
             ids=list(inserted_ids),
             output_fields=["zilliz_pk"],
-            timeout=settings.zilliz_cloud_timeout_seconds,
-            consistency_level=settings.zilliz_cloud_security_consistency_level,
+            timeout=vector_timeout(settings),
+            consistency_level=vector_security_consistency(settings),
         )
         visible_ids = {str(item.get("zilliz_pk", "")) for item in visible}
         if not set(inserted_ids).issubset(visible_ids):
@@ -82,17 +90,17 @@ def run_synthetic_lifecycle(
         if confirmed_ids:
             try:
                 client.delete(
-                    collection_name=settings.zilliz_cloud_collection,
+                    collection_name=vector_collection_name(settings),
                     ids=confirmed_ids,
-                    timeout=settings.zilliz_cloud_timeout_seconds,
+                    timeout=vector_timeout(settings),
                 )
                 cleaned_count = len(confirmed_ids)
                 remaining = client.get(
-                    collection_name=settings.zilliz_cloud_collection,
+                    collection_name=vector_collection_name(settings),
                     ids=confirmed_ids,
                     output_fields=["zilliz_pk"],
-                    timeout=settings.zilliz_cloud_timeout_seconds,
-                    consistency_level=settings.zilliz_cloud_security_consistency_level,
+                    timeout=vector_timeout(settings),
+                    consistency_level=vector_security_consistency(settings),
                 )
                 remaining_count = len(remaining)
                 if remaining_count:
@@ -137,7 +145,7 @@ def synthetic_records(settings: EnvSettings) -> tuple[list[dict[str, Any]], dict
         "wrong_generation": f"{marker}_wrong_generation",
     }
     now = int(time.time())
-    dimension = settings.zilliz_cloud_dimension
+    dimension = vector_dimension(settings)
 
     def vector(position: int) -> list[float]:
         values = [0.0] * dimension
@@ -180,9 +188,9 @@ def synthetic_records(settings: EnvSettings) -> tuple[list[dict[str, Any]], dict
             "applicable_versions": ["test-version"],
             "region_codes": ["test-region"],
             "retrieval_text": text,
-            settings.zilliz_cloud_dense_field: vector(vector_position),
+            vector_dense_field(settings): vector(vector_position),
             "index_generation_id": generation,
-            "analyzer_revision": settings.zilliz_cloud_bm25_analyzer,
+            "analyzer_revision": vector_analyzer(settings),
             "content_checksum": uuid.uuid5(uuid.NAMESPACE_URL, entity_id).hex * 2,
         }
 

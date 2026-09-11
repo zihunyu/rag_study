@@ -16,6 +16,8 @@ IGNORED_PARTS = {
 EXCLUDED_FILES = {
     "config/.env",
     "config/.env.example",
+    "config/.env.milvus",
+    "config/.env.milvus.example",
     "backend/src/ragkb/engineering_security/secret_scan.py",
     "backend/tests/test_env_config.py",
     "backend/tests/test_secret_scan.py",

@@ -294,7 +294,7 @@ class AcceptanceRepository:
                 )
             return items
 
-    def begin_attempt(self, identity: str, token: str, case: str) -> str:
+    def begin_attempt(self, identity: str, token: str, case: str, *, repetition: int = 1) -> str:
         with self.db.transaction() as c:
             self._active(c, identity, token)
             previous = self.db.one(
@@ -314,7 +314,7 @@ class AcceptanceRepository:
                     case,
                     (previous["n"] or 0) + 1 if previous else 1,
                     "running",
-                    "{}",
+                    encode({"repetition": repetition}),
                     time.time(),
                     time.time(),
                 ),

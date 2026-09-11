@@ -15,7 +15,7 @@ from ragkb.config import build_env_report, load_env  # noqa: E402
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Inspect Zilliz Cloud without mutations")
+    parser = argparse.ArgumentParser(description="Inspect selected Zilliz/Milvus without mutations")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     loaded = load_env(ROOT)

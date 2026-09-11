@@ -187,7 +187,7 @@ def _dedupe_context(chunk: AuthorizedChunk) -> tuple[object, ...]:
 
 
 class HybridSearchService:
-    revision = "hybrid-search-service:context-selection-v2"
+    revision = "hybrid-search-service:document-scope-v3"
 
     def __init__(
         self,
@@ -368,7 +368,11 @@ class HybridSearchService:
 
         for candidate, score, channels in fused:
             chunk = authorized.get(candidate.chunk_id)
-            if chunk is None or not self._currently_authorized(chunk, context):
+            if (
+                chunk is None
+                or (context.document_ids and chunk.document_id not in context.document_ids)
+                or not self._currently_authorized(chunk, context)
+            ):
                 continue
             representative = next(
                 (

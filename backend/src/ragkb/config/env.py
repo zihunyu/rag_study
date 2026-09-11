@@ -151,6 +151,8 @@ class EnvSettings(BaseModel):
     vector_backend: Literal["local", "zilliz", "milvus"] = "zilliz"
     vector_uri: str = ""
     vector_token: SecretStr | None = None
+    vector_user: str = ""
+    vector_password: SecretStr | None = None
     vector_database: str = "default"
     vector_collection: str = "rag_chunks"
     vector_dimension: int = Field(default=1024, gt=0)
@@ -462,6 +464,7 @@ SECRET_KEYS = frozenset(
         "RERANKER_API_KEY",
         "ASR_API_KEY",
         "VECTOR_TOKEN",
+        "VECTOR_PASSWORD",
         "OIDC_CLIENT_SECRET",
     }
 )
@@ -512,6 +515,18 @@ def load_env(
     known = known_env_keys()
     merged = dict(file_values)
     sources = {key: "config_env" for key in file_values}
+    # Explicit env_path is self-contained; do not mix a test/export with local credentials.
+    backend = process.get("VECTOR_BACKEND", file_values.get("VECTOR_BACKEND", "zilliz"))
+    milvus_file = root / "config/.env.milvus"
+    if env_path is None and backend == "milvus" and milvus_file.is_file():
+        overrides, override_issues = _parse_env_file(milvus_file)
+        issues.extend(override_issues)
+        for key, value in overrides.items():
+            if key.startswith("VECTOR_") and key != "VECTOR_BACKEND":
+                merged[key] = value
+                sources[key] = "milvus_env"
+            else:
+                issues.append(EnvIssue(key, "MILVUS_OVERRIDE_KEY_NOT_ALLOWED", "G0"))
     for key in known:
         if key in process:
             merged[key] = process[key]

@@ -44,6 +44,29 @@ def test_patch_preserves_all_facts_table_and_existing_sources():
         )
 
 
+@pytest.mark.parametrize("padding", [" ", "  ", "\t", "\t  "])
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_citation_insertion_preserves_original_table_cell_whitespace(padding, newline):
+    original = DraftAnswer(
+        newline.join([
+            "| 项目 | 数值 |", "|---|---|",
+            f"| 功率 | 480 W{padding}|", "| 容量 | 960 Wh | [E1][E2]",
+        ]),
+        ("E1", "E2"),
+        (AtomicClaim("功率为480 W。", ("E1",)), AtomicClaim("容量为960 Wh。", ("E2",))),
+        synthesized=True,
+    )
+    patched = apply_citation_additions(original, [{"line_id": "L3", "claim_ids": ["C1"]}])
+    validate_citation_only_change(original, patched)
+    assert f"480 W{padding} [E1]|" in patched.text
+    assert patched.claims == original.claims
+    for changed in ("481 W", "480 kW", "480 V"):
+        with pytest.raises(ValueError, match="CHANGED_FACTS"):
+            validate_citation_only_change(
+                original, replace(patched, text=patched.text.replace("480 W", changed))
+            )
+
+
 def test_rebuilding_list_keeps_appended_conditions_outside_numbering():
     from ragkb.domain.citation_repair import rebuild_from_supported_claims
 

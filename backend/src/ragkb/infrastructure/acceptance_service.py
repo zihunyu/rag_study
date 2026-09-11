@@ -191,6 +191,26 @@ class AcceptanceService:
                 "real_provider_calls_enabled",
             )
         }
+        # Freeze every numeric tuning/budget/concurrency parameter of the QA
+        # providers, not just model names. Never serialize credentials or URLs.
+        for key in type(settings).model_fields:
+            value = getattr(settings, key)
+            if key.startswith(
+                (
+                    "llm_",
+                    "verifier_",
+                    "retrieval_",
+                    "embedding_",
+                    "reranker_",
+                    "ocr_",
+                    "overview_",
+                    "qa_",
+                    "model_http_",
+                    "model_account_",
+                )
+            ):
+                if isinstance(value, (bool, int, float)) or key.endswith(("_model", "_revision")):
+                    config[key] = value
         return {
             "sources": sources,
             "original_standards": {
@@ -222,8 +242,11 @@ class AcceptanceService:
         name: str,
         limit: int,
         review_mode: str = "manual",
+        repeat_count: int = 1,
     ) -> dict[str, Any]:
         self.authorize(subject, space)
+        if not 1 <= repeat_count <= 5:
+            raise ValueError("REPEAT_COUNT_MUST_BE_1_TO_5")
         available = {r["id"]: r for r in self.repository.cases(space)}
         if (
             not case_ids
@@ -244,7 +267,13 @@ class AcceptanceService:
             space,
             subject.user_id,
             key,
-            {"name": name, "cases": cases, "snapshot": snapshot, "review_mode": review_mode},
+            {
+                "name": name,
+                "cases": cases,
+                "snapshot": snapshot,
+                "review_mode": review_mode,
+                "repeat_count": repeat_count,
+            },
             limit,
         )
 
@@ -337,23 +366,29 @@ class AcceptanceService:
             run = repo.run(space, identity)
             original = run["payload"]["snapshot"]
             completed = {
-                a["case_id"]
+                (a["case_id"], a["payload"].get("repetition", 1))
                 for a in repo.attempts(identity)
                 if a["state"] in {"completed", "failed"}
             }
-            for case in run["payload"]["cases"]:
-                if case["id"] in completed:
+            schedule = [
+                (case, repetition)
+                for repetition in range(1, run["payload"].get("repeat_count", 1) + 1)
+                for case in run["payload"]["cases"]
+            ]
+            for case, repetition in schedule:
+                if (case["id"], repetition) in completed:
                     continue
                 if self.stopping.is_set() or lost.is_set():
                     raise AcceptancePaused("RUN_PAUSED")
                 if self.snapshot(subject, space, run["payload"]["cases"]) != original:
                     raise AcceptancePaused("RUN_SNAPSHOT_CHANGED_CREATE_NEW_RUN")
-                attempt = repo.begin_attempt(identity, token, case["id"])
+                attempt = repo.begin_attempt(identity, token, case["id"], repetition=repetition)
                 prior = [
                     a
                     for a in repo.attempts(identity)
                     if a["case_id"] == case["id"]
                     and a["id"] != attempt
+                    and a["payload"].get("repetition", 1) == repetition
                     and a["payload"].get("qa_complete")
                 ]
                 payload = (
@@ -362,6 +397,7 @@ class AcceptanceService:
                     else {"steps": [], "checks": [], "point_results": [], "error_code": ""}
                 )
                 payload["error_code"] = ""
+                payload["repetition"] = repetition
                 started = time.time()
 
                 def reserve() -> None:
@@ -764,6 +800,9 @@ class AcceptanceService:
         run["attempts"] = attempts
         calls = self.repository.calls(identity)
         run["usage"] = self.summarize_calls(calls, run["calls_reserved"])
+        from ragkb.domain.acceptance_repeats import summarize_repeats
+
+        run["repeat_summary"] = summarize_repeats(run)
         return run
 
     @staticmethod
@@ -935,7 +974,11 @@ class AcceptanceService:
             attempt_ids = {attempt["id"] for attempt in attempts if attempt["case_id"] in common}
             calls = [c for c in self.repository.calls(identity) if c["attempt_id"] in attempt_ids]
             common_usage.append(self.summarize_calls(calls, len(calls)))
+        from ragkb.domain.acceptance_repeats import compare_repeats
+
+        repeated = compare_repeats(old, new, rows)
         return {
+            "repeat_comparison": repeated,
             "baseline": baseline,
             "candidate": candidate,
             "rows": rows,

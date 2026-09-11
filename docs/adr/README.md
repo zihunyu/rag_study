@@ -1,5 +1,9 @@
 # G0 ADR 登记册
 
+后续部署更新（2026-09-11）：检索现支持 `VECTOR_BACKEND=zilliz|milvus`。
+本登记册中早期“Zilliz Cloud 为唯一部署”的限制已被用户确认的新自建部署范围替代，
+见 [Milvus 配置与切换](../SELF_HOSTED_MILVUS.md)；权限、水位与真实验收要求继续适用。
+
 配置 revision：`g0-adr-register-v3`。任何本地 Stub 实现都不代表目标组件验收。
 本登记册完成 G0 技术方向重基线；真实组件能力仍由对应 G1—G4 Gate 验收。
 

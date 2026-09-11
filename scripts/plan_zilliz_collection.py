@@ -15,7 +15,7 @@ from ragkb.infrastructure.zilliz_plan import build_zilliz_collection_plan  # noq
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Generate a non-executing Zilliz create plan")
+    parser = argparse.ArgumentParser(description="Generate selected Zilliz/Milvus collection plan")
     parser.add_argument("--output", type=Path, default=Path("artifacts/g2/zilliz-create-plan.json"))
     args = parser.parse_args()
     loaded = load_env(ROOT)

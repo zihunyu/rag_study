@@ -95,10 +95,71 @@ def rebuild_from_supported_claims(
     )
 
 
+def _integrate_condition_quotes(text: str, additions: list[AtomicClaim]) -> str:
+    """Move exact repeated clauses into the complete shared quote before full re-review.
+
+    This constructs a repair candidate, never an equivalence proof. Keep the original
+    claims ledger so the next complete verification must still account for every fact.
+    Only whole, same-source clauses can move; no fuzzy matching or business vocabulary.
+    """
+    clauses = [
+        (part.strip(), claim.evidence_ids[0])
+        for claim in additions
+        for part in re.split(r"[。！？!?；;]", claim.text)
+        if len(part.strip()) >= 8
+    ]
+
+    def visible(value: str) -> str:
+        return re.sub(r"[\s。！？!?；;]", "", re.sub(r"\[E\d+\]", "", value))
+
+    def clean(value: str, cited: set[str]) -> str:
+        original = value
+        for clause, identity in clauses:
+            if identity not in cited:
+                continue
+            # A preceding negation, qualification, or connective remains part of
+            # its clause and prevents a match. Never remove a substring within it.
+            value = re.sub(
+                r"(^\s*|[。！？!?；;]\s*)"
+                + re.escape(clause)
+                + r"(?=$|[。！？!?；;]|\s*\[E\d+\])"
+                + r"[。！？!?；;]?",
+                r"\1",
+                value,
+            )
+        return (
+            re.sub(r"[；;](?=\s*(?:\[E\d+\]\s*)*$)", "。", value) if value != original else original
+        )
+
+    result: list[str] = []
+    fenced = False
+    for line in text.splitlines():
+        if line.lstrip().startswith(("```", "~~~")):
+            fenced = not fenced
+            result.append(line)
+            continue
+        if fenced or "`" in line or re.match(r"\s*(?:[#>] ?|[-*+] |\(?\d+[.)、] ?)", line):
+            result.append(line)
+            continue
+        cited = set(re.findall(r"\[(E\d+)\]", line))
+        if line.strip().startswith("|") and line.strip().endswith("|") and "\\|" not in line:
+            cells = line.split("|")
+            for index in range(1, len(cells) - 1):
+                candidate = clean(cells[index], cited)
+                # Never erase an entire policy cell or change the table topology.
+                if visible(candidate) and candidate != cells[index]:
+                    cells[index] = " " + candidate.strip() + " "
+            result.append("|".join(cells))
+        else:
+            candidate = clean(line, cited)
+            result.append(candidate if visible(candidate) else "")
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(result)).strip()
+
+
 def append_missing_text_conditions(
     draft: DraftAnswer, result: VerificationResult, evidence: tuple[Evidence, ...]
 ) -> DraftAnswer | None:
-    """Complete plain-text omissions from exact source quotes, without rewriting facts."""
+    """Integrate complete source conditions; the result still requires full verification."""
     facts = result.verdicts[: len(draft.claims)]
     missing = [c for c in result.condition_checks if c["status"] == "missing"]
     if not (
@@ -139,9 +200,20 @@ def append_missing_text_conditions(
         ):
             return None
         additions.append(AtomicClaim(quote, (source.evidence_id,)))
+    integrated = _integrate_condition_quotes(draft.text, additions)
+
+    def fragments(value: str) -> set[str]:
+        value = re.sub(r"[\W_]+", "", re.sub(r"\[E\d+\]", "", value))
+        return {value[i : i + 8] for i in range(max(0, len(value) - 7))}
+
+    # Residual overlap is only a reason to use the full generation repair, never
+    # permission to delete a paraphrase, negation, qualifier or whole table cell.
+    existing = fragments(integrated)
+    if any(existing & fragments(c.text) for c in additions):
+        return None
     return replace(
         draft,
-        text=draft.text
+        text=integrated
         + "\n\n相关限制：\n\n"
         + "\n\n".join(c.text + f" [{c.evidence_ids[0]}]" for c in additions),
         claims=(*draft.claims, *additions),
@@ -218,7 +290,10 @@ def validate_citation_only_change(before: DraftAnswer, after: DraftAnswer) -> No
     if len(old_lines) != len(new_lines):
         raise ValueError("CITATION_REPAIR_CHANGED_FACTS")
     for old, new in zip(old_lines, new_lines, strict=True):
-        if re.sub(r"\s*\[E\d+\]", "", old) != re.sub(r"\s*\[E\d+\]", "", new):
+        # The insertion adds exactly one ASCII space. Removing arbitrary
+        # whitespace also consumes the original cell padding before a new marker,
+        # falsely rejecting an unchanged table. Preserve all other characters.
+        if re.sub(r" ?\[E\d+\]", "", old) != re.sub(r" ?\[E\d+\]", "", new):
             raise ValueError("CITATION_REPAIR_CHANGED_FACTS")
         old_ids, new_ids = set(re.findall(r"\[(E\d+)\]", old)), set(re.findall(r"\[(E\d+)\]", new))
         if not old_ids.issubset(new_ids) or not new_ids.issubset(before.citation_ids):

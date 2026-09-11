@@ -1,4 +1,4 @@
-"""Bounded, independently checked removal of a table duplicated by its lead paragraph."""
+"""Bounded, independently checked removal of redundant answer content."""
 
 from __future__ import annotations
 
@@ -9,14 +9,16 @@ from ragkb.domain.rag import DraftAnswer, VerificationResult
 
 PROJECTION_REVIEW_RULES = (
     "If duplicate_table_candidate is supplied, independently compare "
-    "that exact existing paragraph with the COMPLETE original answer. "
+    "that exact retained text with the COMPLETE original answer. The candidate "
+    "removes a duplicate table or one post-table recap sentence, without adding "
+    "or rewriting text. A recap cue is NOT proof that its content is redundant. "
     "Return an OPTIONAL projection_check: {all_content_preserved: "
     "boolean, citations_valid: boolean, retained_claim_ids: [C#...]}. "
     "Approve ONLY when the candidate already expresses EVERY original "
     "material fact AND every input claim, retaining all entities, "
     "values, units, relationships, conditions, exceptions, uncertainty "
     "and scope with valid inline citations. Matching words or numbers "
-    "is not proof. If the table adds even one fact, branch or binding, "
+    "is not proof. If the removed text adds even one fact, branch or binding, "
     "all_content_preserved must be false. For approval list EVERY input "
     "claim ID in order. Do not rewrite the candidate. Missing/uncertain "
     "approval keeps the original answer. This optional comparison "
@@ -25,22 +27,16 @@ PROJECTION_REVIEW_RULES = (
 )
 
 
-def duplicate_table_candidate(question: str, draft: DraftAnswer) -> str:
-    if not draft.synthesized or re.search(r"表格|列表|对照表|用表|制表|\btable\b", question, re.I):
-        return ""
-    parts = re.split(r"\n\s*\n", draft.text.strip())
-    if len(parts) != 2 or not draft.claims:
-        return ""
-    paragraph, table = parts
+def _is_table(table: str) -> bool:
     rows = table.splitlines()
-    if (
-        paragraph.lstrip().startswith(("|", "#", ">", "```", "~~~", "- ", "* "))
-        or len(rows) < 3
-        or not all(row.strip().startswith("|") and row.strip().endswith("|") for row in rows)
-        or not re.fullmatch(r"[|\s:\-]+", rows[1])
-    ):
-        return ""
+    return bool(
+        len(rows) >= 3
+        and all(row.strip().startswith("|") and row.strip().endswith("|") for row in rows)
+        and re.fullmatch(r"[|\s:\-]+", rows[1])
+    )
 
+
+def _retains_markers_and_numbers(candidate: str, original: str) -> bool:
     # Only a candidate, never proof of semantic equivalence. Avoid requesting an
     # optional model review when numbers or source markers would obviously vanish.
     def markers(value: str) -> set[str]:
@@ -49,11 +45,44 @@ def duplicate_table_candidate(question: str, draft: DraftAnswer) -> str:
     def numbers(value: str) -> set[str]:
         return set(re.findall(r"\d+(?:\.\d+)?", re.sub(r"\[E\d+\]", "", value)))
 
-    if not markers(paragraph) or markers(paragraph) != markers(draft.text):
+    return bool(
+        markers(candidate)
+        and markers(candidate) == markers(original)
+        and numbers(candidate) == numbers(original)
+    )
+
+
+def duplicate_table_candidate(question: str, draft: DraftAnswer) -> str:
+    if (
+        not draft.synthesized
+        or not draft.claims
+        or len(draft.text) > 8000
+        or re.search(
+            r"表格|列表|对照表|用表|制表|复述|重述|\b(?:table|restate|repeat)\b", question, re.I
+        )
+    ):
         return ""
-    if numbers(paragraph) != numbers(draft.text):
-        return ""
-    return paragraph
+    parts = re.split(r"\n\s*\n", draft.text.strip())
+    if len(parts) == 2:
+        paragraph, table = parts
+        if (
+            not paragraph.lstrip().startswith(("|", "#", ">", "```", "~~~", "- ", "* "))
+            and _is_table(table)
+            and _retains_markers_and_numbers(paragraph, draft.text)
+        ):
+            return paragraph
+    # At most one optional candidate, reviewed in the existing full verification
+    # call. Keep the table, intro, and every subsequent sentence verbatim.
+    if 2 <= len(parts) <= 3 and _is_table(parts[-2]):
+        recap = parts[-1]
+        if re.match(r"(?:也就是说|换言之|换句话说|In other words\b|That is\b)", recap, re.I):
+            sentence = re.match(r".*?(?:[。！？!?]|\.(?=\s|$))(?:\s*\[E\d+\])*", recap)
+            if sentence:
+                rest = recap[sentence.end():].strip()
+                candidate = "\n\n".join(parts[:-1] + ([rest] if rest else []))
+                if _retains_markers_and_numbers(candidate, draft.text):
+                    return candidate
+    return ""
 
 
 def approved_projection(question: str, draft: DraftAnswer, receipt: Any) -> str:
@@ -71,7 +100,7 @@ def approved_projection(question: str, draft: DraftAnswer, receipt: Any) -> str:
 
 
 def verified_projection(question: str, draft: DraftAnswer, result: VerificationResult) -> str:
-    """No unchecked rewriting: keep the original paragraph and every condition witness."""
+    """No unchecked rewriting: keep retained text and every condition witness."""
     candidate = duplicate_table_candidate(question, draft)
     if not result.supported or not candidate or result.answer_projection != candidate:
         return ""

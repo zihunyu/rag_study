@@ -109,6 +109,7 @@ function resultMessage(turn) {
   if (result.warnings?.includes('CLAIM_VERIFIER_TIMEOUT')) return '已找到相关资料，但答案核验超时，本轮未展示回答。可以重新提问；若持续超时，请提供技术详情中的运行编号。';
   if (result.warnings?.includes('CLAIM_VERIFIER_UNAVAILABLE')) return '已找到相关资料，但答案核验服务暂时不可用，本轮未展示回答。可以稍后重新提问；若持续失败，请提供技术详情中的运行编号。';
   if (result.warnings?.some(code => code.startsWith('CITATION_REPAIR_'))) return '已找到相关资料，但引用补全未完成，本轮未展示回答。请查看技术详情中的失败步骤与运行编号。';
+  if (result.warnings?.some(code => code.startsWith('GROUNDING_REPAIR_'))) return '已找到相关资料，但事实与来源的关联补全未完成，本轮未展示回答。请查看技术详情中的失败步骤与运行编号。';
   if (result.warnings?.some(code => ['VERIFIER_VERDICT_COUNT_INVALID', 'VERIFIER_CLAIM_ID_INVALID'].includes(code))) return '已找到相关资料，但核验返回的结论数量或编号与待核验内容不一致，本轮未展示回答。请提供技术详情中的运行编号以便排查。';
   if (result.warnings?.includes('CLAIM_VERIFIER_PROTOCOL_INVALID')) return '已找到相关资料，但答案核验未完成：核验结果格式或引用校验不符合要求，本轮未展示回答。请将技术详情中的运行编号提供给维护人员排查。';
   if (result.warnings?.includes('GENERATION_PROTOCOL_INVALID')) return '已找到相关资料，但答案生成未完成。可重新提问，或提供技术详情中的运行编号以便排查。';

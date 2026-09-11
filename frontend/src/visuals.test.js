@@ -7,6 +7,7 @@ import MarkdownContent from './components/MarkdownContent.vue';
 import VisualEditor from './components/VisualEditor.vue';
 import ConditionCoverage from './components/ConditionCoverage.vue';
 import ReadingImageCoverage from './components/ReadingImageCoverage.vue';
+import { normalizeTableCitations } from './markdownCitations';
 
 const render = vi.hoisted(() => vi.fn());
 vi.mock('./mermaid.js', () => ({ renderDiagram: render }));
@@ -18,6 +19,20 @@ beforeEach(() => {
 });
 afterEach(() => { wrapper?.unmount(); vi.unstubAllGlobals(); vi.clearAllMocks(); sessionStorage.clear(); });
 const json = data => new Response(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } });
+
+it('retains trailing raw table citations without rewriting code blocks or unrelated links', () => {
+  const table = '| 地区 | 费用 |\n|---|---|\n| 甲区 | 24元 | [E1] [E2]';
+  wrapper = mount(MarkdownContent, { props: { text: table } });
+  expect(wrapper.findAll('tbody td')).toHaveLength(2);
+  expect(wrapper.findAll('tbody td')[1].text()).toContain('24元');
+  expect(wrapper.findAll('tbody td')[1].text()).toContain('[E1] [E2]');
+  for (const text of [
+    `\`\`\`\`text\n~~~\n${table}\n~~~\n\`\`\`\``,
+    table.split('\n').map(line => `    ${line}`).join('\n'),
+    table.replace('[E1] [E2]', '[网页](https://example.com)'),
+    '| 这只是普通正文 | [E1]',
+  ]) expect(normalizeTableCitations(text)).toBe(text);
+});
 
 it('shows condition omissions without presenting a false complete badge or source excerpts', async () => {
   wrapper = mount(ConditionCoverage, { props:{ report:{ checked:3,covered:1,not_applicable:1,missing:1,complete:false,source_quote:'不可泄露旧版原文' } } });

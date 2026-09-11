@@ -1,5 +1,6 @@
 # Local user configuration and secrets
 config/.env
+config/.env.milvus
 
 # Python
 __pycache__/

@@ -7,6 +7,10 @@ from collections.abc import Callable
 from typing import Any
 
 from ragkb.config import EnvSettings
+from ragkb.config.vector import (
+    vector_collection_name,
+    vector_timeout,
+)
 from ragkb.infrastructure.zilliz_plan import build_zilliz_collection_plan
 
 
@@ -35,15 +39,18 @@ def wait_for_collection_ready(
     last_index_count = 0
     for poll in range(1, max_polls + 1):
         load_state = client.get_load_state(
-            collection_name=settings.zilliz_cloud_collection,
-            timeout=settings.zilliz_cloud_timeout_seconds,
+            collection_name=vector_collection_name(settings),
+            timeout=vector_timeout(settings),
         )
         state = str(load_state.get("state", load_state.get("load_state", "")))
         last_loaded = state.casefold().endswith("loaded")
         indexes = set(
             map(
                 str,
-                client.list_indexes(collection_name=settings.zilliz_cloud_collection),
+                client.list_indexes(
+                    collection_name=vector_collection_name(settings),
+                    timeout=vector_timeout(settings),
+                ),
             )
         )
         last_index_count = len(indexes)
@@ -67,16 +74,16 @@ def wait_for_collection_ready(
 
 def request_collection_load_if_needed(client: Any, settings: EnvSettings) -> str:
     load_state = client.get_load_state(
-        collection_name=settings.zilliz_cloud_collection,
-        timeout=settings.zilliz_cloud_timeout_seconds,
+        collection_name=vector_collection_name(settings),
+        timeout=vector_timeout(settings),
     )
     state = str(load_state.get("state", load_state.get("load_state", "")))
     if state.casefold().endswith("loaded"):
         return "already_loaded"
     try:
-        client.load(
-            collection_name=settings.zilliz_cloud_collection,
-            timeout=settings.zilliz_cloud_timeout_seconds,
+        client.load_collection(
+            collection_name=vector_collection_name(settings),
+            timeout=vector_timeout(settings),
         )
     except AttributeError:
         return "load_return_attribute_error_requires_readiness_confirmation"

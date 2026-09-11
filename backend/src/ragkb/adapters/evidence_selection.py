@@ -19,7 +19,7 @@ from ragkb.domain.rag import Evidence
 
 
 class ModelEvidenceSelector(_GuardedModelAdapter):
-    revision = "evidence-selection:v2-policy-conflicts-are-not-entity-ambiguity"
+    revision = "evidence-selection:v3-requested-fact-coverage"
 
     def __init__(self, settings: EnvSettings, transport: JsonTransport | None = None) -> None:
         super().__init__(
@@ -81,6 +81,14 @@ class ModelEvidenceSelector(_GuardedModelAdapter):
                             "for ambiguity). "
                             "Select sources that actually contain requested facts, not "
                             "merely matching names. "
+                            "Coverage measures the facts the user ASKS FOR. If none of those "
+                            "facts is supplied, coverage must be missing: a matching entity, "
+                            "a table of unrelated attributes, or proof that a field is absent "
+                            "does not make coverage partial or sufficient. Partial requires "
+                            "at least one actually requested fact to be supported. Do not "
+                            "turn missing coverage into an answer about the document's "
+                            "contents. Preserve explicit source statements of nonexistence "
+                            "or ineligibility when they actually answer the requested question. "
                             "For tables prefer complete header+data+units+conditions over "
                             "isolated numbers; "
                             "a parent with full context can replace its children. Read "

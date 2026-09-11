@@ -260,7 +260,7 @@ def test_true_answer_and_chapter_citation_do_not_pass_when_conditions_are_missin
     "mutation",
     [
         lambda p: p.pop("condition_checks"),
-        lambda p: p["condition_checks"].reverse(),
+        lambda p: p["condition_checks"][0].update(id="K999"),
         lambda p: p["condition_checks"][0].update(answer_quote="这句话不在答案中"),
         lambda p: p["condition_checks"][0].update(
             status="not_applicable", answer_quote="", reason=""
@@ -272,6 +272,19 @@ def test_missing_fabricated_or_incomplete_condition_reviews_are_rejected(tmp_pat
     model = OpenAICompatibleClaimVerifier(settings, transport=ConditionTransport(mutation))
     with pytest.raises(InvalidProviderResponse, match="VERIFIER_CONDITION"):
         model.verify("总结维修政策", draft(FULL), (_evidence(text=SOURCE),))
+
+
+def test_reordered_condition_rows_keep_id_source_and_exact_answer_witness(tmp_path):
+    settings, _ = _settings(tmp_path)
+    evidence = (_evidence(text=SOURCE),)
+    expected = OpenAICompatibleClaimVerifier(settings, transport=ConditionTransport()).verify(
+        "总结维修政策", draft(FULL), evidence
+    )
+    reordered = OpenAICompatibleClaimVerifier(
+        settings, transport=ConditionTransport(lambda p: p["condition_checks"].reverse())
+    ).verify("总结维修政策", draft(FULL), evidence)
+    assert reordered.supported
+    assert reordered.condition_checks == expected.condition_checks
 
 
 @pytest.mark.parametrize("repair_succeeds", [True, False])

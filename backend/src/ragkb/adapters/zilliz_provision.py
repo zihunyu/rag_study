@@ -31,6 +31,14 @@ from ragkb.adapters.zilliz_schema import (
 )
 from ragkb.application.search import rrf_fuse
 from ragkb.config import EnvSettings
+from ragkb.config.vector import (
+    vector_collection_name,
+    vector_consistency,
+    vector_database,
+    vector_dimension,
+    vector_security_consistency,
+    vector_timeout,
+)
 from ragkb.domain.retrieval import SearchContext
 from ragkb.infrastructure.zilliz_plan import build_zilliz_collection_plan
 
@@ -64,32 +72,36 @@ def provision_and_validate(
     if approval != CREATE_APPROVAL:
         raise PermissionError("ZILLIZ_COLLECTION_CREATE_APPROVAL_REQUIRED")
     adapter = ZillizCloudAdapter(settings, client_factory=client_factory)
-    client = adapter.connect()
+    client = (
+        adapter.connect(database="default")
+        if settings.vector_backend == "milvus"
+        else adapter.connect()
+    )
     operations: list[str] = ["connect"]
-    databases = set(map(str, client.list_databases(timeout=settings.zilliz_cloud_timeout_seconds)))
+    databases = set(map(str, client.list_databases(timeout=vector_timeout(settings))))
     operations.append("list_databases_diagnostic")
     database_created = database_creation_required(settings, databases)
     if database_created:
         client.create_database(
-            db_name=settings.zilliz_cloud_database,
-            timeout=settings.zilliz_cloud_timeout_seconds,
+            db_name=vector_database(settings),
+            timeout=vector_timeout(settings),
         )
         operations.append("create_database")
     if database_switch_required(settings):
-        client.use_database(db_name=settings.zilliz_cloud_database)
+        client.use_database(db_name=vector_database(settings))
         operations.append("use_custom_database")
     else:
         operations.append("use_existing_default_session")
-    collections = client.list_collections(timeout=settings.zilliz_cloud_timeout_seconds)
+    collections = client.list_collections(timeout=vector_timeout(settings))
     operations.append("verify_database_session")
     collection_exists = bool(
         client.has_collection(
-            collection_name=settings.zilliz_cloud_collection,
-            timeout=settings.zilliz_cloud_timeout_seconds,
+            collection_name=vector_collection_name(settings),
+            timeout=vector_timeout(settings),
         )
     )
     collection_created = False
-    if not collection_exists and len(collections) >= 5:
+    if settings.vector_backend == "zilliz" and not collection_exists and len(collections) >= 5:
         raise ZillizCollectionCapacityError("ZILLIZ_COLLECTION_CAPACITY_REQUIRED")
     if collection_exists:
         inspection = adapter.read_only_inspect()
@@ -99,11 +111,11 @@ def provision_and_validate(
     else:
         schema, index_params = build_sdk_schema(client, settings)
         client.create_collection(
-            collection_name=settings.zilliz_cloud_collection,
+            collection_name=vector_collection_name(settings),
             schema=schema,
             index_params=index_params,
-            consistency_level=settings.zilliz_cloud_consistency_level,
-            timeout=settings.zilliz_cloud_timeout_seconds,
+            consistency_level=vector_consistency(settings),
+            timeout=vector_timeout(settings),
         )
         operations.append("create_collection_with_indexes")
         collection_created = True
@@ -130,7 +142,7 @@ def provision_and_validate(
             watermark_provider=lambda _: 12,
         )
         bm25 = search_adapter.search_bm25("设备 保修期", context, 10)
-        dense_vector = [0.0] * settings.zilliz_cloud_dimension
+        dense_vector = [0.0] * vector_dimension(settings)
         dense_vector[0] = 1.0
         dense = search_adapter.search_dense(dense_vector, context, 10)
         fused = rrf_fuse((bm25, dense), rrf_k=settings.retrieval_rrf_k)
@@ -144,7 +156,7 @@ def provision_and_validate(
             "denied_id_filtered": ids["denied"] not in returned,
             "expired_id_filtered": ids["expired"] not in returned,
             "wrong_generation_filtered": ids["wrong_generation"] not in returned,
-            "security_consistency": settings.zilliz_cloud_security_consistency_level,
+            "security_consistency": vector_security_consistency(settings),
             "watermark_ready": search_adapter.observed_security_watermark(context) >= 12,
         }
         required = (
@@ -163,7 +175,7 @@ def provision_and_validate(
         settings,
         records,
         validate_synthetic,
-        total_timeout_seconds=min(30.0, settings.zilliz_cloud_timeout_seconds),
+        total_timeout_seconds=min(30.0, vector_timeout(settings)),
         max_polls=20,
         poll_interval_seconds=1,
     )
@@ -185,8 +197,8 @@ def provision_and_validate(
     plan = build_zilliz_collection_plan(settings)
     return {
         "status": "ZILLIZ_G2_SYNTHETIC_VALIDATION_PASSED",
-        "database_name": settings.zilliz_cloud_database,
-        "collection_name": settings.zilliz_cloud_collection,
+        "database_name": vector_database(settings),
+        "collection_name": vector_collection_name(settings),
         "database_created": database_created,
         "collection_created": collection_created,
         "schema_fingerprint": plan["schema_fingerprint"],

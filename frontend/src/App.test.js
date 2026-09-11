@@ -243,6 +243,7 @@ describe('conversation result gating', () => {
     [['CLAIM_VERIFIER_PROTOCOL_INVALID', 'MODEL_PROVIDER_MODEL_UNSUPPORTED'], '不支持配置的模型'],
     [['CLAIM_VERIFIER_PROTOCOL_INVALID', 'MODEL_PROVIDER_HTTP_ERROR'], '核验接口拒绝了请求'],
     [['ANSWER_NOT_SUPPORTED'], '有内容未通过原文核验'],
+    [['CLAIM_VERIFIER_PROTOCOL_INVALID', 'GROUNDING_REPAIR_INVALID'], '事实与来源的关联补全未完成'],
     [['ANSWER_NOT_SUPPORTED', 'ANSWER_CITATION_COVERAGE_INVALID'], '事实与引用未能完整对应'],
   ])('prioritizes the specific verification failure over generic state (%s)', async (warnings, message) => {
     routes.set('/api/conversations/c', () => json({ conversation: { id: 'c', space_id: 'a', title: '容量测试' }, turns: [{ id: 't', sequence_number: 1, original_question: '问题', state: 'failed', result: { rag_run_id: 'failed-batch', status: 'system_error', verified: false, answer: 'PRIVATE DRAFT', citations: [], warnings } }], next_before: null }));
@@ -289,12 +290,15 @@ describe('conversation result gating', () => {
     expect(wrapper.text()).not.toContain('999 W');
     expect(wrapper.find('.citation-button').exists()).toBe(false);
   });
-  it('renders a verified summary and table with working inline source links', async () => {
+  it.each([false, true])('renders working table source links, including trailing markers: %s', async trailing => {
     const citation = { evidence_id: 'E2', source_url: '/api/test-source', filename: '设备参数.csv', version_no: 2, version_id: 'v2', document_id: 'doc', chunk_id: 'chunk', locator: { row: 2 } };
-    routes.set('/api/conversations/c', () => json({ conversation: { id: 'c', space_id: 'a', title: '设备功率' }, turns: [{ id: 't', conversation_id: 'c', sequence_number: 1, original_question: '总结功率', state: 'completed', result: { verified: true, answer: '功率随环境变化。[E2]\n\n| 环境 | 功率 |\n| --- | --- |\n| 常温 | **420 W** [E2] |\n| 低温 | 390 W [E2] |', citations: [citation] } }], next_before: null }));
+    const answer = '功率随环境变化。[E2]\n\n| 环境 | 功率 |\n| --- | --- |\n| 常温 | **420 W** [E2] |\n| 低温 | 390 W [E2] |';
+    routes.set('/api/conversations/c', () => json({ conversation: { id: 'c', space_id: 'a', title: '设备功率' }, turns: [{ id: 't', conversation_id: 'c', sequence_number: 1, original_question: '总结功率', state: 'completed', result: { verified: true, answer: trailing ? answer.replaceAll(' [E2] |', ' | [E2]') : answer, citations: [citation] } }], next_before: null }));
     routes.set('/api/test-source', () => json({ text: '常温 420 W，低温 390 W。' }));
     await app('/chat/c'); await flushPromises();
     expect(wrapper.findAll('.assistant-body table tbody tr')).toHaveLength(2);
+    expect(wrapper.findAll('.assistant-body table tbody td')).toHaveLength(4);
+    expect(wrapper.findAll('.assistant-body a[href="#citation-E2"]')).toHaveLength(3);
     expect(wrapper.get('.assistant-body strong').text()).toBe('420 W');
     const link = wrapper.findAll('.assistant-body a[href="#citation-E2"]')[1];
     expect(link.text()).toBe('1');

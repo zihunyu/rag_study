@@ -39,6 +39,11 @@
             "title": "Category",
             "type": "string"
           },
+          "check_citation_structure": {
+            "default": false,
+            "title": "Check Citation Structure",
+            "type": "boolean"
+          },
           "check_relevance": {
             "default": false,
             "title": "Check Relevance",
@@ -469,6 +474,13 @@
             "minLength": 1,
             "title": "Name",
             "type": "string"
+          },
+          "repeat_count": {
+            "default": 1,
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Repeat Count",
+            "type": "integer"
           },
           "review_mode": {
             "default": "manual",

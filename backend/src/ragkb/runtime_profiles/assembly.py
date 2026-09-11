@@ -345,6 +345,8 @@ def build_runtime_components(
         WorkspaceDB(database, getattr(repository, "control", None)), tenant_id, settings, repository
     )
     authenticator = profile_factory.build_authenticator(settings, tenant_id)
+    from ragkb.infrastructure.readable_scope import ReadableScope
+
     evidence_provider = SearchBackedEvidenceProvider(
         search_service,
         space_id=space_id,
@@ -370,6 +372,7 @@ def build_runtime_components(
         verifier_revision=verifier.revision,
         final_evidence_count=settings.retrieval_final_evidence_count,
         release_provider=retrieval_release,
+        readable_scope=ReadableScope(repository, authorization),
         question_assessor=retrieval.question_assessor,
         evidence_selector=retrieval.evidence_selector,
         visual_enricher=visual_enricher,

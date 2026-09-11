@@ -55,6 +55,7 @@ function save() {
       </div><button type="button" class="btn" :disabled="value.criteria.length >= 30" @click="addPoint">添加验收要点</button>
     </section>
     <details><summary>可选检查：清单数量、编号与重复</summary><label>预期条目数（留空不检查）<input v-model.number="value.list_checks.expected_count" type="number" min="1" max="100" aria-label="预期条目数"></label><label class="acceptance-check"><input v-model="value.list_checks.sequential" type="checkbox">编号从 1 开始且连续</label><label class="acceptance-check"><input v-model="value.list_checks.no_duplicates" type="checkbox">不允许相同内容重复凑数</label><p class="small muted">达到数量不代表答全；每个要点仍需逐项核对。</p></details>
+    <label class="acceptance-check"><input v-model="value.check_citation_structure" type="checkbox">检查正文引用编号及每行表格引用</label><p class="small muted">程序检查引用是否存在及编号有效；事实与原文是否对应仍需语义评审。</p>
     <label class="acceptance-check"><input v-model="value.check_relevance" type="checkbox">检查回答相关性与重复附加内容</label><p class="small muted">独立检查整段回答是否偏题；必要条件、例外、单位和范围说明仍须保留。结果支持人工复核。</p>
     <label>依据说明<textarea v-model="value.source_notes" rows="2" placeholder="资料不足或冲突案例，请说明检查范围及预期行为的依据。"/></label>
     <details><summary>案例编号、范围、必要引用与多轮问题</summary><div class="acceptance-fields"><label>案例编号<input v-model="value.key" :disabled="!!editor.id" maxlength="80" placeholder="留空自动生成"></label><label>分类<input v-model="value.category" maxlength="100"></label></div>

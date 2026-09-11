@@ -50,10 +50,12 @@ from ragkb.domain.errors import (
     RetrievalFailClosed,
     TransientProviderError,
 )
+from ragkb.domain.grounding_repair import repairable_grounding
 from ragkb.domain.ids import new_uuid7
 from ragkb.domain.numeric_facts import (
     check_numeric_facts,
     explicit_calculation_requires_review,
+    extract_numeric_facts,
     normalize_numeric_text,
 )
 from ragkb.domain.policy_conflicts import conflicting_sources
@@ -126,6 +128,11 @@ def condition_repair_evidence(
             locator={
                 **source.locator,
                 "conditions_to_preserve": quotes.get(source.evidence_id, []),
+                "condition_review_feedback": [
+                    {k: check.get(k, "") for k in ("id", "status", "source_quote", "reason")}
+                    for check in applicable
+                    if check["evidence_id"] == source.evidence_id
+                ],
             },
         )
         size = counter.count(
@@ -156,7 +163,7 @@ def _normalized_fact_text(value: str) -> str:
 class DeterministicClaimVerifier:
     """Fail-closed structural checks that run before any answer is marked verified."""
 
-    revision = "deterministic-claim-verifier:surface-numeric-and-graph-facts-v4-calculations"
+    revision = "deterministic-claim-verifier:surface-numeric-and-graph-facts-v5-context-identifiers"
 
     def __init__(self, allowed_output_domains: tuple[str, ...] = ()) -> None:
         self.allowed_output_domains = frozenset(
@@ -169,7 +176,7 @@ class DeterministicClaimVerifier:
         draft: DraftAnswer,
         evidence: tuple[Evidence, ...],
     ) -> VerificationResult:
-        del question
+        question_identifiers = extract_numeric_facts(question).identifiers
         available = {item.evidence_id: item for item in evidence}
         claims = draft.claims
         if not claims:
@@ -264,7 +271,11 @@ class DeterministicClaimVerifier:
                 )
                 continue
             source = "\n".join(item.text for item in cited_evidence)
-            numeric_check = check_numeric_facts(claim.text, tuple(e.text for e in cited_evidence))
+            numeric_check = check_numeric_facts(
+                claim.text,
+                tuple(e.text for e in cited_evidence),
+                question_identifiers=question_identifiers,
+            )
             unsupported_url = next(
                 (url for url in _URL_PATTERN.findall(claim.text) if url not in source), None
             )
@@ -664,7 +675,14 @@ class TrustedQAService:
                     warnings=("RETRIEVAL_INCOMPLETE",),
                     retryable=True,
                 )
-            return self._save(package, AnswerStatus.INSUFFICIENT_EVIDENCE, verified=True)
+            return self._save(
+                package,
+                AnswerStatus.INSUFFICIENT_EVIDENCE,
+                verified=True,
+                warnings=("NO_READABLE_CURRENT_SOURCES",)
+                if package.disposition_reason == "NO_READABLE_CURRENT_SOURCES"
+                else (),
+            )
         from ragkb.application.acceptance_trace import content_stage, evidence_rows
 
         content_stage("retrieval", evidence_rows(package.evidence))
@@ -822,7 +840,70 @@ class TrustedQAService:
         def repair_surface_once(
             current: DraftAnswer, checked: VerificationResult
         ) -> tuple[DraftAnswer, VerificationResult]:
-            nonlocal surface_repair_attempted, verification_phase
+            nonlocal surface_repair_attempted, verification_phase, claim_citation_ids
+            nonlocal cited, list_claim_count
+            unrelated = not checked.answer_claims_covered and any(
+                v.reason_code == "ANSWER_UNRELATED_BACKGROUND" for v in checked.verdicts
+            )
+            feedback_recompose = getattr(self.generator, "repair_surface", None)
+            grounding_recompose = getattr(self.generator, "repair_grounding", None)
+            grounding = (
+                grounding_recompose is not None
+                and repairable_grounding(current, checked)
+                and not requests_source_list(question, package.evidence)
+            )
+            surface_scope = (
+                feedback_recompose is not None
+                and repairable_surface(current, checked)
+                and not requests_source_list(question, package.evidence)
+            )
+            if unrelated or surface_scope or grounding:
+                recompose = (
+                    grounding_recompose
+                    if grounding and not unrelated
+                    else feedback_recompose or getattr(self.generator, "repair_relevance", None)
+                )
+                if (
+                    surface_repair_attempted
+                    or recompose is None
+                    or checked.conflicting_evidence_ids
+                ):
+                    return current, checked
+                surface_repair_attempted = True
+                verification_phase = (
+                    "source_binding_repair"
+                    if grounding and not unrelated
+                    else "answer_surface_repair"
+                )
+                if not self._permission_recheck(package, subject_scope_tokens, clearance_level):
+                    raise InvalidProviderResponse("ANSWER_REPAIR_SOURCE_INVALID")
+                with self.tracer.span("rag.ask.answer_surface.rebuild"):
+                    patched = (
+                        recompose(question, current, package.evidence, checked)
+                        if feedback_recompose is not None or (grounding and not unrelated)
+                        else recompose(question, current, package.evidence)
+                    )
+                if patched == current:
+                    return current, checked
+                available = {e.evidence_id: e for e in package.evidence}
+                identities = tuple(dict.fromkeys(i for c in patched.claims for i in c.evidence_ids))
+                if (
+                    patched.status is not DraftAnswerStatus.ANSWERED
+                    or not patched.text.strip()
+                    or not patched.claims
+                    or not identities
+                    or len(set(patched.citation_ids)) != len(patched.citation_ids)
+                    or not set(identities).issubset(patched.citation_ids)
+                    or not set(patched.citation_ids).issubset(available)
+                ):
+                    raise InvalidProviderResponse("ANSWER_REPAIR_CITATIONS_INVALID")
+                for claim in patched.claims:
+                    visual_claim_evidence(claim, package.evidence)
+                claim_citation_ids, cited = identities, tuple(available[i] for i in identities)
+                list_claim_count = None
+                verification_phase = "claims_and_conflicts"
+                with self.tracer.span("rag.ask.answer_surface.reverify"):
+                    return patched, self.verifier.verify(question, patched, package.evidence)
             rebuild = repairable_surface(current, checked) or (
                 requests_source_list(question, package.evidence)
                 and repairable_citations(current, checked)
@@ -887,9 +968,12 @@ class TrustedQAService:
             if (
                 any(c["status"] == "missing" for c in verification.condition_checks)
                 and not verification.conflicting_evidence_ids
+                and not any(
+                    v.reason_code == "ANSWER_UNRELATED_BACKGROUND" for v in verification.verdicts
+                )
             ):
-                # One bounded repair; use source quotes rather than the verifier's free-form
-                # explanation. The repaired answer crosses every verification gate again.
+                # Source quotes remain the evidence; review explanations only identify
+                # the failed binding. Every repaired fact crosses all gates again.
                 repair_evidence = condition_repair_evidence(
                     package,
                     verification.condition_checks,
@@ -909,14 +993,24 @@ class TrustedQAService:
                 )
                 verification_phase = "condition_repair"
                 with self.tracer.span("rag.ask.conditions.repair"):
-                    repaired = append_missing_text_conditions(draft, verification, repair_evidence)
-                    # Exact appended conditions are supplementary facts, never new
-                    # numbered items of the original list. A generated replacement
-                    # has no guaranteed prefix and must not inherit this boundary.
-                    if repaired is not None:
-                        list_claim_count = len(draft.claims)
-                    if repaired is None:
-                        repaired = self.generator.generate(question, repair_evidence)
+                    recompose = getattr(self.generator, "repair_conditions", None)
+                    if recompose is not None:
+                        # Reconcile scope and missing conditions together. Appending
+                        # first can force another full review merely to discover the
+                        # added policy belongs to unrequested background.
+                        repaired = recompose(question, draft, repair_evidence)
+                        list_claim_count = None
+                    else:
+                        repaired = append_missing_text_conditions(
+                            draft, verification, repair_evidence
+                        )
+                        # Legacy/extractive generators can complete an exact quote;
+                        # it is supplementary, never a new original numbered item.
+                        if repaired is not None:
+                            list_claim_count = len(draft.claims)
+                        else:
+                            repaired = self.generator.generate(question, repair_evidence)
+                            list_claim_count = None
                 if repaired.status is DraftAnswerStatus.ANSWERED:
                     available = {e.evidence_id: e for e in repair_evidence}
                     repaired_ids = tuple(
@@ -997,7 +1091,9 @@ class TrustedQAService:
                 package,
                 AnswerStatus.SYSTEM_ERROR,
                 warnings=("CLAIM_VERIFIER_PROTOCOL_INVALID", str(error))
-                if str(error).startswith(("VERIFIER_CONDITION_", "CITATION_REPAIR_"))
+                if str(error).startswith(
+                    ("VERIFIER_CONDITION_", "CITATION_REPAIR_", "GROUNDING_REPAIR_")
+                )
                 or str(error)
                 in {
                     "VERIFIER_VERDICT_COUNT_INVALID",

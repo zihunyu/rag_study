@@ -6,6 +6,7 @@ const stages = computed(() => (props.report?.events || []).filter(e => e.kind ==
 const calls = computed(() => (props.report?.events || []).filter(e => e.kind === 'model_http'));
 const queue = computed(() => calls.value.reduce((sum, e) => sum + (e.queue_seconds || 0), 0));
 const cacheHit = computed(() => props.report?.events?.some(e => e.kind === 'cache' && e.cache === 'verified_result' && e.outcome === 'hit'));
+const emptyScope = computed(() => props.report?.events?.some(e => e.kind === 'reading_scope' && e.outcome === 'empty'));
 const seconds = n => Number(n || 0).toFixed(2);
 labels['verification.conditions.retry'] = '超时批次缩小重试';
 labels['conversation.resolve'] = '会话问题解析';
@@ -19,6 +20,7 @@ labels['rag.ask.source_list.compose'] = '按原文编号整理条目';
   <details v-if="report" class="technical answer-performance">
     <summary>处理耗时 {{ seconds(report.elapsed_seconds) }} 秒<span v-if="cacheHit"> · 已复用验证结果</span></summary>
     <p v-if="cacheHit">问题、资料版本、配置与权限一致；返回前已重新检查当前权限与发布状态。</p>
+    <p v-if="emptyScope">当前选择范围没有可读的已发布资料，本次提前结束；请检查所选文件及发布状态。</p>
     <p>模型请求 {{ calls.filter(c => c.sent).length }} 次 · 累计额度排队 {{ seconds(queue) }} 秒</p>
     <p v-for="(stage, index) in stages" :key="index">{{ labels[stage.name] }}<template v-if="stage.batch_number"> {{ stage.batch_number }}</template>：{{ seconds(stage.seconds) }} 秒<span v-if="stage.status === 'failed' || stage.status === 'error'">（未完成）</span></p>
     <p v-if="stages.some(s => s.batch_number)" class="muted">条件批次可能并行，阶段耗时不能直接相加。</p>

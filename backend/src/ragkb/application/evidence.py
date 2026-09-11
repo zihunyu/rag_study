@@ -5,9 +5,11 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import replace
 
 from ragkb.application.provider_budget import ConservativeTokenCounter
+from ragkb.application.qa_performance import record_event
 from ragkb.application.question_assessment import ConservativeQuestionAssessor
 from ragkb.application.reading_scope import is_overview, options
 from ragkb.application.search import HybridSearchService
@@ -31,7 +33,7 @@ from ragkb.domain.retrieval import (
 
 
 class SearchBackedEvidenceProvider:
-    revision = "search-backed-evidence:staged-visual-facts-v3"
+    revision = "search-backed-evidence:scope-and-selection-v4"
 
     def __init__(
         self,
@@ -51,6 +53,7 @@ class SearchBackedEvidenceProvider:
         evidence_selector: EvidenceSelectorPort | None = None,
         visual_enricher: Callable[[str, tuple[Evidence, ...]], tuple[Evidence, ...]] | None = None,
         overview_reader: OverviewReadingPort | None = None,
+        readable_scope: Callable[[SearchContext], bool | None] | None = None,
     ) -> None:
         self.search_service = search_service
         self.space_id = space_id
@@ -67,6 +70,7 @@ class SearchBackedEvidenceProvider:
         self.evidence_selector = evidence_selector
         self.visual_enricher = visual_enricher
         self.overview_reader = overview_reader
+        self.readable_scope = readable_scope
 
     def build_package(
         self,
@@ -78,6 +82,67 @@ class SearchBackedEvidenceProvider:
         clearance_level: int = 0,
         space_id: str | None = None,
     ) -> EvidencePackage:
+        query_time = int(self.clock())
+        selected_space_id = space_id or self.space_id
+        release = (
+            self.release_provider.current_release(tenant_id, selected_space_id)
+            if self.release_provider is not None
+            else None
+        )
+        permission_revision = (
+            release.active_permission_revision
+            if release is not None
+            else self.active_permission_revision()
+        )
+        active_generation_id = (
+            release.active_generation_id if release is not None else self.active_generation_id
+        )
+        required_watermark = (
+            release.security_watermark
+            if release is not None
+            else self.required_security_watermark()
+        )
+        context = SearchContext(
+            tenant_id=tenant_id,
+            space_ids=(selected_space_id,),
+            subject_scope_tokens=subject_scope_tokens,
+            clearance_level=clearance_level,
+            as_of_epoch=query_time,
+            active_generation_id=active_generation_id,
+            active_permission_revision=permission_revision,
+            required_security_watermark=required_watermark,
+            document_ids=options.get().document_ids,
+        )
+        if (
+            self.readable_scope is not None
+            and ConservativeQuestionAssessor().assess(question).disposition
+            is QuestionDisposition.ANSWERABLE
+        ):
+            if self.search_service.index.observed_security_watermark(context) < required_watermark:
+                raise SecurityWatermarkNotReady("SECURITY_WATERMARK_NOT_READY")
+            readable = self.readable_scope(context)
+            record_event(
+                "reading_scope",
+                outcome="empty" if readable is False else "readable" if readable else "unknown",
+            )
+            if readable is False:
+                return EvidencePackage(
+                    rag_run_id=new_uuid7(),
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    query=question,
+                    query_time_epoch=query_time,
+                    index_generation_id=active_generation_id,
+                    retrieval_revision=self.search_service.revision,
+                    prompt_revision=self.prompt_revision,
+                    model_revision=self.model_revision,
+                    permission_revision=permission_revision,
+                    evidence=(),
+                    verifier_revision=self.verifier_revision,
+                    coverage="missing",
+                    disposition_reason="NO_READABLE_CURRENT_SOURCES",
+                    question_assessor_revision=self.question_assessor.revision,
+                )
         try:
             assessment = self.question_assessor.assess(question)
             if not isinstance(assessment, QuestionAssessment):
@@ -90,7 +155,6 @@ class SearchBackedEvidenceProvider:
             raise QuestionAssessmentFailed(
                 "QUESTION_ASSESSOR_PROTOCOL_INVALID", retryable=False
             ) from error
-        query_time = int(self.clock())
         # A standalone name/topic can be resolved against the selected knowledge
         # base. Unresolved pronouns and external-operation refusals remain early exits.
         if (
@@ -129,35 +193,6 @@ class SearchBackedEvidenceProvider:
                 clarification_fields=assessment.clarification_fields,
                 question_assessor_revision=self.question_assessor.revision,
             )
-        selected_space_id = space_id or self.space_id
-        release = (
-            self.release_provider.current_release(tenant_id, selected_space_id)
-            if self.release_provider is not None
-            else None
-        )
-        permission_revision = (
-            release.active_permission_revision
-            if release is not None
-            else self.active_permission_revision()
-        )
-        active_generation_id = (
-            release.active_generation_id if release is not None else self.active_generation_id
-        )
-        required_watermark = (
-            release.security_watermark
-            if release is not None
-            else self.required_security_watermark()
-        )
-        context = SearchContext(
-            tenant_id=tenant_id,
-            space_ids=(selected_space_id,),
-            subject_scope_tokens=subject_scope_tokens,
-            clearance_level=clearance_level,
-            as_of_epoch=query_time,
-            active_generation_id=active_generation_id,
-            active_permission_revision=permission_revision,
-            required_security_watermark=required_watermark,
-        )
         if self.overview_reader and is_overview(question):
             if self.search_service.index.observed_security_watermark(context) < required_watermark:
                 raise SecurityWatermarkNotReady("SECURITY_WATERMARK_NOT_READY")
@@ -296,6 +331,13 @@ class SearchBackedEvidenceProvider:
                 evidence = list(self.visual_enricher(question, tuple(evidence)))
 
         collect(result)
+        record_event(
+            "retrieval_round",
+            number=1,
+            new_sources=len(evidence),
+            reason="initial",
+            health=str(result.retrieval_health),
+        )
         check_visuals()
         queries = [question]
         coverage, clarification = "unchecked", None
@@ -303,6 +345,9 @@ class SearchBackedEvidenceProvider:
         warnings = list(result.warnings)
         if self.evidence_selector is not None and health is not RetrievalHealth.UNAVAILABLE:
             try:
+                # Immutable full evidence equality within this build only. Retain
+                # original IDs, order, roles, text, locators and visual facts.
+                selected_input = deepcopy(tuple(evidence))
                 choice = (
                     visual_session.preselected(tuple(evidence)) if visual_session else None
                 ) or self.evidence_selector.select(question, tuple(evidence))
@@ -313,10 +358,18 @@ class SearchBackedEvidenceProvider:
                         if query.strip().casefold() in {q.casefold() for q in queries}:
                             continue
                         queries.append(query.strip())
+                        before_count = len(evidence)
                         extra = self.search_service.search(
                             query, context, limit=self.final_evidence_count
                         )
                         collect(extra)
+                        record_event(
+                            "retrieval_round",
+                            number=len(queries),
+                            new_sources=len(evidence) - before_count,
+                            reason="supplement_" + choice.coverage,
+                            health=str(extra.retrieval_health),
+                        )
                         warnings.extend(extra.warnings)
                         if extra.retrieval_health is RetrievalHealth.UNAVAILABLE:
                             health = RetrievalHealth.UNAVAILABLE
@@ -329,9 +382,14 @@ class SearchBackedEvidenceProvider:
                     len(queries) > 1 or deferred_visuals
                 ) and health is not RetrievalHealth.UNAVAILABLE:
                     check_visuals(final=True)
-                    choice = (
-                        visual_session.preselected(tuple(evidence)) if visual_session else None
-                    ) or self.evidence_selector.select(question, tuple(evidence))
+                    if tuple(evidence) == selected_input:
+                        record_event(
+                            "cache", cache="evidence_selection", outcome="same_request_input_reused"
+                        )
+                    else:
+                        choice = (
+                            visual_session.preselected(tuple(evidence)) if visual_session else None
+                        ) or self.evidence_selector.select(question, tuple(evidence))
                 coverage, clarification = choice.coverage, choice.clarification
                 selected: set[str] = set()
                 used = 0

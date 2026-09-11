@@ -117,9 +117,86 @@ def test_generator_returns_explicit_refusal_status_and_prompts_for_it(tmp_path):
     prompt = transport.calls[0]["payload"]["messages"][0]["content"]
     assert '"status":"insufficient_evidence"' in prompt
     assert "status (exactly answered or insufficient_evidence)" in prompt
-    assert generator.revision.endswith(
-        ":synthesized-markdown-v21-shared-condition-scope"
+    assert generator.revision.endswith(":synthesized-markdown-v33-source-binding-repair")
+
+
+def test_condition_recomposition_keeps_previous_facts_and_source_quotes_as_data(tmp_path):
+    from ragkb.domain.rag import AtomicClaim
+
+    generator, transport = generator_for(tmp_path, ANSWER)
+    previous = DraftAnswer(
+        "旧答案", ("E1",), (AtomicClaim("登记日期决定起算日。", ("E1",)),), synthesized=True
     )
+    source = replace(
+        _evidence(text="需要有效凭证。"), locator={"conditions_to_preserve": ["需要有效凭证。"]}
+    )
+    generator.repair_conditions("适用条件是什么？", previous, (source,))
+    assert len(transport.calls) == 1
+    messages = transport.calls[0]["payload"]["messages"]
+    evidence_text, draft_text = messages[1]["content"].split("UNTRUSTED_PREVIOUS_DRAFT_JSON:\n")
+    saved = json.loads(draft_text)
+    assert saved["claims"] == [{"text": "登记日期决定起算日。", "evidence_ids": ["E1"]}]
+    assert saved["answer"] == previous.text
+    assert "需要有效凭证。" in evidence_text
+    assert saved["repair_reason"] == "conditions"
+
+
+def test_relevance_repair_receives_its_rejection_without_replacing_source_data(tmp_path):
+    from ragkb.domain.rag import AtomicClaim
+
+    generator, transport = generator_for(tmp_path, ANSWER)
+    previous = DraftAnswer(
+        "所问事实。另有未问政策。",
+        ("E1",),
+        (AtomicClaim("所问事实。", ("E1",)), AtomicClaim("未问政策。", ("E1",))),
+        synthesized=True,
+    )
+    generator.repair_relevance("所问事实？", previous, (_evidence(text="完整原始资料"),))
+    assert len(transport.calls) == 1
+    messages = transport.calls[0]["payload"]["messages"]
+    assert "ANSWER_UNRELATED_BACKGROUND" in messages[0]["content"]
+    assert "NOT a required output" in messages[0]["content"]
+    evidence_text, previous_text = messages[1]["content"].split("UNTRUSTED_PREVIOUS_DRAFT_JSON:\n")
+    saved = json.loads(previous_text)
+    assert saved["repair_reason"] == "relevance"
+    assert len(saved["claims"]) == 2  # audit data is retained, never silently edited
+    assert "完整原始资料" in evidence_text
+
+
+def test_surface_repair_receives_actual_verdict_and_condition_explanation_as_data(tmp_path):
+    from ragkb.domain.rag import AtomicClaim, ClaimVerdict, VerificationResult
+
+    generator, transport = generator_for(tmp_path, ANSWER)
+    previous = DraftAnswer(
+        "旧范围[E1]", ("E1",), (AtomicClaim("旧范围", ("E1",)),), synthesized=True
+    )
+    check = {
+        "id": "K1",
+        "evidence_id": "E1",
+        "status": "missing",
+        "source_quote": "各类申请均须有效凭证。",
+        "answer_quote": "",
+        "reason": "旧答案只将共有条件放在甲类申请中。",
+    }
+    review = VerificationResult(
+        (ClaimVerdict(previous.text, (), "INSUFFICIENT", "SCOPE_BINDING"),),
+        "fixture",
+        answer_claims_covered=False,
+        condition_checks=(check,),
+    )
+    generator.repair_surface(
+        "甲乙两类申请的要求？", previous, (_evidence(text="各类申请均须有效凭证。"),), review
+    )
+    messages = transport.calls[0]["payload"]["messages"]
+    source, previous_text = messages[1]["content"].split("UNTRUSTED_PREVIOUS_DRAFT_JSON:\n")
+    saved = json.loads(previous_text)
+    assert saved["repair_reason"] == "surface"
+    assert saved["repair_feedback"]["conditions"] == [check]
+    assert saved["repair_feedback"]["rejected"] == [
+        {"text": previous.text, "reason": "SCOPE_BINDING"}
+    ]
+    assert "各类申请均须有效凭证。" in source
+    assert "untrusted diagnostic hints" in messages[0]["content"]
 
 
 @pytest.fixture

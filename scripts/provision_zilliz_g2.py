@@ -19,7 +19,9 @@ from ragkb.config import build_env_report, load_env  # noqa: E402
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Provision approved Zilliz G2 resources")
+    parser = argparse.ArgumentParser(
+        description="Provision approved selected Zilliz/Milvus resources"
+    )
     parser.add_argument("--approval", required=True)
     parser.add_argument(
         "--output", type=Path, default=Path("artifacts/g2/zilliz-provision-evidence.json")

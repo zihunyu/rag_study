@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ragkb.config import EnvLoadResult
+from ragkb.config.vector import vector_dimension
 from ragkb.spikes.common import result
 
 
@@ -22,7 +23,7 @@ def run_capacity_spike(loaded: EnvLoadResult) -> dict[str, object]:
         {"name": "typed_env_available", "passed": True},
         {
             "name": "embedding_and_zilliz_dimensions_match",
-            "passed": settings.embedding_dimension == settings.zilliz_cloud_dimension,
+            "passed": settings.embedding_dimension == vector_dimension(settings),
         },
         {
             "name": "local_capacity_positive",

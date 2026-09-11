@@ -27,6 +27,7 @@ from ragkb.adapters.vector_indexing import (
     vector_timeout,
 )
 from ragkb.config import EnvSettings
+from ragkb.config.vector import vector_connection_kwargs
 from ragkb.domain.errors import ProviderAuthenticationError, ProviderUnavailable, SchemaMismatch
 from ragkb.domain.retrieval import IndexCandidate, SearchContext, SecurityProjection
 
@@ -92,6 +93,11 @@ def build_zilliz_filter(context: SearchContext) -> str:
         (
             f"tenant_id == {_quoted(context.tenant_id)}",
             f"space_id in [{spaces}]",
+            *(
+                ("document_id in [" + ", ".join(_quoted(i) for i in context.document_ids) + "]",)
+                if context.document_ids
+                else ()
+            ),
             f"index_generation_id == {_quoted(context.active_generation_id)}",
             'lifecycle_projection == "SERVING"',
             "current_version == true",
@@ -120,18 +126,10 @@ class MilvusHybridAdapter:
         self._real_connection_attempted = False
         self._watermark_provider = watermark_provider
 
-    def connect(self) -> Any:
-        generic = self._settings.vector_backend == "milvus"
-        token = self._settings.vector_token if generic else self._settings.zilliz_cloud_token
+    def connect(self, *, database: str | None = None) -> Any:
+        connection = vector_connection_kwargs(self._settings, database=database)
         self._real_connection_attempted = True
-        self._client = self._client_factory(
-            uri=self._settings.vector_uri if generic else self._settings.zilliz_cloud_uri,
-            token=token.get_secret_value() if token is not None else "",
-            db_name=(
-                self._settings.vector_database if generic else self._settings.zilliz_cloud_database
-            ),
-            timeout=vector_timeout(self._settings),
-        )
+        self._client = self._client_factory(**connection)
         return self._client
 
     def _connected(self) -> Any:
@@ -172,7 +170,9 @@ class MilvusHybridAdapter:
                 "database_list_contains_configured_name": database_list_contains_name,
                 "database_list_entry_count": len(databases),
                 "collection_count": len(collections),
-                "capacity_available_under_last_observed_limit": len(collections) < 5,
+                "capacity_available_under_last_observed_limit": (
+                    len(collections) < 5 if self._settings.vector_backend == "zilliz" else None
+                ),
                 "collection_exists": False,
                 "schema_compatible": False,
                 "missing_fields": sorted(required_fields),
@@ -267,6 +267,7 @@ class MilvusHybridAdapter:
                 collection_name=vector_collection_name(self._settings),
                 data=[query],
                 anns_field=vector_sparse_field(self._settings),
+                timeout=vector_timeout(self._settings),
                 filter=build_zilliz_filter(context),
                 limit=limit,
                 output_fields=["chunk_id", "document_version_id", "parent_chunk_id", "zilliz_pk"],
@@ -286,6 +287,7 @@ class MilvusHybridAdapter:
                 collection_name=vector_collection_name(self._settings),
                 data=[list(vector)],
                 anns_field=vector_dense_field(self._settings),
+                timeout=vector_timeout(self._settings),
                 filter=build_zilliz_filter(context),
                 limit=limit,
                 output_fields=["chunk_id", "document_version_id", "parent_chunk_id", "zilliz_pk"],
@@ -426,6 +428,7 @@ class MilvusHybridAdapter:
             ),
             "security_consistency": vector_security_consistency(self._settings),
             "token_in_status": False,
+            "password_in_status": False,
             "real_connection_attempted": self._real_connection_attempted,
             "mutating_call_performed": False,
         }
