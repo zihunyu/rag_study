@@ -210,6 +210,13 @@ def run_worker(argv: Sequence[str] | None = None) -> int:
         while True:
             if time.monotonic() >= next_usage_archive:
                 next_usage_archive = time.monotonic() + 600
+                from ragkb.infrastructure.auxiliary_maintenance import maintain_auxiliary
+
+                maintain_auxiliary(
+                    components.settings,
+                    components.search_service.embedding,
+                    components.reuse_ledger,
+                )
                 try:
                     heartbeat.ledger.archive_usage(
                         before=time.time()

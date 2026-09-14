@@ -899,6 +899,30 @@ class SQLiteUploadRepository:
             ).fetchone()
         return row is not None
 
+    def directory_sync_states(self, version_ids: list[str]) -> dict[str, dict[str, Any]]:
+        result: dict[str, dict[str, Any]] = {}
+        with self.database.connect() as db:
+            for offset in range(0, len(version_ids), 500):
+                batch = version_ids[offset : offset + 500]
+                rows = db.execute(
+                    "SELECT v.*,d.state AS document_state,c.space_id, "  # noqa: S608 -- placeholders only
+                    "(SELECT v2.id FROM document_versions v2 WHERE v2.document_id=v.document_id "
+                    "ORDER BY v2.version_no DESC LIMIT 1) AS latest_version_id, "
+                    "EXISTS(SELECT 1 FROM document_quality_reports q JOIN publication_candidates p "
+                    "ON p.version_id=q.version_id WHERE q.version_id=v.id "
+                    "AND v.processing_state='VALIDATED' "
+                    "AND p.projection_state IN ('STAGED','ACTIVE') "
+                    "AND p.expected_checksum=v.content_sha256 "
+                    "AND p.observed_checksum=v.content_sha256 "
+                    "AND p.observed_watermark>=p.required_watermark) AS ingestion_complete "
+                    "FROM document_versions v JOIN documents d ON d.id=v.document_id "
+                    "JOIN sources s ON s.id=d.source_id JOIN corpora c ON c.id=s.corpus_id "
+                    "WHERE v.id IN (" + ",".join("?" for _ in batch) + ")",
+                    batch,  # noqa: S608 -- placeholders only
+                ).fetchall()
+                result.update((row["id"], dict(row)) for row in rows)
+        return result
+
     def save_document_review(
         self,
         *,

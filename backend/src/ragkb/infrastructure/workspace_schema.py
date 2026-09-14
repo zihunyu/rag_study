@@ -181,6 +181,17 @@ WORKSPACE_INDEXES.update(
 )
 
 
+WORKSPACE_TABLES["feedback_work_items"] = """
+    id VARCHAR(191) PRIMARY KEY, tenant_id VARCHAR(191) NOT NULL,
+    space_id VARCHAR(191) NOT NULL, state VARCHAR(32) NOT NULL,
+    revision INTEGER NOT NULL, payload_json LONGTEXT NOT NULL,
+    created_at DOUBLE NOT NULL, updated_at DOUBLE NOT NULL
+"""
+WORKSPACE_INDEXES["idx_feedback_work_scope"] = (
+    "feedback_work_items(tenant_id, space_id, state, updated_at)"
+)
+
+
 def mysql_workspace_migrations() -> tuple[tuple[str, str], ...]:
     tables = tuple(
         (

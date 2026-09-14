@@ -14,7 +14,9 @@ from starlette.concurrency import run_in_threadpool
 from ragkb.adapters.auth import AuthenticationError, AuthorizationError
 from ragkb.adapters.conversation_context import LocalContextResolver, ModelContextResolver
 from ragkb.api.routers.conversations import build_conversations_router
+from ragkb.api.routers.directory_removals import build_directory_removals_router
 from ragkb.api.routers.documents import build_documents_router
+from ragkb.api.routers.feedback_workflow import build_feedback_workflow_router
 from ragkb.api.routers.governance import build_governance_router
 from ragkb.api.routers.health import build_health_router
 from ragkb.api.routers.lifecycle import build_lifecycle_router
@@ -276,6 +278,8 @@ def create_app(components: RuntimeComponents | None = None) -> FastAPI:
 
     app.include_router(build_accounts_router(runtime, accounts))
     app.include_router(build_acceptance_router(acceptance_service))
+    app.include_router(build_directory_removals_router(acceptance_service))
+    app.include_router(build_feedback_workflow_router(acceptance_service))
     app.include_router(build_health_router(runtime))
     app.include_router(build_workspace_router(runtime))
     app.include_router(build_conversations_router(runtime, conversation_service))

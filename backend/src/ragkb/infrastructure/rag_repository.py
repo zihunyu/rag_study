@@ -108,6 +108,9 @@ class SQLiteRAGRunRepository:
         return _package(data) if data is not None else None
 
     def save_feedback(self, feedback: Feedback) -> None:
+        from ragkb.infrastructure.feedback_capture import capture
+
+        identity = feedback.feedback_id or new_uuid7()
         with self.database.transaction(immediate=True) as connection:
             connection.execute(
                 """
@@ -116,9 +119,10 @@ class SQLiteRAGRunRepository:
                     index_generation_id, retrieval_revision, prompt_revision,
                     model_revision, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO NOTHING
                 """,
                 (
-                    new_uuid7(),
+                    identity,
                     feedback.rag_run_id,
                     feedback.user_id,
                     feedback.rating,
@@ -131,6 +135,7 @@ class SQLiteRAGRunRepository:
                     time.time(),
                 ),
             )
+            capture(connection.cursor(), feedback, identity)
 
     def get_evidence(self, run_id: str, evidence_id: str) -> Evidence | None:
         with self.database.connect() as connection:

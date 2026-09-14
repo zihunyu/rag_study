@@ -134,6 +134,7 @@ class SearchBackedEvidenceProvider:
             if readable is False:
                 return EvidencePackage(
                     rag_run_id=new_uuid7(),
+                    space_id=selected_space_id,
                     tenant_id=tenant_id,
                     user_id=user_id,
                     query=question,
@@ -183,6 +184,7 @@ class SearchBackedEvidenceProvider:
         if assessment.disposition is not QuestionDisposition.ANSWERABLE:
             return EvidencePackage(
                 rag_run_id=new_uuid7(),
+                space_id=selected_space_id,
                 tenant_id=tenant_id,
                 user_id=user_id,
                 query=question,
@@ -205,6 +207,7 @@ class SearchBackedEvidenceProvider:
             contents, report = self.overview_reader.read(question, context)
             return EvidencePackage(
                 rag_run_id=new_uuid7(),
+                space_id=selected_space_id,
                 tenant_id=tenant_id,
                 user_id=user_id,
                 query=question,
@@ -599,6 +602,7 @@ class SearchBackedEvidenceProvider:
             }
         return EvidencePackage(
             rag_run_id=new_uuid7(),
+            space_id=selected_space_id,
             tenant_id=tenant_id,
             user_id=user_id,
             query=question,

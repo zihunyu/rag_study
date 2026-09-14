@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "backend/src"))
 from ragkb.adapters.directory_ledger import SQLiteDirectorySyncLedger  # noqa: E402
 from ragkb.application.directory_sync import DirectorySync, digest  # noqa: E402
 from ragkb.config.env import SECRET_KEYS, EnvSettings  # noqa: E402
+from ragkb.infrastructure.file_fingerprint import fingerprint  # noqa: E402
 from ragkb.runtime_components import build_runtime_components  # noqa: E402
 
 
@@ -80,6 +81,11 @@ def main() -> int:
         help="Create new versions for failed/cancelled imports",
     )
     parser.add_argument("--report", type=Path, help="Write the full manifest and per-file results")
+    parser.add_argument(
+        "--verify-content",
+        action="store_true",
+        help="Rehash every file regardless of change metadata",
+    )
     args = parser.parse_args()
     runtime = build_runtime_components(repository_root=ROOT)
     selected = processing_settings(runtime.settings)
@@ -99,9 +105,15 @@ def main() -> int:
             SQLiteDirectorySyncLedger(runtime.storage.root / "sync/directory.sqlite3"),
             contract,
             max_files=runtime.settings.directory_sync_max_files,
+            content_recheck_hours=runtime.settings.directory_sync_content_recheck_hours,
+            fingerprint_source=fingerprint,
         )
         result = service.run(
-            args.directory, args.space_id, apply=args.apply, retry_failed=args.retry_failed
+            args.directory,
+            args.space_id,
+            apply=args.apply,
+            retry_failed=args.retry_failed,
+            verify_content=args.verify_content,
         )
         if args.report:
             args.report.parent.mkdir(parents=True, exist_ok=True)

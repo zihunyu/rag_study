@@ -115,6 +115,7 @@ class SQLCursor:
         )
         sql = re.sub(r"AS incoming\s+ON DUPLICATE KEY UPDATE", "ON CONFLICT DO UPDATE SET", sql)
         sql = sql.replace("incoming.", "excluded.")
+        sql = re.sub(r"ON DUPLICATE KEY UPDATE (\w+)=\1", "ON CONFLICT DO NOTHING", sql)
         return self.cursor.execute(sql, parameters)
 
     def fetchall(self):

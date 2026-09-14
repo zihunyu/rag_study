@@ -138,7 +138,7 @@ class VisualLedger:
             )
 
     def cache_get(self, scope: str, identity: str) -> dict[str, Any] | None:
-        with self.connect() as db:
+        with self.connect(timeout=0.2) as db:
             row = db.execute(
                 "SELECT payload FROM visual_cache WHERE scope=? AND identity=? AND expires>?",
                 (scope, identity, time.time()),
@@ -146,7 +146,7 @@ class VisualLedger:
         return json.loads(row[0]) if row else None
 
     def cache_put(self, scope: str, identity: str, payload: dict[str, Any], ttl: int) -> None:
-        with self.connect() as db:
+        with self.connect(timeout=0.2) as db:
             db.execute("DELETE FROM visual_cache WHERE expires<?", (time.time(),))
             db.execute(
                 "INSERT OR REPLACE INTO visual_cache VALUES(?,?,?,?)",

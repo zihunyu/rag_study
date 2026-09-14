@@ -6,29 +6,58 @@ import re
 from typing import Any
 
 from ragkb.domain.errors import InvalidProviderResponse
+from ragkb.domain.question_requirements import explicit_requirements
 from ragkb.domain.rag import ClaimVerdict, DraftAnswer, Evidence
 
 
 def question_aspects(question: str) -> tuple[str, ...]:
     original = question.strip()
+    expanded = explicit_requirements(original)
+    if expanded:
+        return expanded[:31] + ("；".join(expanded[31:]),) if len(expanded) > 32 else expanded
     pieces: list[str] = []
     current: list[str] = []
     closers: list[str] = []
     pairs = {"(": ")", "（": "）", "[": "]", "【": "】", "“": "”", "「": "」", '"': '"', "`": "`"}
-    for char in original:
+    interrogative = re.compile(
+        r"多久|多长|多少|哪些|什么|如何|怎么|是否|能否|可否|几点|何时|哪里|哪儿|几[年月天次个]|"
+        r"\b(?:how|what|when|where|which|does|can|is|are)\b",
+        re.IGNORECASE,
+    )
+    # Split parallel requests, but keep comma-separated premises with their question.
+    for offset, char in enumerate(original):
         if closers and char == closers[-1]:
             closers.pop()
         elif char in pairs:
             closers.append(pairs[char])
-        if not closers and char in "；;？?。\n、":
+        parallel_comma = (
+            char in "，,"
+            and interrogative.search("".join(current))
+            and interrogative.search(re.split(r"[，,；;？?。\n]", original[offset + 1 :])[0])
+        )
+        if not closers and (char in "；;？?。\n、" or parallel_comma):
             pieces.append("".join(current).strip())
             current = []
         else:
             current.append(char)
     pieces.append("".join(current).strip())
     if len([p for p in pieces if len(p) >= 2]) < 2 and not any(c in original for c in pairs):
-        pieces = re.split(r"以及|同时|另外|并且|，(?=如何|是否|哪些|什么|怎么|能否|多少)", original)
+        parallel_parts = re.split(
+            r"以及|同时|另外|并且|，(?=如何|是否|哪些|什么|怎么|能否|多少)", original
+        )
+        if len(parallel_parts) > 1 and all(
+            interrogative.search(part) or re.search(r"请|列出|给出|介绍|说明|告诉我", part)
+            for part in parallel_parts
+        ):
+            pieces = parallel_parts
     facets = list(dict.fromkeys(p.strip(" ，,。？?；;") for p in pieces if len(p.strip()) >= 2))
+    if len(facets) < 2 and not any(c in original for c in pairs):
+        parallel = re.split(
+            r"(?:和|及|与|并)(?=.{0,30}(?:多久|多少|哪些|什么|如何|怎么|是否|能否))|\band\b",
+            original,
+        )
+        if len(parallel) > 1 and all(interrogative.search(p) for p in parallel):
+            facets = [p.strip() for p in parallel]
     if len(facets) < 2 and not any(c in original for c in pairs):
         attributes = re.fullmatch(
             r"(?:请)?(?:给出|列出|说明|介绍|提供|查询|告诉我)(.{1,80}?)的(.{2,160})[？?。]?",
@@ -38,6 +67,24 @@ def question_aspects(question: str) -> tuple[str, ...]:
             parts = re.split(r"和|以及|及|与", attributes[2].strip("？?。"))
             if len(parts) > 1 and all(len(p.strip()) >= 2 for p in parts):
                 facets = [f"{attributes[1]}的{part.strip()}" for part in parts]
+    if len(facets) < 2:
+        # Attribute questions need not begin with an imperative such as "请给出".
+        noun_request = re.fullmatch(
+            r"(?:(.{1,80}?)的)?(.{2,120}?)(?:分别)?(?:是什么|有哪些|怎么样|如何)?[？?。]?", original
+        )
+        if noun_request:
+            fields_requested = re.split(r"和|与|以及|及", noun_request[2])
+            field = (
+                r".{0,20}(?:期限|时长|材料|流程|步骤|费用|价格|条件|范围|方式|限制|"
+                r"参数|特点|用途|时间|地址|电话)"
+            )
+            if len(fields_requested) > 1 and all(
+                re.fullmatch(field, part.strip()) for part in fields_requested
+            ):
+                facets = [
+                    (f"{noun_request[1]}的" if noun_request[1] else "") + part.strip()
+                    for part in fields_requested
+                ]
     if len(facets) < 2:
         comparison = re.fullmatch(
             r"(?:请)?(?:比较|对比)(.{1,60}?)(?:和|与)(.{1,60}?)的(.{2,100})[？?。]?", original
@@ -179,7 +226,7 @@ def coverage_report(
             }
         )
     return {
-        "revision": "required-aspects-v1",
+        "revision": "required-aspects-v3",
         "complete": all(row["answer_status"] == "answered" for row in rows),
         "items": rows,
         "answered": sum(row["answer_status"] == "answered" for row in rows),

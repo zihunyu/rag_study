@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+from collections.abc import Sequence
 from typing import Any
 
 from ragkb.contracts.jobs import QueueConflictError, QueueJob, QueueLeaseError, QueueStateError
@@ -399,6 +400,18 @@ class SQLitePersistentJobQueue:
         with self.database.connect() as connection:
             row = connection.execute("SELECT * FROM job_queue WHERE id = ?", (job_id,)).fetchone()
             return self._from_row(row) if row is not None else None
+
+    def get_many(self, job_ids: Sequence[str]) -> dict[str, QueueJob]:
+        result: dict[str, QueueJob] = {}
+        with self.database.connect() as db:
+            for offset in range(0, len(job_ids), 900):
+                batch = job_ids[offset : offset + 900]
+                rows = db.execute(
+                    "SELECT * FROM job_queue WHERE id IN (" + ",".join("?" for _ in batch) + ")",  # noqa: S608 -- placeholders only
+                    batch,
+                ).fetchall()  # noqa: S608 -- placeholders only
+                result.update((row["id"], self._from_row(row)) for row in rows)
+        return result
 
     def dead_letters(self, *, limit: int = 100) -> tuple[dict[str, Any], ...]:
         if limit < 1:

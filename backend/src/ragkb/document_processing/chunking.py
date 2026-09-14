@@ -125,7 +125,7 @@ def _windows(
                 windows
                 and token_end == len(spans)
                 and count_tokens(piece, tokenizer) < config.min_tokens
-                and count_tokens(text[windows[-1][1]:end].strip(), tokenizer) <= config.max_tokens
+                and count_tokens(text[windows[-1][1] : end].strip(), tokenizer) <= config.max_tokens
             ):
                 _, previous_start, _ = windows.pop()
                 merged = text[previous_start:end].strip()
@@ -371,7 +371,8 @@ class TokenAwareChunker:
                 child.section_id != grouped[-1].section_id
                 or count_tokens(
                     "\n".join(item.display_text for item in (*grouped, child)), self.tokenizer
-                ) > self.config.parent_max_tokens
+                )
+                > self.config.parent_max_tokens
             ):
                 flush_parent()
             grouped.append(child)
@@ -387,6 +388,8 @@ class TokenAwareChunker:
             context.append(f"DOCUMENT_TITLE: {document_title}")
         if heading:
             context.append(heading)
+        if node.metadata.get("table_title"):
+            context.append(f"TABLE_TITLE: {node.metadata['table_title']}")
         table_header = str(node.metadata.get("table_header", "")).strip()
         if node.node_type is NodeType.TABLE and not table_header:
             header = re.search(r"<thead\b[^>]*>.*?</thead\s*>", node.original_text, re.I | re.S)

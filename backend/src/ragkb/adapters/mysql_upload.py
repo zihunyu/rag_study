@@ -889,6 +889,66 @@ class MySQLUploadRepository:
             >= int(candidate.get("required_watermark", 0))
         )
 
+    def directory_sync_states(self, version_ids: list[str]) -> dict[str, dict[str, Any]]:
+        result = {}
+        connection = self.control.connect()
+        try:
+            cursor = connection.cursor()
+            for offset in range(0, len(version_ids), 500):
+                batch = version_ids[offset : offset + 500]
+                versions = self._entities.load(cursor, entity_type="versions", entity_ids=batch)
+                documents = list({str(row.payload["document_id"]) for row in versions.values()})
+                docs = {
+                    row.logical_key: row.payload
+                    for row in self._entities.load(
+                        cursor, entity_type="documents", entity_ids=documents
+                    ).values()
+                }
+                latest = {
+                    row.parent_id: row.logical_key
+                    for row in self._entities.load(
+                        cursor, entity_type="versions", parent_ids=documents, latest_per="parent_id"
+                    ).values()
+                }
+                quality = {
+                    row.logical_key
+                    for row in self._entities.load(
+                        cursor, entity_type="quality", entity_ids=batch
+                    ).values()
+                }
+                candidates = {
+                    row.logical_key: row.payload
+                    for row in self._entities.load(
+                        cursor, entity_type="candidates", entity_ids=batch
+                    ).values()
+                }
+                for row in versions.values():
+                    v = row.payload
+                    doc = docs.get(v["document_id"], {})
+                    p = candidates.get(row.logical_key, {})
+                    space = doc.get("space_id")
+                    if not space and doc:
+                        space = self.get_document_space(v["document_id"])
+                    complete = (
+                        v.get("processing_state") == "VALIDATED"
+                        and row.logical_key in quality
+                        and p.get("projection_state") in {"STAGED", "ACTIVE"}
+                        and p.get("expected_checksum") == v.get("content_sha256")
+                        and p.get("observed_checksum") == v.get("content_sha256")
+                        and int(p.get("observed_watermark", -1))
+                        >= int(p.get("required_watermark", 0))
+                    )
+                    result[row.logical_key] = {
+                        **v,
+                        "document_state": doc.get("state"),
+                        "space_id": space,
+                        "latest_version_id": latest.get(v["document_id"]),
+                        "ingestion_complete": complete,
+                    }
+            return result
+        finally:
+            connection.close()
+
     def save_document_review(
         self,
         *,

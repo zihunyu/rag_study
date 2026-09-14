@@ -410,6 +410,8 @@ def build_rag_router(runtime: RuntimeComponents) -> APIRouter:
         except KeyError as error:
             raise ResourceNotFoundError(rag_run_id) from error
         return FeedbackResponse(
+            feedback_id=item.feedback_id,
+            work_item_id=item.feedback_id if item.rating <= 3 else None,
             rag_run_id=item.rag_run_id,
             accepted=True,
             index_generation_id=item.index_generation_id,

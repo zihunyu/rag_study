@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import time
+from contextlib import nullcontext
 from typing import Any
 
 from ragkb.application.acceptance_budget import AcceptancePaused
@@ -56,9 +57,11 @@ class AcceptanceRepository:
         payload: dict[str, Any],
         revision: int,
         identity: str = "",
+        *,
+        connection: Any = None,
     ) -> dict[str, Any]:
         identity = identity or fingerprint([self.tenant, space, payload["key"]])[:36]
-        with self.db.transaction() as c:
+        with self.db.transaction() if connection is None else nullcontext(connection) as c:
             row = self.db.one(
                 c, "SELECT * FROM acceptance_cases WHERE id=?" + self.lock(), (identity,)
             )

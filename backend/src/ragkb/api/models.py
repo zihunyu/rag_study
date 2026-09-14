@@ -282,6 +282,8 @@ class FeedbackResponse(StrictModel):
     retrieval_revision: str
     prompt_revision: str
     model_revision: str
+    feedback_id: str = ""
+    work_item_id: str | None = None
 
 
 class RollbackRequest(StrictModel):

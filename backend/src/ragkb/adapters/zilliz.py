@@ -15,7 +15,11 @@ from pymilvus.exceptions import (
     SchemaMismatchRetryableException,
 )
 
-from ragkb.adapters.embedding_contracts import EmbeddingContractRegistry, vector_target
+from ragkb.adapters.embedding_contracts import (
+    EmbeddingContractRegistry,
+    encoded_contract,
+    vector_target,
+)
 from ragkb.adapters.vector_indexing import (
     ZillizChunkIndexingSink,
     ZillizSafeProjectionWriter,
@@ -27,6 +31,7 @@ from ragkb.adapters.vector_indexing import (
     vector_sparse_field,
     vector_timeout,
 )
+from ragkb.application.validation_scope import validate_once
 from ragkb.config import EnvSettings
 from ragkb.config.vector import vector_connection_kwargs
 from ragkb.domain.errors import ProviderAuthenticationError, ProviderUnavailable, SchemaMismatch
@@ -131,7 +136,16 @@ class MilvusHybridAdapter:
 
     def validate_embedding_contract(self, generation: str) -> None:
         if self.embedding_contracts is not None:
-            self.embedding_contracts.require(self._settings, generation)
+            registry = self.embedding_contracts
+            validate_once(
+                (
+                    id(registry),
+                    vector_target(self._settings),
+                    generation,
+                    encoded_contract(self._settings),
+                ),
+                lambda: registry.require(self._settings, generation),
+            )
 
     def prepare_generation(self, generation: str) -> None:
         registry = self.embedding_contracts

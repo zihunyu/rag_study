@@ -7,7 +7,7 @@ from dataclasses import replace
 
 from ragkb.domain.retrieval import IndexCandidate
 
-REVISION = "condition-preserving-facets-v1"
+REVISION = "condition-preserving-facets-v2"
 
 
 def plan_queries(query: str, maximum: int = 4) -> tuple[str, ...]:

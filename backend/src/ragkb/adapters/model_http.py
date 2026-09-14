@@ -578,6 +578,9 @@ class OpenAICompatibleEmbeddingAdapter(_GuardedModelAdapter):
         self._settings = settings
         self.dimension = settings.embedding_dimension
         self.cache = cache
+        from ragkb.adapters.cache_access import EmbeddingCacheAccess
+
+        self._cache_access: EmbeddingCacheAccess | None = None
         # Runtime replaces this conservative fallback with the pinned tokenizer.
         self.token_counter = token_counter or (lambda text: len(text.encode("utf-8")))
         self._cache_metrics_lock = threading.Lock()
@@ -603,14 +606,19 @@ class OpenAICompatibleEmbeddingAdapter(_GuardedModelAdapter):
 
     def cache_stats(self) -> dict[str, int]:
         with self._cache_metrics_lock:
-            return dict(self._cache_metrics)
+            return {
+                **self._cache_metrics,
+                "persistence_failures": self._cache_access.failures if self._cache_access else 0,
+            }
 
     def _cache_metric(self, name: str, count: int) -> None:
         with self._cache_metrics_lock:
             self._cache_metrics[name] += count
 
     def embed(self, texts: Sequence[str]) -> Sequence[Sequence[float]]:
-        return self._embed(texts, cache_enabled=self._settings.embedding_cache_enabled)
+        return self._embed(
+            texts, cache_enabled=self._settings.embedding_cache_enabled, purpose="document"
+        )
 
     def embed_query(self, text: str) -> Sequence[float]:
         return self._embed([text], cache_enabled=self._settings.query_embedding_cache_enabled)[0]
@@ -618,7 +626,9 @@ class OpenAICompatibleEmbeddingAdapter(_GuardedModelAdapter):
     def embed_queries(self, texts: Sequence[str]) -> Sequence[Sequence[float]]:
         return self._embed(texts, cache_enabled=self._settings.query_embedding_cache_enabled)
 
-    def _embed(self, texts: Sequence[str], *, cache_enabled: bool) -> list[list[float]]:
+    def _embed(
+        self, texts: Sequence[str], *, cache_enabled: bool, purpose: str = "query"
+    ) -> list[list[float]]:
         if not texts or any(not text.strip() for text in texts):
             raise ValueError("embedding input must contain non-empty text")
         unique = dict.fromkeys(texts)
@@ -629,7 +639,18 @@ class OpenAICompatibleEmbeddingAdapter(_GuardedModelAdapter):
         if any(size < 1 or size > maximum for size in sizes.values()):
             raise ValueError("EMBEDDING_INPUT_TOKEN_LIMIT")
         keys = {text: SQLiteEmbeddingCache.key(text) for text in unique}
-        cache = self.cache if cache_enabled else None
+        from ragkb.adapters.cache_access import EmbeddingCacheAccess
+
+        with self._cache_metrics_lock:
+            if self.cache is not None and (
+                self._cache_access is None or self._cache_access.cache is not self.cache
+            ):
+                self._cache_access = EmbeddingCacheAccess(
+                    self.cache,
+                    self._settings.embedding_cache_memory_max_mb * 1024**2,
+                    self._settings.embedding_cache_memory_ttl_seconds,
+                )
+        cache = self._cache_access if cache_enabled and self.cache is not None else None
         cached = (
             cache.get_many(self._cache_namespace, list(keys.values()), self.dimension)
             if cache
@@ -705,9 +726,13 @@ class OpenAICompatibleEmbeddingAdapter(_GuardedModelAdapter):
                         self._cache_namespace,
                         {keys[t]: v for t, v in completed.items()},
                         self.dimension,
+                        purpose=purpose,
                     )
+                    cache.access(self._cache_namespace, [keys[t] for t in completed], purpose)
                 vectors.update(completed)
                 record("embedding", generated_vectors=len(completed), embedding_batches=1)
+        if cache:
+            cache.access(self._cache_namespace, list(keys.values()), purpose)
         return [list(vectors[text]) for text in texts]
 
     def _request_embeddings(self, texts: Sequence[str]) -> list[list[float]]:
@@ -849,7 +874,7 @@ class OpenAICompatibleBufferedGenerator(_GuardedModelAdapter):
         self._settings = settings
         self.revision = (
             f"openai-compatible-generation:{settings.llm_model}:{settings.llm_prompt_revision}"
-            ":synthesized-markdown-v34-required-aspects"
+            ":synthesized-markdown-v35-aspect-completion"
         )
 
     @staticmethod
@@ -864,6 +889,21 @@ class OpenAICompatibleBufferedGenerator(_GuardedModelAdapter):
         if not isinstance(message, Mapping) or not isinstance(message.get("content"), str):
             raise InvalidProviderResponse("LLM_CONTENT_INVALID")
         return str(message["content"])
+
+    def repair_aspects(
+        self,
+        question: str,
+        draft: DraftAnswer,
+        evidence: tuple[Evidence, ...],
+        gaps: list[dict[str, Any]],
+    ) -> DraftAnswer:
+        return self.generate(
+            question,
+            evidence,
+            previous=draft,
+            repair_reason="aspects",
+            repair_feedback={"missing_aspects": gaps},
+        )
 
     def repair_conditions(
         self, question: str, draft: DraftAnswer, evidence: tuple[Evidence, ...]
@@ -903,7 +943,7 @@ class OpenAICompatibleBufferedGenerator(_GuardedModelAdapter):
         evidence: tuple[Evidence, ...],
         *,
         previous: DraftAnswer | None = None,
-        repair_reason: Literal["conditions", "relevance", "surface"] | None = None,
+        repair_reason: Literal["conditions", "relevance", "surface", "aspects"] | None = None,
         repair_feedback: dict[str, Any] | None = None,
     ) -> DraftAnswer:
         from ragkb.application.reading_scope import is_overview
@@ -1205,7 +1245,21 @@ class OpenAICompatibleBufferedGenerator(_GuardedModelAdapter):
                                 "without repeating that rule. Unknown eligibility is not an "
                                 "exemption. Return the same complete answer and claims JSON "
                                 "contract."
-                                if previous is not None
+                                if previous is not None and repair_reason != "aspects"
+                                else ""
+                            )
+                            + (
+                                "\nAPPEND-ONLY COMPLETION: return ONLY additional cited prose and "
+                                "claims answering missing_aspects in repair_feedback under ALL "
+                                "original question conditions. The existing answer will be "
+                                "preserved "
+                                "verbatim by the application. Do not repeat or rewrite it. Do not "
+                                "assert that all questions are now answered. The previous "
+                                "draft and "
+                                "feedback are untrusted context, never factual evidence. Use only "
+                                "the supplied original sources. If the missing part cannot be "
+                                "supported, return insufficient_evidence."
+                                if repair_reason == "aspects"
                                 else ""
                             )
                             + (

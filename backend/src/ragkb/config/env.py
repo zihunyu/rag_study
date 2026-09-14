@@ -308,6 +308,16 @@ class EnvSettings(BaseModel):
     embedding_max_batch_tokens: int = Field(default=32768, gt=0)
     embedding_cache_enabled: bool = True
     query_embedding_cache_enabled: bool = True
+    embedding_cache_document_retention_days: int = Field(default=365, ge=1)
+    embedding_cache_query_retention_days: int = Field(default=30, ge=1)
+    embedding_cache_document_max_mb: int = Field(default=16384, ge=1)
+    embedding_cache_query_max_mb: int = Field(default=512, ge=1)
+    embedding_cache_memory_max_mb: int = Field(default=64, ge=1)
+    embedding_cache_memory_ttl_seconds: int = Field(default=600, ge=1)
+    reuse_raw_retention_days: int = Field(default=90, ge=1)
+    reuse_summary_retention_days: int = Field(default=730, ge=1)
+    reuse_max_finished_attempts: int = Field(default=100000, ge=1)
+    directory_sync_content_recheck_hours: int = Field(default=24, ge=1)
     embedding_cache_revision: str = "provider-output-v1"
 
     reranker_base_url: str = ""

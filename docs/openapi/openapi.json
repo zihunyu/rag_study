@@ -1419,6 +1419,55 @@
         "title": "EvidenceSourceResponse",
         "type": "object"
       },
+      "FeedbackAction": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "claim",
+              "create_case",
+              "link_case",
+              "ready_for_retest",
+              "record_retest",
+              "dismiss",
+              "reopen"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "attempt_id": {
+            "default": "",
+            "maxLength": 191,
+            "title": "Attempt Id",
+            "type": "string"
+          },
+          "case_id": {
+            "default": "",
+            "maxLength": 191,
+            "title": "Case Id",
+            "type": "string"
+          },
+          "note": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "title": "Note",
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 1.0,
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "action",
+          "note"
+        ],
+        "title": "FeedbackAction",
+        "type": "object"
+      },
       "FeedbackRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1455,6 +1504,11 @@
             "title": "Accepted",
             "type": "boolean"
           },
+          "feedback_id": {
+            "default": "",
+            "title": "Feedback Id",
+            "type": "string"
+          },
           "index_generation_id": {
             "title": "Index Generation Id",
             "type": "string"
@@ -1474,6 +1528,17 @@
           "retrieval_revision": {
             "title": "Retrieval Revision",
             "type": "string"
+          },
+          "work_item_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Work Item Id"
           }
         },
         "required": [
@@ -2967,6 +3032,39 @@
           "backup_receipt_sha256"
         ],
         "title": "RematerializationRequest",
+        "type": "object"
+      },
+      "RemovalReview": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "withdraw",
+              "keep",
+              "reopen"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "note": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "title": "Note",
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 1.0,
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "action",
+          "note"
+        ],
+        "title": "RemovalReview",
         "type": "object"
       },
       "RetrievalHealth": {
@@ -11206,6 +11304,126 @@
         ]
       }
     },
+    "/api/spaces/{space_id}/directory-removals": {
+      "get": {
+        "operationId": "list_reviews_api_spaces__space_id__directory_removals_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "title": "Space Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response List Reviews Api Spaces  Space Id  Directory Removals Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "List Reviews",
+        "tags": [
+          "directory-sync"
+        ]
+      }
+    },
+    "/api/spaces/{space_id}/directory-removals/{identity}/review": {
+      "post": {
+        "operationId": "review_api_spaces__space_id__directory_removals__identity__review_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "title": "Space Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "identity",
+            "required": true,
+            "schema": {
+              "title": "Identity",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RemovalReview"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Review Api Spaces  Space Id  Directory Removals  Identity  Review Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Review",
+        "tags": [
+          "directory-sync"
+        ]
+      }
+    },
     "/api/spaces/{space_id}/documents": {
       "get": {
         "operationId": "documents_api_spaces__space_id__documents_get",
@@ -11489,6 +11707,208 @@
         "summary": "Document Workspace",
         "tags": [
           "workspace"
+        ]
+      }
+    },
+    "/api/spaces/{space_id}/feedback-work-items": {
+      "get": {
+        "operationId": "list_items_api_spaces__space_id__feedback_work_items_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "title": "Space Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "maximum": 1000000,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response List Items Api Spaces  Space Id  Feedback Work Items Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "List Items",
+        "tags": [
+          "feedback"
+        ]
+      }
+    },
+    "/api/spaces/{space_id}/feedback-work-items/{identity}": {
+      "get": {
+        "operationId": "detail_api_spaces__space_id__feedback_work_items__identity__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "title": "Space Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "identity",
+            "required": true,
+            "schema": {
+              "title": "Identity",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Detail Api Spaces  Space Id  Feedback Work Items  Identity  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Detail",
+        "tags": [
+          "feedback"
+        ]
+      }
+    },
+    "/api/spaces/{space_id}/feedback-work-items/{identity}/actions": {
+      "post": {
+        "operationId": "act_api_spaces__space_id__feedback_work_items__identity__actions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "title": "Space Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "identity",
+            "required": true,
+            "schema": {
+              "title": "Identity",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeedbackAction"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Act Api Spaces  Space Id  Feedback Work Items  Identity  Actions Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Act",
+        "tags": [
+          "feedback"
         ]
       }
     },

@@ -355,6 +355,7 @@ def test_completed_ingestion_outlives_queue_retention(directory_setup, monkeypat
     assert worker.run_once()
     assert runtime.repository.ingestion_complete(first["document_version_id"])
     monkeypatch.setattr(runtime.queue, "get", lambda key: None)
+    monkeypatch.setattr(runtime.queue, "get_many", lambda keys: {})
     assert sync.run(root, runtime.space_id)["reused"] == 1
     assert sync.run(root, runtime.space_id, apply=True)["reused"] == 1
     assert len(runtime.repository.get_versions(first["document_id"])) == 1

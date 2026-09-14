@@ -126,7 +126,8 @@ def corpus(tmp_path: Path):
 def test_one_answer_cites_each_selected_file_and_resolves_its_own_source(corpus, file_count, mode):
     components, client, space_id, documents = corpus
     expected_ids = {doc["document_id"] for doc in documents[:file_count]}
-    # Empty document_ids is the default UI's entire-knowledge-base scope.
+    # Empty document_ids permits discovery across the KB; it does not confirm
+    # that the inferred set includes every relevant companion document.
     reading = {"mode": mode}
     if file_count == 2:
         reading["document_ids"] = sorted(expected_ids)
@@ -151,7 +152,9 @@ def test_one_answer_cites_each_selected_file_and_resolves_its_own_source(corpus,
     assert {item.document_id for item in package.generation_evidence} == expected_ids
     if mode in {"compare", "overview"}:
         assert package.coverage_report["mode"] == "overview"
-        assert package.coverage_report["scope_complete"] is True
+        assert package.coverage_report["scope_complete"] is (file_count == 2)
+        assert package.coverage_report["scope_confirmed"] is (file_count == 2)
+        assert package.coverage_report["selected_documents_read_complete"] is True
         assert {
             d["document_id"] for d in package.coverage_report["source_documents"]
         } == expected_ids

@@ -31,6 +31,7 @@ from ragkb.application.evidence import SearchBackedEvidenceProvider
 from ragkb.application.governance import GovernanceService
 from ragkb.application.lifecycle import InMemoryLifecycleStore, LifecycleService
 from ragkb.application.observability import LocalObservabilityService
+from ragkb.application.overview_scope import search_documents
 from ragkb.application.qa import (
     TrustedQAService,
 )
@@ -216,7 +217,13 @@ def build_runtime_components(
     if isinstance(embedding, OpenAICompatibleEmbeddingAdapter):
         embedding.token_counter = lambda text: len(tokenizer.spans(text))
         if settings.embedding_cache_enabled or settings.query_embedding_cache_enabled:
-            embedding.cache = SQLiteEmbeddingCache(storage.root / "cache/embeddings.sqlite3")
+            embedding.cache = SQLiteEmbeddingCache(
+                storage.root / "cache/embeddings.sqlite3",
+                document_days=settings.embedding_cache_document_retention_days,
+                query_days=settings.embedding_cache_query_retention_days,
+                document_bytes=settings.embedding_cache_document_max_mb * 1024**2,
+                query_bytes=settings.embedding_cache_query_max_mb * 1024**2,
+            )
     chunker: ChunkerPort = (
         SemanticChunker(
             EmbeddingSemanticBoundaryScorer(embedding),
@@ -395,6 +402,9 @@ def build_runtime_components(
             settings,
             ChapterReader(settings, model_transport),
             visual_enricher,
+            scope_search=lambda question, context: search_documents(
+                search_service, retrieval.evidence_selector, question, context
+            ),
         )
         if settings.overview_enabled
         else None,

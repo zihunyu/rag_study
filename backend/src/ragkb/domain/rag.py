@@ -123,6 +123,7 @@ class EvidencePackage:
     subject_authorization_revision: str = ""
     # Private run-store data; never projected into AskResult or conversation APIs.
     diagnostics: dict[str, Any] = field(default_factory=dict)
+    space_id: str = ""
 
     def __post_init__(self) -> None:
         expected = [f"E{index}" for index in range(1, len(self.evidence) + 1)]
@@ -234,6 +235,10 @@ class Feedback:
     retrieval_revision: str
     prompt_revision: str
     model_revision: str
+    feedback_id: str = ""
+    tenant_id: str = ""
+    space_id: str = ""
+    question: str = ""
 
     def __post_init__(self) -> None:
         if self.rating < 1 or self.rating > 5:

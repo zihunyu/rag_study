@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import csv
 from collections.abc import Sequence
+from dataclasses import replace
+from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import openpyxl
 import xlrd
@@ -17,6 +19,8 @@ from pptx.enum.shapes import PP_PLACEHOLDER
 from ragkb.contracts.ports import ParsingDeferred
 from ragkb.document_processing.docx_positions import paragraph_positions
 from ragkb.document_processing.parser_common import canonical_document, text_nodes
+from ragkb.document_processing.spreadsheet_formulas import FormulaEvaluator, FormulaUnavailable
+from ragkb.document_processing.spreadsheet_structure import annotate_tables, merged_ranges
 from ragkb.domain.documents import CanonicalDocument, CanonicalNode, NodeType, SourceLocator
 from ragkb.domain.ids import new_uuid7
 
@@ -151,7 +155,7 @@ class PPTXParser:
 
 
 class SpreadsheetParser:
-    revision = "spreadsheet-structure"
+    revision = "spreadsheet-structure-v2-formulas-headers"
 
     @staticmethod
     def _node(
@@ -194,29 +198,62 @@ class SpreadsheetParser:
         workbook = openpyxl.load_workbook(source, read_only=True, data_only=False)
         nodes: list[CanonicalNode] = []
         tables: list[dict[str, Any]] = []
-        for sheet in workbook.worksheets:
-            row_count = 0
-            table_header = ""
-            for row_number, row in enumerate(sheet.iter_rows(values_only=True), start=1):
-                node = self._node(
-                    sheet.title,
-                    row_number,
-                    list(row),
-                    table_header=table_header,
-                )
-                if node is not None:
-                    if not table_header:
-                        table_header = node.original_text
-                        node = CanonicalNode(
-                            **{
-                                **node.__dict__,
-                                "metadata": {**node.metadata, "table_header": table_header},
-                            }
+        try:
+            cells: dict[tuple[str, str], Any] = {}
+            sheets: dict[str, list[tuple[int, list[Any]]]] = {}
+            for sheet in workbook.worksheets:
+                if (sheet.max_row or 0) * (sheet.max_column or 0) > 1000000:
+                    raise ParsingDeferred("SPREADSHEET_CELL_LIMIT", "工作表范围超过解析预算")
+                rows = []
+                for row_number, row in enumerate(sheet.iter_rows(values_only=True), start=1):
+                    values = list(row)
+                    if any(v is not None for v in values):
+                        rows.append((row_number, values))
+                        for col, value in enumerate(values, 1):
+                            cells[(sheet.title, f"{get_column_letter(col)}{row_number}")] = value
+                sheets[sheet.title] = rows
+            evaluator = FormulaEvaluator(cells)
+            for sheet in workbook.worksheets:
+                sheet_nodes = []
+                for row_number, values in sheets[sheet.title]:
+                    node = self._node(sheet.title, row_number, values)
+                    if node is None:
+                        continue
+                    formulas, additions = [], []
+                    for col, value in enumerate(values, 1):
+                        if not isinstance(value, str) or not value.startswith("="):
+                            continue
+                        address = f"{get_column_letter(col)}{row_number}"
+                        receipt: dict[str, Any] = {"cell": address, "formula": value}
+                        try:
+                            computed = evaluator.cell(sheet.title, address)
+                            assert isinstance(computed, Decimal)
+                            rendered = format(computed, "f")
+                            receipt.update(status="computed", value=rendered, basis="local_formula")
+                            additions.append(f"{address} 公式计算结果：{rendered}")
+                        except FormulaUnavailable as error:
+                            receipt.update(status="unresolved", reason=str(error))
+                            additions.append(
+                                f"{address} 公式未计算（{error}），不能作为已知数值使用"
+                            )
+                        formulas.append(receipt)
+                    if formulas:
+                        text = "\n".join([node.original_text, *additions])
+                        node = replace(
+                            node,
+                            original_text=text,
+                            display_text=text,
+                            metadata={**node.metadata, "formulas": formulas},
                         )
-                    nodes.append(node)
-                    row_count += 1
-            tables.append({"sheet": sheet.title, "non_empty_rows": row_count})
-        workbook.close()
+                    sheet_nodes.append(node)
+                # Read-only worksheets expose their OOXML member path; the archive is
+                # read as data only and existing upload validation bounds its expansion.
+                layout = merged_ranges(source, str(cast(Any, sheet)._worksheet_path))
+                structured, sheet_tables = annotate_tables(sheet_nodes, layout)
+                nodes.extend(structured)
+                tables.extend(sheet_tables)
+        finally:
+            workbook.close()
         return nodes, tables
 
     def _xls(self, source: Path) -> tuple[list[CanonicalNode], list[dict[str, Any]]]:
@@ -244,7 +281,12 @@ class SpreadsheetParser:
                         )
                     nodes.append(node)
                     row_count += 1
-            tables.append({"sheet": sheet.name, "non_empty_rows": row_count})
+            # Preserve a separate table structure for each worksheet.
+            sheet_nodes = nodes[-row_count:] if row_count else []
+            structured, sheet_tables = annotate_tables(sheet_nodes)
+            if row_count:
+                nodes[-row_count:] = structured
+            tables.extend(sheet_tables)
         workbook.release_resources()
         return nodes, tables
 
@@ -266,7 +308,7 @@ class SpreadsheetParser:
                     }
                 )
             nodes.append(node)
-        return nodes, [{"sheet": "csv", "non_empty_rows": len(nodes)}]
+        return annotate_tables(nodes)
 
     def parse(self, source: Path, document_version_id: str) -> CanonicalDocument:
         extension = source.suffix.casefold()

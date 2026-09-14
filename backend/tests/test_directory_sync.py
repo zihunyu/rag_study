@@ -3,6 +3,7 @@ from ragkb.adapters.directory_ledger import SQLiteDirectorySyncLedger
 from ragkb.application.directory_sync import DirectorySync
 from ragkb.application.worker import LocalIngestionWorker
 from ragkb.engineering_security.file_validation import FileValidationError
+from ragkb.infrastructure.file_fingerprint import fingerprint
 from ragkb.runtime_components import build_runtime_components
 
 
@@ -17,6 +18,7 @@ def setup(tmp_path):
         runtime.uploads,
         SQLiteDirectorySyncLedger(tmp_path / "sync.sqlite3"),
         lambda kind: kind + ":v1",
+        fingerprint_source=fingerprint,
     )
     return runtime, root, service
 
@@ -40,7 +42,10 @@ def test_preview_dedup_then_unchanged_sync_does_not_parse_again(setup):
     )
     assert worker.run_once()
     repeat = DirectorySync(
-        runtime.uploads, SQLiteDirectorySyncLedger(service.path), service.contract
+        runtime.uploads,
+        SQLiteDirectorySyncLedger(service.path),
+        service.contract,
+        fingerprint_source=fingerprint,
     ).run(root, runtime.space_id, apply=True)
     assert repeat["reused"] == 1 and repeat["created"] == 0
     assert repeat["results"][0]["job_state"] == "SUCCEEDED"
@@ -123,8 +128,8 @@ def test_source_changed_after_scan_is_rejected_by_upload_hash(setup, monkeypatch
     source.write_text("before")
     scan = service.scan
 
-    def changed(path):
-        result = scan(path)
+    def changed(path, *args, **kwargs):
+        result = scan(path, *args, **kwargs)
         source.write_text("after!")
         return result
 

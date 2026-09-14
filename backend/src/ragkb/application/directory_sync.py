@@ -6,13 +6,16 @@ import asyncio
 import hashlib
 import json
 import os
+import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from ragkb.application.directory_removals import reconcile_removals
 from ragkb.application.uploads import UploadService
 from ragkb.contracts.directory_sync import DirectorySyncLedgerPort
+from ragkb.contracts.jobs import QueueJob
 from ragkb.domain.state_machines import UploadSessionState
 from ragkb.engineering_security.file_validation import FORMAT_BY_EXTENSION
 
@@ -24,7 +27,7 @@ def digest(value: object) -> str:
 
 
 class DirectorySync:
-    """Local operator service. The ledger is a reuse hint; repository/queue stay authoritative."""
+    """Persist source manifests/reviews; repository and queue own ingestion/publication state."""
 
     def __init__(
         self,
@@ -33,12 +36,16 @@ class DirectorySync:
         contract: Callable[[str], str],
         *,
         max_files: int = 10000,
+        content_recheck_hours: int = 24,
+        fingerprint_source: Callable[[Path], list[int] | None] | None = None,
     ) -> None:
         self.uploads, self.repository, self.queue = uploads, uploads.repository, uploads.queue
         self.ledger = ledger
         self.path = ledger.path
         self.contract = contract
         self.max_files = max_files
+        self.content_recheck_seconds = content_recheck_hours * 3600
+        self.fingerprint_source = fingerprint_source or (lambda path: None)
 
     def _get(self, key: str) -> dict[str, Any]:
         return self.ledger.get(key)
@@ -50,8 +57,11 @@ class DirectorySync:
         if source.is_symlink() or source.is_junction() or not source.resolve().is_relative_to(root):
             raise ValueError("DIRECTORY_SOURCE_ESCAPES_ROOT")
 
-    def scan(self, root: Path) -> tuple[list[dict[str, Any]], list[str]]:
+    def scan(
+        self, root: Path, previous: dict[str, Any] | None = None, *, verify_content: bool = False
+    ) -> tuple[list[dict[str, Any]], list[str]]:
         files, skipped = [], []
+        previous = previous or {}
 
         def scan_error(error: OSError) -> None:
             raise error
@@ -76,10 +86,26 @@ class DirectorySync:
                 if size > self.uploads.validator.max_size_bytes:
                     raise ValueError("DIRECTORY_FILE_SIZE_LIMIT:" + relative)
                 before = source.stat()
-                with source.open("rb") as handle:
-                    checksum = hashlib.file_digest(handle, "sha256").hexdigest()
+                signature = self.fingerprint_source(source)
+                old = previous.get(relative, {})
+                now = time.time()
+                fast = bool(
+                    not verify_content
+                    and signature
+                    and old.get("fingerprint") == signature
+                    and 0 <= now - old.get("content_verified_at", 0) < self.content_recheck_seconds
+                    and old.get("sha256")
+                )
+                if fast:
+                    checksum = old["sha256"]
+                else:
+                    with source.open("rb") as handle:
+                        checksum = hashlib.file_digest(handle, "sha256").hexdigest()
                 after = source.stat()
-                if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+                if (before.st_size, before.st_mtime_ns) != (
+                    after.st_size,
+                    after.st_mtime_ns,
+                ) or signature != self.fingerprint_source(source):
                     raise ValueError("DIRECTORY_SOURCE_CHANGED_DURING_SCAN:" + relative)
                 kind, mime = FORMAT_BY_EXTENSION[source.suffix.lower()]
                 if kind in self.uploads.unsupported_formats or kind == "audio":
@@ -95,31 +121,39 @@ class DirectorySync:
                         "mime": mime,
                         "contract": contract,
                         "content_key": digest((checksum, kind, contract)),
+                        "fingerprint": signature,
+                        "content_verified_at": old["content_verified_at"] if fast else now,
+                        "scan_action": "metadata_reused" if fast else "content_hashed",
                     }
                 )
                 if len(files) > self.max_files:
                     raise ValueError("DIRECTORY_FILE_COUNT_LIMIT")
         return sorted(files, key=lambda x: x["path"]), skipped
 
-    def _live(self, record: dict[str, Any], item: dict[str, Any], space_id: str) -> str:
+    def _live(
+        self,
+        record: dict[str, Any],
+        item: dict[str, Any],
+        space_id: str,
+        states: dict[str, dict[str, Any]],
+        jobs: dict[str, QueueJob],
+    ) -> str:
         if not record:
             return ""
         try:
-            version = self.repository.get_version(record["document_version_id"])
-            document = self.repository.get_document(record["document_id"])
-            versions = self.repository.get_versions(record["document_id"])
+            version = states[record["document_version_id"]]
             if (
                 version["content_sha256"] != item["sha256"]
-                or not versions
-                or versions[-1]["id"] != record["document_version_id"]
+                or version["document_id"] != record["document_id"]
+                or version["latest_version_id"] != record["document_version_id"]
                 or version["tenant_id"] != self.uploads.tenant_id
-                or self.repository.get_document_space(record["document_id"]) != space_id
-                or document["state"] != "ACTIVE"
+                or version["space_id"] != space_id
+                or version["document_state"] != "ACTIVE"
             ):
                 return ""
-            job = self.queue.get(record["job_id"])
+            job = jobs.get(record["job_id"])
             if job is None:
-                if self.repository.ingestion_complete(record["document_version_id"]):
+                if version["ingestion_complete"]:
                     return "SUCCEEDED"
                 if version.get("processing_state") in {"FAILED", "CANCELLED", "QUARANTINED"}:
                     return (
@@ -133,7 +167,13 @@ class DirectorySync:
             return ""
 
     def run(
-        self, root: Path, space_id: str, *, apply: bool = False, retry_failed: bool = False
+        self,
+        root: Path,
+        space_id: str,
+        *,
+        apply: bool = False,
+        retry_failed: bool = False,
+        verify_content: bool = False,
     ) -> dict[str, Any]:
         resolved = root.resolve(strict=True)
         if not resolved.is_dir():
@@ -143,18 +183,45 @@ class DirectorySync:
         # One operator may update a space at a time; API uploads still use row-version checks.
         scope = digest((self.uploads.tenant_id, space_id))
         with self.ledger.lock(scope):
-            return self._run(resolved, space_id, scope, apply, retry_failed)
+            return self._run(resolved, space_id, scope, apply, retry_failed, verify_content)
 
     def _run(
-        self, root: Path, space_id: str, scope: str, apply: bool, retry_failed: bool
+        self,
+        root: Path,
+        space_id: str,
+        scope: str,
+        apply: bool,
+        retry_failed: bool,
+        verify_content: bool,
     ) -> dict[str, Any]:
-        files, skipped = self.scan(root)
         snapshot_key = "root:" + scope + ":" + digest(str(root))
         previous = self._get(snapshot_key).get("files", {})
+        files, skipped = self.scan(root, previous, verify_content=verify_content)
         grouped: dict[str, list[dict[str, Any]]] = {}
         for item in files:
             grouped.setdefault(item["content_key"], []).append(item)
-        manifest = digest(files)
+        manifest = digest(
+            [
+                {
+                    k: v
+                    for k, v in item.items()
+                    if k not in {"fingerprint", "content_verified_at", "scan_action"}
+                }
+                for item in files
+            ]
+        )
+        records = self.ledger.get_many(["content:" + scope + ":" + key for key in grouped])
+        saved_results = [value.get("result", {}) for value in records.values()]
+        states = self.repository.directory_sync_states(
+            list(
+                dict.fromkeys(
+                    r["document_version_id"] for r in saved_results if r.get("document_version_id")
+                )
+            )
+        )
+        jobs = self.queue.get_many(
+            list(dict.fromkeys(r["job_id"] for r in saved_results if r.get("job_id")))
+        )
         output: list[dict[str, Any]] = []
         current: dict[str, Any] = {}
         # Include all registered roots so a changed alias never overwrites another source.
@@ -166,8 +233,8 @@ class DirectorySync:
         for content_key, aliases in grouped.items():
             item = aliases[0]
             key = "content:" + scope + ":" + content_key
-            record = self._get(key).get("result", {})
-            state = self._live(record, item, space_id)
+            record = records.get(key, {}).get("result", {})
+            state = self._live(record, item, space_id, states, jobs)
             failed = state in {"FAILED_FINAL", "CANCELLED"}
             paths = [x["path"] for x in aliases]
             if state and not (failed and retry_failed):
@@ -215,18 +282,47 @@ class DirectorySync:
             )
             for alias in aliases:
                 current[alias["path"]] = {**alias, **record}
+        # Unsupported/skipped files that still exist are not source deletions.
+        for path in previous.keys() - current.keys():
+            if (root / path).exists():
+                current[path] = previous[path]
         removed = sorted(set(previous) - set(current))
+        removal_records = self.ledger.entries("removal:" + scope + ":")
+        removals = reconcile_removals(
+            scope,
+            str(root),
+            space_id,
+            self.uploads.tenant_id,
+            previous,
+            current,
+            self.ledger.snapshots(scope),
+            removal_records,
+        )
         if apply:
-            self._put(snapshot_key, {"root": str(root), "manifest": manifest, "files": current})
+            self.ledger.put_many(
+                {
+                    **removals,
+                    snapshot_key: {"root": str(root), "manifest": manifest, "files": current},
+                }
+            )
         return {
             "mode": "apply" if apply else "preview",
             "root": str(root),
             "manifest": manifest,
             "files": len(files),
+            "scan_statistics": {
+                "content_hashed": sum(i["scan_action"] == "content_hashed" for i in files),
+                "metadata_reused": sum(i["scan_action"] == "metadata_reused" for i in files),
+            },
             "unique_contents": len(grouped),
             "duplicates": len(files) - len(grouped),
             "skipped": skipped,
             "removed_sources": removed,
+            "removal_reviews": [
+                e
+                for e in {**removal_records, **removals}.values()
+                if e["state"] in {"pending", "failed"}
+            ],
             "results": output,
             "created": sum(x["action"] == "created" for x in output),
             "updated": sum(x["action"] == "updated" for x in output),

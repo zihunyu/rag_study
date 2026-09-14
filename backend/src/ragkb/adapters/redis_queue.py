@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager
 from typing import Any, cast
 
@@ -468,6 +468,18 @@ class RedisPersistentJobQueue:
     def get(self, job_id: str) -> QueueJob | None:
         record = self._load_record(job_id)
         return self._job(record) if record is not None else None
+
+    def get_many(self, job_ids: Sequence[str]) -> dict[str, QueueJob]:
+        result = {}
+        for offset in range(0, len(job_ids), 500):
+            batch = job_ids[offset : offset + 500]
+            for identity, raw in zip(batch, self.client.hmget(self.jobs_key, batch), strict=True):
+                if raw is not None:
+                    value = json.loads(raw)
+                    if not isinstance(value, dict) or value.get("id") != identity:
+                        raise QueueStateError("REDIS_QUEUE_RECORD_INVALID")
+                    result[identity] = self._job(value)
+        return result
 
     def dead_letters(self, *, limit: int = 100) -> tuple[dict[str, Any], ...]:
         if limit < 1:

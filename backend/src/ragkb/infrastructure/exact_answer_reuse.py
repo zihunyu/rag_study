@@ -27,6 +27,13 @@ from ragkb.infrastructure.rag_repository import _package, _result
 
 
 class ExactAnswerReuse:
+    @staticmethod
+    def has_unfinished_answer(result: AskResult) -> bool:
+        return any(
+            row.get("answer_status") in {"answer_missing", "partial"}
+            for row in result.coverage_report.get("required_aspects", {}).get("items", [])
+        )
+
     def __init__(
         self,
         cache: Any,
@@ -53,7 +60,7 @@ class ExactAnswerReuse:
         return hashlib.sha256(
             json.dumps(
                 {
-                    "revision": "exact-answer-v2-adaptive-budget",
+                    "revision": "exact-answer-v3-required-aspects-scope",
                     "snapshot": snapshot,
                     "configuration": self.config_revision,
                     "question": question,
@@ -86,6 +93,7 @@ class ExactAnswerReuse:
                     or prior.status is not AnswerStatus.ANSWERED
                     or not prior.answer
                     or prior.degraded
+                    or self.has_unfinished_answer(prior)
                     or package.retrieval_health is not RetrievalHealth.HEALTHY
                     or package.query != question
                     or package.tenant_id != tenant
@@ -182,6 +190,7 @@ class ExactAnswerReuse:
             and result.verified
             and result.status is AnswerStatus.ANSWERED
             and not result.degraded
+            and not self.has_unfinished_answer(result)
         ):
             try:
                 with service.response_release_guard():

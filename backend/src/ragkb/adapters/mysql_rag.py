@@ -72,6 +72,9 @@ class MySQLRAGRunRepository:
         return _package(data) if data is not None else None
 
     def save_feedback(self, feedback: Feedback) -> None:
+        from ragkb.infrastructure.feedback_capture import capture
+
+        identity = feedback.feedback_id or new_uuid7()
         connection = self.control.connect()
         try:
             cursor = connection.cursor()
@@ -80,14 +83,16 @@ class MySQLRAGRunRepository:
                 INSERT INTO rag_feedback(
                     feedback_id, run_id, user_id, feedback_json, created_at
                 ) VALUES (%s, %s, %s, %s, NOW(6))
+                ON DUPLICATE KEY UPDATE feedback_id=feedback_id
                 """,
                 (
-                    new_uuid7(),
+                    identity,
                     feedback.rag_run_id,
                     feedback.user_id,
                     json.dumps(asdict(feedback), ensure_ascii=False, sort_keys=True),
                 ),
             )
+            capture(cursor, feedback, identity, mysql=True)
             connection.commit()
         except Exception:
             connection.rollback()

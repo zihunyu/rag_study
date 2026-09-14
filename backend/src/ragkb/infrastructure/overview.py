@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+from collections.abc import Callable
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 from ragkb.adapters.chapter_reader import ChapterReader
@@ -15,11 +18,12 @@ from ragkb.application.reading_scope import options, progress
 from ragkb.config import EnvSettings
 from ragkb.contracts.uploads import UploadRepositoryPort
 from ragkb.domain.answer_conditions import condition_quotes
-from ragkb.domain.errors import InvalidProviderResponse, TransientProviderError
+from ragkb.domain.errors import InvalidProviderResponse, QABudgetExceeded, TransientProviderError
 from ragkb.domain.pagination import PageKey
 from ragkb.domain.rag import Evidence
 from ragkb.domain.retrieval import SearchContext
 from ragkb.domain.source_references import references
+from ragkb.infrastructure.chapter_cache import ChapterCache, valid_chapter
 from ragkb.infrastructure.model_account import provider_operation
 from ragkb.infrastructure.visual_assets import VisualAssetStore
 from ragkb.infrastructure.visual_evidence import VisualEvidenceEnricher
@@ -34,9 +38,78 @@ class OverviewReader:
         settings: EnvSettings,
         reader: ChapterReader,
         visual: VisualEvidenceEnricher | None = None,
+        scope_search: Callable[[str, SearchContext], tuple[str, ...]] | None = None,
     ) -> None:
         self.repository, self.authorization, self.store = repository, authorization, store
         self.settings, self.reader, self.visual = settings, reader, visual
+        self.scope_search = scope_search
+        self.chapter_cache: ChapterCache | None = None
+
+    def resolve_scope(self, question: str, context: SearchContext) -> tuple[set[str], str]:
+        selected = set(options.get().document_ids)
+        if selected:
+            return selected, "explicit_documents"
+        if re.search(
+            r"(?:整个|全部|所有)(?:知识库|文档|资料)|\b(?:all documents|entire knowledge base)\b",
+            question,
+            re.I,
+        ):
+            return set(), "whole_space"
+        after: PageKey | None = None
+        documents: list[dict[str, Any]] = []
+        while len(documents) < 10000:
+            check_cancelled()
+            page = self.repository.list_documents_page(
+                context.space_ids[0], current_only=True, limit=50, after=after
+            )
+            documents.extend(page.items)
+            if page.next_key is None:
+                break
+            after = page.next_key
+        normalized = re.sub(r"\s+", "", question).casefold()
+        matches = {
+            d["document_id"]
+            for d in documents
+            if len(name := re.sub(r"\s+", "", Path(d["filename"]).stem).casefold()) >= 2
+            and name in normalized
+        }
+        generic = re.fullmatch(
+            r"(?:请|帮我|给我|简要|详细|一下|总结|概述|综述|全文|整篇|整份|文档|资料|这份|这个|的|内容|[，。？?\s])+",
+            question,
+        )
+        if (generic or matches or self.scope_search is None) and len(documents) == 1:
+            return {documents[0]["document_id"]}, "single_document"
+        # A filename is a seed, not a declaration that companion documents are irrelevant.
+        stems = [
+            re.sub(r"\s+", "", Path(d["filename"]).stem).casefold()
+            for d in documents
+            if d["document_id"] in matches
+        ]
+        related = {
+            d["document_id"]
+            for d in documents
+            if any(
+                (name := re.sub(r"\s+", "", Path(d["filename"]).stem).casefold()).startswith(stem)
+                and re.match(
+                    r"^(?:[-_（( ]|保修|申请|售后|材料|附件|补充|安装|操作|使用|维护|规格|说明)",
+                    name[len(stem) :],
+                )
+                for stem in stems
+            )
+        }
+        if self.scope_search and not generic:
+            try:
+                matches.update(self.scope_search(question, context))
+            except (QABudgetExceeded, TransientProviderError, InvalidProviderResponse):
+                if not (matches or related):
+                    raise
+                # Seed documents remain usable; the report still marks scope unconfirmed.
+        matches.update(related)
+        if matches:
+            # Inferred scope remains explicitly unconfirmed. Query top-k and title matching
+            # cannot prove that all relevant documents in a knowledge base were found.
+            return matches, "inferred_documents"
+        return set(), "unresolved"
 
     def annotate_associations(
         self,
@@ -137,7 +210,23 @@ class OverviewReader:
     def read(
         self, question: str, context: SearchContext
     ) -> tuple[tuple[Evidence, ...], dict[str, Any]]:
-        selected = set(options.get().document_ids)
+        selected, resolution = self.resolve_scope(question, context)
+        if resolution == "unresolved":
+            return (), {
+                "mode": "overview",
+                "complete": False,
+                "scope_complete": False,
+                "scope_confirmed": False,
+                "selected_documents_read_complete": False,
+                "scope_resolution": resolution,
+                "read_chunks": 0,
+                "read_sections": 0,
+                "total_sections": 0,
+                "source_documents": [],
+                "sections": [],
+                "gaps": ["未确定要总结的相关文档，请指定产品或文档名称"],
+                "cross_image_links": [],
+            }
         evidence: list[Evidence] = []
         sections: dict[tuple[str, str], list[Evidence]] = {}
         documents: dict[str, dict[str, Any]] = {}
@@ -208,7 +297,13 @@ class OverviewReader:
             after = page.next_key
         report: dict[str, Any] = {
             "mode": "overview",
-            "scope_complete": exhausted,
+            "scope_resolution": resolution,
+            "selected_document_ids": sorted(selected),
+            "scope_complete": resolution
+            in {"explicit_documents", "whole_space", "single_document"},
+            "scope_confirmed": resolution
+            in {"explicit_documents", "whole_space", "single_document"},
+            "selected_documents_read_complete": exhausted,
             "read_chunks": len(evidence),
             "read_sections": 0,
             "total_sections": len(sections),
@@ -224,9 +319,14 @@ class OverviewReader:
             "gaps": [],
             "cross_image_links": [],
         }
+        if not report["scope_confirmed"]:
+            report["gaps"].append(
+                "已查找相关及配套文档，但推断范围尚未确认；可指定文档确认总结范围"
+            )
         if not exhausted:
             report["gaps"].append("达到本次读取片段上限，后续章节尚未读取")
         if selected - documents.keys():
+            report["selected_documents_read_complete"] = False
             report["gaps"].append("部分指定文档没有当前可读取内容，请检查发布状态和访问范围")
         for doc in documents.values():
             state = self.store.ledger.get("version", doc["version_id"])
@@ -308,17 +408,23 @@ class OverviewReader:
                         ).encode()
                     ).hexdigest()
                     try:
-                        brief = self.store.ledger.cache_get(context.tenant_id + ":chapter", key)
-                        if not brief:
+                        if self.chapter_cache is None:
+                            self.chapter_cache = ChapterCache(self.store.ledger)
+                        sources = {e.chunk_id: e.text for e in batch}
+                        brief = self.chapter_cache.get(context.tenant_id + ":chapter", key)
+                        if not valid_chapter(brief, sources):
                             with provider_operation(version, "", "chapter_reading"):
                                 brief = self.reader.read(question, tuple(batch))
+                            if not valid_chapter(brief, sources):
+                                raise InvalidProviderResponse("CHAPTER_RESPONSE_INVALID")
                             brief["_source_version_id"] = version
-                            self.store.ledger.cache_put(
+                            self.chapter_cache.put(
                                 context.tenant_id + ":chapter",
                                 key,
                                 brief,
                                 self.settings.ocr_generation_cache_ttl_seconds,
                             )
+                        assert brief is not None
                         by_id = {e.chunk_id: e for e in batch}
                         for quote in brief["quotes"]:
                             quote_source = by_id.get(quote["chunk_id"])
@@ -332,6 +438,9 @@ class OverviewReader:
                     except (InvalidProviderResponse, TransientProviderError):
                         section_report["state"] = "incomplete"
                         report["gaps"].append(section + "：章节提要生成失败，保留原文待重试")
+                        output.extend(
+                            e for e in batch if e.chunk_id not in {s.chunk_id for s in output}
+                        )
             # A model's chosen quotes must not silently discard a separate exception,
             # prerequisite or branch. Retain its complete source for the final reverse check.
             for item in checked:

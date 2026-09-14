@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Literal, cast
 
 from ragkb.application.tracing import InMemoryTracer, TracerPort
+from ragkb.application.validation_scope import validation_scope
 from ragkb.contracts.ports import (
     EmbeddingPort,
     HybridIndexPort,
@@ -366,6 +367,7 @@ class HybridSearchService:
             for i in range(len(queries))
         ]
 
+    @validation_scope
     def search(
         self,
         query: str,

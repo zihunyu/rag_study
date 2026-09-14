@@ -441,6 +441,7 @@ class TrustedQAService:
         self.repository = repository
         self.verifier = verifier or DeterministicClaimVerifier()
         self.cache = cache
+        self._cache_fallback = InMemoryVerifiedAnswerCache(max_entries=32, ttl_seconds=600)
         self.result_reuse: ExactAnswerReusePort | None = None
         self.tracer = tracer or InMemoryTracer()
         self.response_release_guard = response_release_guard or nullcontext
@@ -682,6 +683,7 @@ class TrustedQAService:
             failed_budget = current.get()
             package = EvidencePackage(
                 rag_run_id=new_uuid7(),
+                space_id=str(space_id or getattr(self.evidence_provider, "space_id", "") or ""),
                 tenant_id=tenant_id,
                 user_id=user_id,
                 query=question,
@@ -828,7 +830,20 @@ class TrustedQAService:
                 },
             )
         use_cache = self.cache is not None and not fresh_answer_required()
-        draft = self.cache.get(package) if self.cache is not None and use_cache else None
+        draft = None
+        if self.cache is not None and use_cache:
+            try:
+                draft = self.cache.get(package)
+            except Exception:
+                package = replace(
+                    package,
+                    retrieval_warnings=(
+                        *package.retrieval_warnings,
+                        "ANSWER_CACHE_READ_UNAVAILABLE",
+                    ),
+                )
+            if draft is None:
+                draft = self._cache_fallback.get(package)
         try:
             if draft is None:
                 if list_plan is not None:
@@ -1200,6 +1215,44 @@ class TrustedQAService:
                 }
                 else ("CLAIM_VERIFIER_PROTOCOL_INVALID",),
             )
+        completion = getattr(self.generator, "repair_aspects", None)
+        if (
+            callable(completion)
+            and verification.supported
+            and any(
+                row.get("status") in {"answer_missing", "partial"} and row.get("evidence_ids")
+                for row in verification.aspect_checks
+            )
+        ):
+            from ragkb.application.aspect_repair import complete_aspects
+
+            if not self._permission_recheck(package, subject_scope_tokens, clearance_level):
+                return self._save(
+                    package,
+                    AnswerStatus.SYSTEM_ERROR,
+                    warnings=("PRE_COMPLETION_PERMISSION_RECHECK_FAILED",),
+                )
+            draft, verification, completion_warning = complete_aspects(
+                question, draft, verification, package.evidence, completion, self._verify
+            )
+            if completion_warning:
+                package = replace(
+                    package,
+                    coverage_report={
+                        **package.coverage_report,
+                        "answer_completion": {
+                            "attempts": 1,
+                            "outcome": completion_warning,
+                        },
+                    },
+                    retrieval_warnings=package.retrieval_warnings
+                    if completion_warning == "ASPECT_COMPLETION_VERIFIED"
+                    else (*package.retrieval_warnings, completion_warning),
+                )
+            claim_citation_ids = tuple(
+                dict.fromkeys(i for c in draft.claims for i in c.evidence_ids)
+            )
+            cited = tuple(e for e in package.evidence if e.evidence_id in claim_citation_ids)
         if verification.conflicting_evidence_ids:
             record_failure(
                 "verification",
@@ -1342,7 +1395,17 @@ class TrustedQAService:
                     for evidence in cited
                 )
             if self.cache is not None and use_cache:
-                self.cache.put(package, verified_draft)
+                self._cache_fallback.put(package, verified_draft)
+                try:
+                    self.cache.put(package, verified_draft)
+                except Exception:
+                    package = replace(
+                        package,
+                        retrieval_warnings=(
+                            *package.retrieval_warnings,
+                            "ANSWER_CACHE_WRITE_UNAVAILABLE",
+                        ),
+                    )
             return self._save(
                 package,
                 AnswerStatus.ANSWERED,
@@ -1414,6 +1477,14 @@ class TrustedQAService:
         if package.user_id != user_id:
             raise KeyError(rag_run_id)
         feedback = Feedback(
+            feedback_id=hashlib.sha256(
+                json.dumps(
+                    [rag_run_id, user_id, rating, reason_code, comment], ensure_ascii=False
+                ).encode()
+            ).hexdigest()[:36],
+            tenant_id=package.tenant_id,
+            space_id=package.space_id,
+            question=package.query,
             rag_run_id=rag_run_id,
             user_id=user_id,
             rating=rating,
@@ -1431,9 +1502,11 @@ class TrustedQAService:
 class InMemoryVerifiedAnswerCache:
     """Caches only verified drafts and naturally invalidates on evidence or revision changes."""
 
-    def __init__(self, *, max_entries: int = 1024) -> None:
+    def __init__(self, *, max_entries: int = 1024, ttl_seconds: int = 600) -> None:
         self.max_entries = max_entries
+        self.ttl_seconds = ttl_seconds
         self._values: dict[str, DraftAnswer] = {}
+        self._expires: dict[str, float] = {}
         self._lock = threading.Lock()
 
     @staticmethod
@@ -1442,7 +1515,12 @@ class InMemoryVerifiedAnswerCache:
 
     def get(self, package: EvidencePackage) -> DraftAnswer | None:
         with self._lock:
-            return self._values.get(self._key(package))
+            key = self._key(package)
+            if self._expires.get(key, 0) <= time.monotonic():
+                self._values.pop(key, None)
+                self._expires.pop(key, None)
+                return None
+            return self._values.get(key)
 
     def put(self, package: EvidencePackage, draft: DraftAnswer) -> None:
         if draft.status is not DraftAnswerStatus.ANSWERED:
@@ -1450,8 +1528,11 @@ class InMemoryVerifiedAnswerCache:
         key = self._key(package)
         with self._lock:
             if len(self._values) >= self.max_entries:
-                self._values.pop(next(iter(self._values)))
+                victim = next(iter(self._values))
+                self._values.pop(victim)
+                self._expires.pop(victim, None)
             self._values[key] = draft
+            self._expires[key] = time.monotonic() + self.ttl_seconds
 
 
 def verified_answer_cache_key(package: EvidencePackage) -> str:
